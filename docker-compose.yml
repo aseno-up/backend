@@ -1,0 +1,58 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: saas_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: saas_clinic
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: saas_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Evolution API for WhatsApp integration (optional for development)
+  # Uncomment when ready to test WhatsApp integration
+  # evolution:
+  #   image: atendai/evolution-api:v2.1.1
+  #   container_name: saas_evolution
+  #   restart: unless-stopped
+  #   ports:
+  #     - "8081:8080"
+  #   environment:
+  #     - SERVER_URL=http://localhost:8081
+  #     - AUTHENTICATION_API_KEY=your-evolution-api-key
+  #     - DATABASE_ENABLED=true
+  #     - DATABASE_CONNECTION_URI=postgresql://postgres:postgres@postgres:5432/evolution
+  #   depends_on:
+  #     postgres:
+  #       condition: service_healthy
+  #   volumes:
+  #     - evolution_instances:/evolution/instances
+
+volumes:
+  postgres_data:
+  redis_data:
+  # evolution_instances:

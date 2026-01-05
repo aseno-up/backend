@@ -1,0 +1,166 @@
+package repository
+
+import (
+	"context"
+
+	"github.com/google/uuid"
+	"gorm.io/gorm"
+
+	"github.com/saas/backend/internal/errors"
+	"github.com/saas/backend/pkg/user/model"
+)
+
+// UserRepository defines the interface for user data operations
+type UserRepository interface {
+	Create(ctx context.Context, user *model.User) error
+	GetByID(ctx context.Context, id uuid.UUID) (*model.User, error)
+	GetByEmail(ctx context.Context, email string) (*model.User, error)
+	GetByGoogleID(ctx context.Context, googleID string) (*model.User, error)
+	GetByClinicID(ctx context.Context, clinicID uuid.UUID, limit, offset int) ([]*model.User, int64, error)
+	Update(ctx context.Context, user *model.User) error
+	Delete(ctx context.Context, id uuid.UUID) error
+	ExistsByEmail(ctx context.Context, email string) (bool, error)
+	UpdateRefreshToken(ctx context.Context, userID uuid.UUID, token string) error
+	UpdateLastLogin(ctx context.Context, userID uuid.UUID) error
+}
+
+// userRepository implements UserRepository
+type userRepository struct {
+	db *gorm.DB
+}
+
+// NewUserRepository creates a new user repository
+func NewUserRepository(db *gorm.DB) UserRepository {
+	return &userRepository{db: db}
+}
+
+// Create creates a new user
+func (r *userRepository) Create(ctx context.Context, user *model.User) error {
+	result := r.db.WithContext(ctx).Create(user)
+	if result.Error != nil {
+		return errors.ErrInternalInstance.WithError(result.Error)
+	}
+	return nil
+}
+
+// GetByID retrieves a user by ID
+func (r *userRepository) GetByID(ctx context.Context, id uuid.UUID) (*model.User, error) {
+	var user model.User
+	result := r.db.WithContext(ctx).Where("id = ? AND deleted_at IS NULL", id).First(&user)
+	if result.Error != nil {
+		if result.Error == gorm.ErrRecordNotFound {
+			return nil, errors.ErrUserNotFoundInstance
+		}
+		return nil, errors.ErrInternalInstance.WithError(result.Error)
+	}
+	return &user, nil
+}
+
+// GetByEmail retrieves a user by email
+func (r *userRepository) GetByEmail(ctx context.Context, email string) (*model.User, error) {
+	var user model.User
+	result := r.db.WithContext(ctx).Where("email = ? AND deleted_at IS NULL", email).First(&user)
+	if result.Error != nil {
+		if result.Error == gorm.ErrRecordNotFound {
+			return nil, errors.ErrUserNotFoundInstance
+		}
+		return nil, errors.ErrInternalInstance.WithError(result.Error)
+	}
+	return &user, nil
+}
+
+// GetByGoogleID retrieves a user by Google OAuth ID
+func (r *userRepository) GetByGoogleID(ctx context.Context, googleID string) (*model.User, error) {
+	var user model.User
+	result := r.db.WithContext(ctx).Where("google_id = ? AND deleted_at IS NULL", googleID).First(&user)
+	if result.Error != nil {
+		if result.Error == gorm.ErrRecordNotFound {
+			return nil, errors.ErrUserNotFoundInstance
+		}
+		return nil, errors.ErrInternalInstance.WithError(result.Error)
+	}
+	return &user, nil
+}
+
+// GetByClinicID retrieves users belonging to a clinic
+func (r *userRepository) GetByClinicID(ctx context.Context, clinicID uuid.UUID, limit, offset int) ([]*model.User, int64, error) {
+	var users []*model.User
+	var total int64
+
+	// Count total
+	if err := r.db.WithContext(ctx).
+		Model(&model.User{}).
+		Where("clinic_id = ? AND deleted_at IS NULL", clinicID).
+		Count(&total).Error; err != nil {
+		return nil, 0, errors.ErrInternalInstance.WithError(err)
+	}
+
+	// Get paginated results
+	result := r.db.WithContext(ctx).
+		Where("clinic_id = ? AND deleted_at IS NULL", clinicID).
+		Order("created_at DESC").
+		Limit(limit).
+		Offset(offset).
+		Find(&users)
+
+	if result.Error != nil {
+		return nil, 0, errors.ErrInternalInstance.WithError(result.Error)
+	}
+
+	return users, total, nil
+}
+
+// Update updates a user
+func (r *userRepository) Update(ctx context.Context, user *model.User) error {
+	result := r.db.WithContext(ctx).Save(user)
+	if result.Error != nil {
+		return errors.ErrInternalInstance.WithError(result.Error)
+	}
+	return nil
+}
+
+// Delete soft-deletes a user
+func (r *userRepository) Delete(ctx context.Context, id uuid.UUID) error {
+	result := r.db.WithContext(ctx).Where("id = ?", id).Delete(&model.User{})
+	if result.Error != nil {
+		return errors.ErrInternalInstance.WithError(result.Error)
+	}
+	if result.RowsAffected == 0 {
+		return errors.ErrUserNotFoundInstance
+	}
+	return nil
+}
+
+// ExistsByEmail checks if a user with the given email exists
+func (r *userRepository) ExistsByEmail(ctx context.Context, email string) (bool, error) {
+	var count int64
+	result := r.db.WithContext(ctx).Model(&model.User{}).Where("email = ? AND deleted_at IS NULL", email).Count(&count)
+	if result.Error != nil {
+		return false, errors.ErrInternalInstance.WithError(result.Error)
+	}
+	return count > 0, nil
+}
+
+// UpdateRefreshToken updates the user's refresh token
+func (r *userRepository) UpdateRefreshToken(ctx context.Context, userID uuid.UUID, token string) error {
+	result := r.db.WithContext(ctx).
+		Model(&model.User{}).
+		Where("id = ?", userID).
+		Update("refresh_token", token)
+	if result.Error != nil {
+		return errors.ErrInternalInstance.WithError(result.Error)
+	}
+	return nil
+}
+
+// UpdateLastLogin updates the user's last login timestamp
+func (r *userRepository) UpdateLastLogin(ctx context.Context, userID uuid.UUID) error {
+	result := r.db.WithContext(ctx).
+		Model(&model.User{}).
+		Where("id = ?", userID).
+		Update("last_login_at", gorm.Expr("NOW()"))
+	if result.Error != nil {
+		return errors.ErrInternalInstance.WithError(result.Error)
+	}
+	return nil
+}
