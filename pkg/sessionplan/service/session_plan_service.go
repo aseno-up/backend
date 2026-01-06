@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 
 	"github.com/aseno/backend/internal/errors"
 	appointment_model "github.com/aseno/backend/pkg/appointment/model"
@@ -61,9 +62,17 @@ func (s *sessionPlanService) Create(ctx context.Context, clinicID uuid.UUID, req
 	}
 
 	// Set default week days based on frequency
-	weekDays := req.WeekDays
-	if len(weekDays) == 0 {
+	var weekDays []int
+	if len(req.WeekDays) > 0 {
+		weekDays = req.WeekDays
+	} else {
 		weekDays = s.getDefaultWeekDays(req.Frequency)
+	}
+
+	// Convert to pq.Int64Array
+	var pqWeekDays pq.Int64Array
+	for _, wd := range weekDays {
+		pqWeekDays = append(pqWeekDays, int64(wd))
 	}
 
 	// Calculate generate_until (2 weeks ahead by default)
@@ -77,7 +86,7 @@ func (s *sessionPlanService) Create(ctx context.Context, clinicID uuid.UUID, req
 		Description:    req.Description,
 		Status:         model.PlanStatusActive,
 		Frequency:      req.Frequency,
-		WeekDays:       weekDays,
+		WeekDays:       pqWeekDays,
 		PreferredTime:  req.PreferredTime,
 		DurationMins:   req.DurationMins,
 		TotalSessions:  req.TotalSessions,
@@ -391,7 +400,7 @@ func (s *sessionPlanService) getSessionDates(plan *model.SessionPlan, startDate,
 		for current.Before(endDate) {
 			weekday := int(current.Weekday())
 			for _, wd := range plan.WeekDays {
-				if weekday == wd {
+				if weekday == int(wd) {
 					dates = append(dates, current)
 					break
 				}

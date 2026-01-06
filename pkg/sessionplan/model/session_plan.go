@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 	"gorm.io/gorm"
 )
 
@@ -44,7 +45,7 @@ type SessionPlan struct {
 
 	// Frequency configuration
 	Frequency      Frequency      `json:"frequency" gorm:"size:20;not null"`
-	WeekDays       []int          `json:"week_days" gorm:"type:integer[];serializer:json"` // 0=Sunday, 1=Monday, etc.
+	WeekDays       pq.Int64Array  `json:"week_days" gorm:"type:integer[]"` // 0=Sunday, 1=Monday, etc.
 	PreferredTime  string         `json:"preferred_time" gorm:"size:5"` // HH:MM format
 	DurationMins   int            `json:"duration_mins" gorm:"not null;default:50"`
 
