@@ -92,8 +92,17 @@ func (s *sessionPlanService) Create(ctx context.Context, clinicID uuid.UUID, req
 		return nil, err
 	}
 
-	// Generate initial appointments (2 weeks ahead)
-	_, err = s.GenerateAppointments(ctx, plan, 2)
+	// Determine how many weeks to generate
+	weeksToGenerate := 2 // Default
+	if req.GenerateAll && req.TotalSessions > 0 {
+		weeksToGenerate = 52 * 5 // Generate enough for years if needed, effectively "all"
+	} else if req.TotalSessions == -1 {
+		// If indeterminate, generate 2 weeks
+		weeksToGenerate = 2
+	}
+
+	// Generate appointments
+	_, err = s.GenerateAppointments(ctx, plan, weeksToGenerate)
 	if err != nil {
 		// Log error but don't fail the creation
 		fmt.Printf("Warning: Failed to generate initial appointments: %v\n", err)
@@ -209,6 +218,12 @@ func (s *sessionPlanService) GenerateAppointments(ctx context.Context, plan *mod
 		return 0, nil
 	}
 
+	// If no professional assigned to plan, we cannot auto-generate appointments
+	// as Appointment requires a ProfessionalID.
+	if plan.ProfessionalID == nil {
+		return 0, nil
+	}
+
 	// Calculate the date range for generation
 	startDate := time.Now()
 	if plan.LastGeneratedAt != nil && plan.LastGeneratedAt.After(startDate) {
@@ -226,10 +241,12 @@ func (s *sessionPlanService) GenerateAppointments(ctx context.Context, plan *mod
 	// Get dates based on frequency
 	dates := s.getSessionDates(plan, startDate, endDate)
 
-	// Limit dates to remaining sessions
-	remainingSessions := plan.RemainingSessions()
-	if len(dates) > remainingSessions {
-		dates = dates[:remainingSessions]
+	// Limit dates to remaining sessions (if not indeterminate)
+	if plan.TotalSessions > 0 {
+		remainingSessions := plan.RemainingSessions()
+		if len(dates) > remainingSessions {
+			dates = dates[:remainingSessions]
+		}
 	}
 
 	created := 0
@@ -246,7 +263,7 @@ func (s *sessionPlanService) GenerateAppointments(ctx context.Context, plan *mod
 		hasConflict, err := s.appointmentRepo.CheckConflict(
 			ctx,
 			plan.ClinicID,
-			plan.ProfessionalID,
+			*plan.ProfessionalID,
 			sessionStart,
 			sessionEnd,
 			nil,
@@ -263,7 +280,7 @@ func (s *sessionPlanService) GenerateAppointments(ctx context.Context, plan *mod
 		appointment := &appointment_model.Appointment{
 			ClinicID:       plan.ClinicID,
 			PatientID:      plan.PatientID,
-			ProfessionalID: plan.ProfessionalID,
+			ProfessionalID: *plan.ProfessionalID,
 			SessionPlanID:  &plan.ID,
 			StartTime:      sessionStart,
 			EndTime:        sessionEnd,

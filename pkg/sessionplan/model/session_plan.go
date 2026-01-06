@@ -35,7 +35,7 @@ type SessionPlan struct {
 	ID             uuid.UUID      `json:"id" gorm:"type:uuid;primaryKey;default:gen_random_uuid()"`
 	ClinicID       uuid.UUID      `json:"clinic_id" gorm:"type:uuid;not null;index"`
 	PatientID      uuid.UUID      `json:"patient_id" gorm:"type:uuid;not null;index"`
-	ProfessionalID uuid.UUID      `json:"professional_id" gorm:"type:uuid;not null;index"`
+	ProfessionalID *uuid.UUID     `json:"professional_id" gorm:"type:uuid;index"`
 
 	// Plan details
 	Title          string         `json:"title" gorm:"size:255;not null"`
@@ -141,18 +141,19 @@ func (s *SessionPlan) GetSessionsPerWeek() int {
 
 // CreateSessionPlanRequest represents the request to create a session plan
 type CreateSessionPlanRequest struct {
-	PatientID      uuid.UUID `json:"patient_id" binding:"required"`
-	ProfessionalID uuid.UUID `json:"professional_id" binding:"required"`
-	Title          string    `json:"title" binding:"required,max=255"`
-	Description    string    `json:"description"`
-	Frequency      Frequency `json:"frequency" binding:"required"`
-	WeekDays       []int     `json:"week_days"` // Required for custom frequency
-	PreferredTime  string    `json:"preferred_time" binding:"required"` // HH:MM
-	DurationMins   int       `json:"duration_mins" binding:"required,min=15,max=480"`
-	TotalSessions  int       `json:"total_sessions" binding:"required,min=1,max=200"`
-	StartDate      string    `json:"start_date" binding:"required"` // YYYY-MM-DD
-	SessionPrice   float64   `json:"session_price" binding:"min=0"`
-	Notes          string    `json:"notes"`
+	PatientID      uuid.UUID  `json:"patient_id" binding:"required"`
+	ProfessionalID *uuid.UUID `json:"professional_id"` // Optional
+	Title          string     `json:"title" binding:"required,max=255"`
+	Description    string     `json:"description"`
+	Frequency      Frequency  `json:"frequency" binding:"required"`
+	WeekDays       []int      `json:"week_days"` // Required for custom frequency
+	PreferredTime  string     `json:"preferred_time" binding:"required"` // HH:MM
+	DurationMins   int        `json:"duration_mins" binding:"required,min=15,max=480"`
+	TotalSessions  int        `json:"total_sessions" binding:"required,min=-1,max=200"` // -1 = indeterminate
+	StartDate      string     `json:"start_date" binding:"required"` // YYYY-MM-DD
+	SessionPrice   float64    `json:"session_price" binding:"min=0"`
+	Notes          string     `json:"notes"`
+	GenerateAll    bool       `json:"generate_all"` // If true, generate all sessions immediately
 }
 
 // UpdateSessionPlanRequest represents the request to update a session plan
