@@ -7,9 +7,9 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 
-	"github.com/saas/backend/internal/errors"
-	"github.com/saas/backend/pkg/professional/model"
-	"github.com/saas/backend/pkg/professional/service"
+	"github.com/aseno/backend/internal/errors"
+	"github.com/aseno/backend/pkg/professional/model"
+	"github.com/aseno/backend/pkg/professional/service"
 )
 
 // ProfessionalHandler defines the interface for professional handlers

@@ -9,7 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/saas/backend/pkg/whatsapp/model"
+	"github.com/aseno/backend/pkg/whatsapp/model"
 )
 
 // WhatsAppClient defines the interface for WhatsApp API operations

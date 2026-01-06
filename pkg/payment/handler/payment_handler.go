@@ -11,9 +11,9 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 
-	"github.com/saas/backend/internal/errors"
-	"github.com/saas/backend/pkg/payment/model"
-	"github.com/saas/backend/pkg/payment/service"
+	"github.com/aseno/backend/internal/errors"
+	"github.com/aseno/backend/pkg/payment/model"
+	"github.com/aseno/backend/pkg/payment/service"
 )
 
 // PaymentHandler defines the interface for payment handlers

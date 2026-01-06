@@ -9,9 +9,9 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/saas/backend/internal/errors"
-	"github.com/saas/backend/pkg/whatsapp/model"
-	"github.com/saas/backend/pkg/whatsapp/service"
+	"github.com/aseno/backend/internal/errors"
+	"github.com/aseno/backend/pkg/whatsapp/model"
+	"github.com/aseno/backend/pkg/whatsapp/service"
 )
 
 // Config holds the Evolution API configuration

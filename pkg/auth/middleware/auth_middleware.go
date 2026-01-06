@@ -6,9 +6,9 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/saas/backend/internal/errors"
-	"github.com/saas/backend/pkg/auth/service"
-	user_model "github.com/saas/backend/pkg/user/model"
+	"github.com/aseno/backend/internal/errors"
+	"github.com/aseno/backend/pkg/auth/service"
+	user_model "github.com/aseno/backend/pkg/user/model"
 )
 
 // Context keys for storing auth data

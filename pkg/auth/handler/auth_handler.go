@@ -6,9 +6,9 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 
-	"github.com/saas/backend/internal/errors"
-	"github.com/saas/backend/pkg/auth/model"
-	"github.com/saas/backend/pkg/auth/service"
+	"github.com/aseno/backend/internal/errors"
+	"github.com/aseno/backend/pkg/auth/model"
+	"github.com/aseno/backend/pkg/auth/service"
 )
 
 // AuthHandler defines the interface for authentication handlers

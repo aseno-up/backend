@@ -6,8 +6,8 @@ import (
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 
-	"github.com/saas/backend/internal/errors"
-	"github.com/saas/backend/pkg/user/model"
+	"github.com/aseno/backend/internal/errors"
+	"github.com/aseno/backend/pkg/user/model"
 )
 
 // UserRepository defines the interface for user data operations

@@ -7,9 +7,9 @@ import (
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 
-	"github.com/saas/backend/internal/errors"
-	"github.com/saas/backend/pkg/calendar/model"
-	"github.com/saas/backend/pkg/calendar/service"
+	"github.com/aseno/backend/internal/errors"
+	"github.com/aseno/backend/pkg/calendar/model"
+	"github.com/aseno/backend/pkg/calendar/service"
 )
 
 // integrationRepository implements service.IntegrationRepository

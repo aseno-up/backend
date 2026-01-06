@@ -9,12 +9,12 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 
-	"github.com/saas/backend/internal/errors"
-	clinic_model "github.com/saas/backend/pkg/clinic/model"
-	clinic_repository "github.com/saas/backend/pkg/clinic/repository"
-	"github.com/saas/backend/pkg/whatsapp/client/evolution"
-	"github.com/saas/backend/pkg/whatsapp/model"
-	"github.com/saas/backend/pkg/whatsapp/service"
+	"github.com/aseno/backend/internal/errors"
+	clinic_model "github.com/aseno/backend/pkg/clinic/model"
+	clinic_repository "github.com/aseno/backend/pkg/clinic/repository"
+	"github.com/aseno/backend/pkg/whatsapp/client/evolution"
+	"github.com/aseno/backend/pkg/whatsapp/model"
+	"github.com/aseno/backend/pkg/whatsapp/service"
 )
 
 // WhatsAppHandler defines the interface for WhatsApp handlers

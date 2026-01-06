@@ -5,7 +5,7 @@ import (
 	"log"
 	"time"
 
-	"github.com/saas/backend/pkg/sessionplan/service"
+	"github.com/aseno/backend/pkg/sessionplan/service"
 )
 
 // SessionPlanWorker handles periodic appointment generation

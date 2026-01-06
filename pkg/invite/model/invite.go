@@ -4,7 +4,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	user_model "github.com/saas/backend/pkg/user/model"
+	user_model "github.com/aseno/backend/pkg/user/model"
 )
 
 // InviteStatus represents the status of an invitation

@@ -6,9 +6,9 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 
-	"github.com/saas/backend/internal/errors"
-	"github.com/saas/backend/pkg/sessionplan/model"
-	"github.com/saas/backend/pkg/sessionplan/service"
+	"github.com/aseno/backend/internal/errors"
+	"github.com/aseno/backend/pkg/sessionplan/model"
+	"github.com/aseno/backend/pkg/sessionplan/service"
 )
 
 // SessionPlanHandler defines the interface for session plan handlers

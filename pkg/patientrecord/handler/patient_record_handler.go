@@ -7,9 +7,9 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 
-	"github.com/saas/backend/internal/errors"
-	"github.com/saas/backend/pkg/patientrecord/model"
-	"github.com/saas/backend/pkg/patientrecord/service"
+	"github.com/aseno/backend/internal/errors"
+	"github.com/aseno/backend/pkg/patientrecord/model"
+	"github.com/aseno/backend/pkg/patientrecord/service"
 )
 
 // PatientRecordHandler defines the interface for patient record handlers

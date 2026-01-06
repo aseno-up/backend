@@ -7,9 +7,9 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 
-	"github.com/saas/backend/internal/errors"
-	"github.com/saas/backend/pkg/user/model"
-	"github.com/saas/backend/pkg/user/service"
+	"github.com/aseno/backend/internal/errors"
+	"github.com/aseno/backend/pkg/user/model"
+	"github.com/aseno/backend/pkg/user/service"
 )
 
 // UserHandler defines the interface for user handlers

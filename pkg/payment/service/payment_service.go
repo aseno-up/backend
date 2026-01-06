@@ -6,8 +6,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/saas/backend/internal/errors"
-	"github.com/saas/backend/pkg/payment/model"
+	"github.com/aseno/backend/internal/errors"
+	"github.com/aseno/backend/pkg/payment/model"
 )
 
 // PaymentClient defines the interface for payment gateway operations

@@ -10,7 +10,7 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/saas/backend/pkg/calendar/model"
+	"github.com/aseno/backend/pkg/calendar/model"
 )
 
 const (

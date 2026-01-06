@@ -9,15 +9,15 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/saas/backend/internal/errors"
-	auth_model "github.com/saas/backend/pkg/auth/model"
-	auth_service "github.com/saas/backend/pkg/auth/service"
-	clinic_repository "github.com/saas/backend/pkg/clinic/repository"
-	email_service "github.com/saas/backend/pkg/email/service"
-	"github.com/saas/backend/pkg/invite/model"
-	"github.com/saas/backend/pkg/invite/repository"
-	user_model "github.com/saas/backend/pkg/user/model"
-	user_repository "github.com/saas/backend/pkg/user/repository"
+	"github.com/aseno/backend/internal/errors"
+	auth_model "github.com/aseno/backend/pkg/auth/model"
+	auth_service "github.com/aseno/backend/pkg/auth/service"
+	clinic_repository "github.com/aseno/backend/pkg/clinic/repository"
+	email_service "github.com/aseno/backend/pkg/email/service"
+	"github.com/aseno/backend/pkg/invite/model"
+	"github.com/aseno/backend/pkg/invite/repository"
+	user_model "github.com/aseno/backend/pkg/user/model"
+	user_repository "github.com/aseno/backend/pkg/user/repository"
 )
 
 const (

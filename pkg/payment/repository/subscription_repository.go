@@ -6,9 +6,9 @@ import (
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 
-	"github.com/saas/backend/internal/errors"
-	"github.com/saas/backend/pkg/payment/model"
-	"github.com/saas/backend/pkg/payment/service"
+	"github.com/aseno/backend/internal/errors"
+	"github.com/aseno/backend/pkg/payment/model"
+	"github.com/aseno/backend/pkg/payment/service"
 )
 
 // subscriptionRepository implements service.SubscriptionRepository

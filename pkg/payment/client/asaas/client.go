@@ -9,7 +9,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/saas/backend/pkg/payment/model"
+	"github.com/aseno/backend/pkg/payment/model"
 )
 
 // Config holds the Asaas client configuration

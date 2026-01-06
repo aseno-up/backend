@@ -7,9 +7,9 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/saas/backend/internal/errors"
-	"github.com/saas/backend/pkg/appointment/model"
-	"github.com/saas/backend/pkg/appointment/repository"
+	"github.com/aseno/backend/internal/errors"
+	"github.com/aseno/backend/pkg/appointment/model"
+	"github.com/aseno/backend/pkg/appointment/repository"
 )
 
 // AppointmentService defines the interface for appointment business logic

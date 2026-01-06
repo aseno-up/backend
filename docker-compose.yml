@@ -3,12 +3,12 @@ version: '3.8'
 services:
   postgres:
     image: postgres:16-alpine
-    container_name: saas_postgres
+    container_name: aseno_postgres
     restart: unless-stopped
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: saas_clinic
+      POSTGRES_DB: aseno_clinic
     ports:
       - "5432:5432"
     volumes:
@@ -21,7 +21,7 @@ services:
 
   redis:
     image: redis:7-alpine
-    container_name: saas_redis
+    container_name: aseno_redis
     restart: unless-stopped
     ports:
       - "6379:6379"
@@ -37,7 +37,7 @@ services:
   # Uncomment when ready to test WhatsApp integration
   # evolution:
   #   image: atendai/evolution-api:v2.1.1
-  #   container_name: saas_evolution
+  #   container_name: aseno_evolution
   #   restart: unless-stopped
   #   ports:
   #     - "8081:8080"
@@ -55,7 +55,7 @@ services:
   # pgAdmin - Database Management UI
   pgadmin:
     image: dpage/pgadmin4:latest
-    container_name: saas_pgadmin
+    container_name: aseno_pgadmin
     restart: unless-stopped
     environment:
       PGADMIN_DEFAULT_EMAIL: admin@admin.com

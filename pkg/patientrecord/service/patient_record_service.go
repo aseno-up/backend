@@ -6,9 +6,9 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/saas/backend/internal/errors"
-	"github.com/saas/backend/pkg/patientrecord/model"
-	"github.com/saas/backend/pkg/patientrecord/repository"
+	"github.com/aseno/backend/internal/errors"
+	"github.com/aseno/backend/pkg/patientrecord/model"
+	"github.com/aseno/backend/pkg/patientrecord/repository"
 )
 
 // PatientRecordService defines the interface for patient record business logic

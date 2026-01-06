@@ -7,9 +7,9 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 
-	"github.com/saas/backend/internal/errors"
-	"github.com/saas/backend/pkg/auth/model"
-	user_model "github.com/saas/backend/pkg/user/model"
+	"github.com/aseno/backend/internal/errors"
+	"github.com/aseno/backend/pkg/auth/model"
+	user_model "github.com/aseno/backend/pkg/user/model"
 )
 
 // JWTService defines the interface for JWT operations
@@ -35,7 +35,7 @@ func NewJWTService(secret string, accessTokenTTLMinutes, refreshTokenTTLDays int
 		secret:          secret,
 		accessTokenTTL:  time.Duration(accessTokenTTLMinutes) * time.Minute,
 		refreshTokenTTL: time.Duration(refreshTokenTTLDays) * 24 * time.Hour,
-		issuer:          "saas-clinic",
+		issuer:          "aseno-clinic",
 	}
 }
 

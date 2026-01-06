@@ -8,9 +8,9 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 
-	"github.com/saas/backend/internal/errors"
-	"github.com/saas/backend/pkg/appointment/model"
-	"github.com/saas/backend/pkg/appointment/service"
+	"github.com/aseno/backend/internal/errors"
+	"github.com/aseno/backend/pkg/appointment/model"
+	"github.com/aseno/backend/pkg/appointment/service"
 )
 
 // AppointmentHandler defines the interface for appointment handlers

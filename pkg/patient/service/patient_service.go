@@ -6,8 +6,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/saas/backend/pkg/patient/model"
-	"github.com/saas/backend/pkg/patient/repository"
+	"github.com/aseno/backend/pkg/patient/model"
+	"github.com/aseno/backend/pkg/patient/repository"
 )
 
 // PatientService defines the interface for patient business logic

@@ -6,8 +6,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/saas/backend/pkg/professional/model"
-	"github.com/saas/backend/pkg/professional/repository"
+	"github.com/aseno/backend/pkg/professional/model"
+	"github.com/aseno/backend/pkg/professional/repository"
 )
 
 // ProfessionalService defines the interface for professional business logic

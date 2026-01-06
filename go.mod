@@ -1,4 +1,4 @@
-module github.com/saas/backend
+module github.com/aseno/backend
 
 go 1.23
 

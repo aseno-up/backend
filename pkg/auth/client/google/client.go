@@ -9,7 +9,7 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/saas/backend/internal/errors"
+	"github.com/aseno/backend/internal/errors"
 )
 
 // Config holds the Google OAuth configuration

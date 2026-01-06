@@ -6,8 +6,8 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 
-	"github.com/saas/backend/internal/errors"
-	clinic_repository "github.com/saas/backend/pkg/clinic/repository"
+	"github.com/aseno/backend/internal/errors"
+	clinic_repository "github.com/aseno/backend/pkg/clinic/repository"
 )
 
 // TenantMiddleware defines the interface for tenant middleware

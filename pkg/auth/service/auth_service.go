@@ -8,12 +8,12 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/saas/backend/internal/errors"
-	"github.com/saas/backend/pkg/auth/model"
-	clinic_model "github.com/saas/backend/pkg/clinic/model"
-	clinic_repository "github.com/saas/backend/pkg/clinic/repository"
-	user_model "github.com/saas/backend/pkg/user/model"
-	user_repository "github.com/saas/backend/pkg/user/repository"
+	"github.com/aseno/backend/internal/errors"
+	"github.com/aseno/backend/pkg/auth/model"
+	clinic_model "github.com/aseno/backend/pkg/clinic/model"
+	clinic_repository "github.com/aseno/backend/pkg/clinic/repository"
+	user_model "github.com/aseno/backend/pkg/user/model"
+	user_repository "github.com/aseno/backend/pkg/user/repository"
 )
 
 // AuthService defines the interface for authentication operations

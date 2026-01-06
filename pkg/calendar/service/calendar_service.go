@@ -7,8 +7,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/saas/backend/internal/errors"
-	"github.com/saas/backend/pkg/calendar/model"
+	"github.com/aseno/backend/internal/errors"
+	"github.com/aseno/backend/pkg/calendar/model"
 )
 
 // GoogleCalendarClient defines the interface for Google Calendar operations

@@ -7,9 +7,9 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 
-	"github.com/saas/backend/internal/errors"
-	"github.com/saas/backend/pkg/invite/model"
-	"github.com/saas/backend/pkg/invite/service"
+	"github.com/aseno/backend/internal/errors"
+	"github.com/aseno/backend/pkg/invite/model"
+	"github.com/aseno/backend/pkg/invite/service"
 )
 
 // InviteHandler defines the interface for invite handlers

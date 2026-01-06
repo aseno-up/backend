@@ -6,8 +6,8 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 
-	clinic_model "github.com/saas/backend/pkg/clinic/model"
-	user_model "github.com/saas/backend/pkg/user/model"
+	clinic_model "github.com/aseno/backend/pkg/clinic/model"
+	user_model "github.com/aseno/backend/pkg/user/model"
 )
 
 // TokenType represents the type of JWT token

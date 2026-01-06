@@ -7,11 +7,11 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/saas/backend/internal/errors"
-	appointment_model "github.com/saas/backend/pkg/appointment/model"
-	appointment_repository "github.com/saas/backend/pkg/appointment/repository"
-	"github.com/saas/backend/pkg/sessionplan/model"
-	"github.com/saas/backend/pkg/sessionplan/repository"
+	"github.com/aseno/backend/internal/errors"
+	appointment_model "github.com/aseno/backend/pkg/appointment/model"
+	appointment_repository "github.com/aseno/backend/pkg/appointment/repository"
+	"github.com/aseno/backend/pkg/sessionplan/model"
+	"github.com/aseno/backend/pkg/sessionplan/repository"
 )
 
 // SessionPlanService defines the interface for session plan operations

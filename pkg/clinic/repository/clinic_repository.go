@@ -6,8 +6,8 @@ import (
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 
-	"github.com/saas/backend/internal/errors"
-	"github.com/saas/backend/pkg/clinic/model"
+	"github.com/aseno/backend/internal/errors"
+	"github.com/aseno/backend/pkg/clinic/model"
 )
 
 // ClinicRepository defines the interface for clinic data operations

@@ -6,7 +6,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/saas/backend/internal/database"
+	"github.com/aseno/backend/internal/database"
 )
 
 // HealthHandler defines the interface for health check endpoints
