@@ -45,6 +45,7 @@ type Clinic struct {
 	TrialEndsAt        *time.Time         `json:"trial_ends_at"`
 	SubscriptionEndsAt *time.Time         `json:"subscription_ends_at"`
 	AsaasCustomerID    string             `json:"-"` // Asaas customer ID (hidden from JSON)
+	WhatsAppInstance   string             `json:"-"` // Evolution API instance name (hidden from JSON)
 	WhatsAppConnected  bool               `json:"whatsapp_connected" gorm:"default:false"`
 	GoogleConnected    bool               `json:"google_connected" gorm:"default:false"`
 	Settings           ClinicSettings     `json:"settings" gorm:"serializer:json"`

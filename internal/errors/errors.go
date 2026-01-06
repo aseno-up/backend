@@ -26,6 +26,25 @@ const (
 	ErrTokenExpired = "TOKEN_EXPIRED"
 	ErrTokenInvalid = "TOKEN_INVALID"
 	ErrSlotUnavailable = "SLOT_UNAVAILABLE"
+	ErrWhatsAppConnection = "WHATSAPP_CONNECTION"
+	ErrWhatsAppSendFailed = "WHATSAPP_SEND_FAILED"
+	ErrInvalidPayload = "INVALID_PAYLOAD"
+	ErrPaymentGateway = "PAYMENT_GATEWAY"
+	ErrPaymentNotFound = "PAYMENT_NOT_FOUND"
+	ErrSubscriptionNotFound = "SUBSCRIPTION_NOT_FOUND"
+	ErrCustomerNotFound = "CUSTOMER_NOT_FOUND"
+	ErrCalendarConnection = "CALENDAR_CONNECTION"
+	ErrCalendarSyncFailed = "CALENDAR_SYNC_FAILED"
+	ErrCalendarNotConfigured = "CALENDAR_NOT_CONFIGURED"
+	ErrInviteNotFound = "INVITE_NOT_FOUND"
+	ErrInviteExpired = "INVITE_EXPIRED"
+	ErrInviteAlreadyAccepted = "INVITE_ALREADY_ACCEPTED"
+	ErrInvitePending = "INVITE_PENDING"
+	ErrCannotChangeOwnRole = "CANNOT_CHANGE_OWN_ROLE"
+	ErrCannotDeactivateSelf = "CANNOT_DEACTIVATE_SELF"
+	ErrCannotRemoveOwner = "CANNOT_REMOVE_OWNER"
+	ErrPatientRecordNotFound = "PATIENT_RECORD_NOT_FOUND"
+	ErrSessionNoteNotFound = "SESSION_NOTE_NOT_FOUND"
 )
 
 // AppError represents an application error with context
@@ -122,6 +141,25 @@ var (
 	ErrTokenExpiredInstance = NewError(ErrTokenExpired, "Token has expired", http.StatusUnauthorized)
 	ErrTokenInvalidInstance = NewError(ErrTokenInvalid, "Token is invalid", http.StatusUnauthorized)
 	ErrSlotUnavailableInstance = NewError(ErrSlotUnavailable, "Time slot is not available", http.StatusConflict)
+	ErrWhatsAppConnectionInstance = NewError(ErrWhatsAppConnection, "WhatsApp connection failed", http.StatusServiceUnavailable)
+	ErrWhatsAppSendFailedInstance = NewError(ErrWhatsAppSendFailed, "Failed to send WhatsApp message", http.StatusBadGateway)
+	ErrInvalidPayloadInstance = NewError(ErrInvalidPayload, "Invalid request payload", http.StatusBadRequest)
+	ErrPaymentGatewayInstance = NewError(ErrPaymentGateway, "Payment gateway error", http.StatusBadGateway)
+	ErrPaymentNotFoundInstance = NewError(ErrPaymentNotFound, "Payment not found", http.StatusNotFound)
+	ErrSubscriptionNotFoundInstance = NewError(ErrSubscriptionNotFound, "Subscription not found", http.StatusNotFound)
+	ErrCustomerNotFoundInstance = NewError(ErrCustomerNotFound, "Customer not found", http.StatusNotFound)
+	ErrCalendarConnectionInstance = NewError(ErrCalendarConnection, "Calendar connection failed", http.StatusBadGateway)
+	ErrCalendarSyncFailedInstance = NewError(ErrCalendarSyncFailed, "Calendar sync failed", http.StatusBadGateway)
+	ErrCalendarNotConfiguredInstance = NewError(ErrCalendarNotConfigured, "Calendar not configured", http.StatusBadRequest)
+	ErrInviteNotFoundInstance = NewError(ErrInviteNotFound, "Invite not found", http.StatusNotFound)
+	ErrInviteExpiredInstance = NewError(ErrInviteExpired, "Invite has expired", http.StatusGone)
+	ErrInviteAlreadyAcceptedInstance = NewError(ErrInviteAlreadyAccepted, "Invite has already been accepted", http.StatusConflict)
+	ErrInvitePendingInstance = NewError(ErrInvitePending, "An invite is already pending for this email", http.StatusConflict)
+	ErrCannotChangeOwnRoleInstance = NewError(ErrCannotChangeOwnRole, "You cannot change your own role", http.StatusForbidden)
+	ErrCannotDeactivateSelfInstance = NewError(ErrCannotDeactivateSelf, "You cannot deactivate your own account", http.StatusForbidden)
+	ErrCannotRemoveOwnerInstance = NewError(ErrCannotRemoveOwner, "The clinic owner cannot be removed", http.StatusForbidden)
+	ErrPatientRecordNotFoundInstance = NewError(ErrPatientRecordNotFound, "Patient record not found", http.StatusNotFound)
+	ErrSessionNoteNotFoundInstance = NewError(ErrSessionNoteNotFound, "Session note not found", http.StatusNotFound)
 )
 
 // IsNotFound checks if error is a not found error

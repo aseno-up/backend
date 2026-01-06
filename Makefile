@@ -62,7 +62,7 @@ deps:
 	$(GOMOD) download
 	$(GOMOD) tidy
 
-# Docker compose up (PostgreSQL + Evolution API)
+# Docker compose up (PostgreSQL + Redis)
 docker-up:
 	@echo "Starting Docker services..."
 	docker-compose up -d
@@ -71,6 +71,16 @@ docker-up:
 docker-down:
 	@echo "Stopping Docker services..."
 	docker-compose down
+
+# Start pgAdmin (Database UI)
+pgadmin:
+	@echo "Starting pgAdmin on http://localhost:5050..."
+	docker-compose --profile tools up -d pgadmin
+
+# Stop pgAdmin
+pgadmin-down:
+	@echo "Stopping pgAdmin..."
+	docker-compose --profile tools stop pgadmin
 
 # Create new migration (usage: make migration name=create_users_table)
 migration:
@@ -92,5 +102,7 @@ help:
 	@echo "  make deps           - Download dependencies"
 	@echo "  make docker-up      - Start Docker services"
 	@echo "  make docker-down    - Stop Docker services"
+	@echo "  make pgadmin        - Start pgAdmin on http://localhost:5050"
+	@echo "  make pgadmin-down   - Stop pgAdmin"
 	@echo "  make migration      - Create new migration file"
 	@echo "  make help           - Show this help"

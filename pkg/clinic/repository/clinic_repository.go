@@ -16,11 +16,14 @@ type ClinicRepository interface {
 	GetByID(ctx context.Context, id uuid.UUID) (*model.Clinic, error)
 	GetBySlug(ctx context.Context, slug string) (*model.Clinic, error)
 	GetByEmail(ctx context.Context, email string) (*model.Clinic, error)
+	GetByWhatsAppInstance(ctx context.Context, instance string) (*model.Clinic, error)
 	Update(ctx context.Context, clinic *model.Clinic) error
 	Delete(ctx context.Context, id uuid.UUID) error
 	List(ctx context.Context, limit, offset int) ([]*model.Clinic, int64, error)
 	ExistsBySlug(ctx context.Context, slug string) (bool, error)
 	ExistsByEmail(ctx context.Context, email string) (bool, error)
+	UpdateWhatsAppInstance(ctx context.Context, id uuid.UUID, instance string) error
+	UpdateWhatsAppConnected(ctx context.Context, id uuid.UUID, connected bool) error
 }
 
 // clinicRepository implements ClinicRepository
@@ -145,4 +148,35 @@ func (r *clinicRepository) ExistsByEmail(ctx context.Context, email string) (boo
 		return false, errors.ErrInternalInstance.WithError(result.Error)
 	}
 	return count > 0, nil
+}
+
+// GetByWhatsAppInstance retrieves a clinic by WhatsApp instance name
+func (r *clinicRepository) GetByWhatsAppInstance(ctx context.Context, instance string) (*model.Clinic, error) {
+	var clinic model.Clinic
+	result := r.db.WithContext(ctx).Where("whats_app_instance = ? AND deleted_at IS NULL", instance).First(&clinic)
+	if result.Error != nil {
+		if result.Error == gorm.ErrRecordNotFound {
+			return nil, errors.ErrClinicNotFoundInstance
+		}
+		return nil, errors.ErrInternalInstance.WithError(result.Error)
+	}
+	return &clinic, nil
+}
+
+// UpdateWhatsAppInstance updates the clinic's WhatsApp instance name
+func (r *clinicRepository) UpdateWhatsAppInstance(ctx context.Context, id uuid.UUID, instance string) error {
+	result := r.db.WithContext(ctx).Model(&model.Clinic{}).Where("id = ?", id).Update("whats_app_instance", instance)
+	if result.Error != nil {
+		return errors.ErrInternalInstance.WithError(result.Error)
+	}
+	return nil
+}
+
+// UpdateWhatsAppConnected updates the clinic's WhatsApp connection status
+func (r *clinicRepository) UpdateWhatsAppConnected(ctx context.Context, id uuid.UUID, connected bool) error {
+	result := r.db.WithContext(ctx).Model(&model.Clinic{}).Where("id = ?", id).Update("whats_app_connected", connected)
+	if result.Error != nil {
+		return errors.ErrInternalInstance.WithError(result.Error)
+	}
+	return nil
 }

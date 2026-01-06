@@ -1,0 +1,465 @@
+package service
+
+import (
+	"context"
+	"regexp"
+	"strings"
+	"time"
+
+	"github.com/google/uuid"
+
+	"github.com/saas/backend/internal/errors"
+	"github.com/saas/backend/pkg/auth/model"
+	clinic_model "github.com/saas/backend/pkg/clinic/model"
+	clinic_repository "github.com/saas/backend/pkg/clinic/repository"
+	user_model "github.com/saas/backend/pkg/user/model"
+	user_repository "github.com/saas/backend/pkg/user/repository"
+)
+
+// AuthService defines the interface for authentication operations
+type AuthService interface {
+	Register(ctx context.Context, req *model.RegisterRequest) (*model.AuthResponse, error)
+	Login(ctx context.Context, req *model.LoginRequest) (*model.AuthResponse, error)
+	GoogleLogin(ctx context.Context, req *model.GoogleLoginRequest) (*model.AuthResponse, error)
+	RefreshToken(ctx context.Context, refreshToken string) (*model.AuthResponse, error)
+	Logout(ctx context.Context, userID uuid.UUID) error
+	GetCurrentUser(ctx context.Context, userID uuid.UUID) (*model.CurrentUserResponse, error)
+	ChangePassword(ctx context.Context, userID uuid.UUID, req *model.ChangePasswordRequest) error
+}
+
+// GoogleAuthClient defines the interface for Google authentication
+type GoogleAuthClient interface {
+	VerifyIDToken(ctx context.Context, idToken string) (*GoogleUserInfo, error)
+}
+
+// GoogleUserInfo represents user information from Google
+type GoogleUserInfo struct {
+	ID            string
+	Email         string
+	VerifiedEmail bool
+	Name          string
+	GivenName     string
+	FamilyName    string
+	Picture       string
+}
+
+// authService implements AuthService
+type authService struct {
+	userRepo     user_repository.UserRepository
+	clinicRepo   clinic_repository.ClinicRepository
+	jwtService   JWTService
+	googleClient GoogleAuthClient
+}
+
+// NewAuthService creates a new auth service
+func NewAuthService(
+	userRepo user_repository.UserRepository,
+	clinicRepo clinic_repository.ClinicRepository,
+	jwtService JWTService,
+) AuthService {
+	return &authService{
+		userRepo:   userRepo,
+		clinicRepo: clinicRepo,
+		jwtService: jwtService,
+	}
+}
+
+// NewAuthServiceWithGoogle creates a new auth service with Google OAuth support
+func NewAuthServiceWithGoogle(
+	userRepo user_repository.UserRepository,
+	clinicRepo clinic_repository.ClinicRepository,
+	jwtService JWTService,
+	googleClient GoogleAuthClient,
+) AuthService {
+	return &authService{
+		userRepo:     userRepo,
+		clinicRepo:   clinicRepo,
+		jwtService:   jwtService,
+		googleClient: googleClient,
+	}
+}
+
+// Register creates a new clinic and owner user
+func (s *authService) Register(ctx context.Context, req *model.RegisterRequest) (*model.AuthResponse, error) {
+	// Check if email already exists
+	exists, err := s.userRepo.ExistsByEmail(ctx, req.Email)
+	if err != nil {
+		return nil, err
+	}
+	if exists {
+		return nil, errors.ErrEmailAlreadyExistsInstance
+	}
+
+	// Generate slug from clinic name
+	slug := s.generateSlug(req.ClinicName)
+
+	// Check if slug is unique, append random suffix if not
+	slugExists, err := s.clinicRepo.ExistsBySlug(ctx, slug)
+	if err != nil {
+		return nil, err
+	}
+	if slugExists {
+		slug = slug + "-" + generateShortID()
+	}
+
+	// Calculate trial end date (14 days from now)
+	trialEndsAt := time.Now().AddDate(0, 0, 14)
+
+	// Create clinic
+	clinic := &clinic_model.Clinic{
+		Name:               req.ClinicName,
+		Slug:               slug,
+		Email:              req.Email,
+		Phone:              req.Phone,
+		Plan:               clinic_model.PlanTypeBasic,
+		SubscriptionStatus: clinic_model.SubscriptionStatusTrial,
+		TrialEndsAt:        &trialEndsAt,
+		Settings: clinic_model.ClinicSettings{
+			Timezone:                  "America/Sao_Paulo",
+			DefaultAppointmentMinutes: 30,
+			ReminderHoursBefore:       24,
+			AllowOnlineBooking:        false,
+			RequireConfirmation:       true,
+		},
+	}
+
+	if err := s.clinicRepo.Create(ctx, clinic); err != nil {
+		return nil, err
+	}
+
+	// Create owner user
+	user := &user_model.User{
+		ClinicID:      clinic.ID,
+		Email:         req.Email,
+		Name:          req.Name,
+		Phone:         req.Phone,
+		Role:          user_model.UserRoleOwner,
+		EmailVerified: false,
+		IsActive:      true,
+	}
+
+	if err := user.SetPassword(req.Password); err != nil {
+		return nil, errors.ErrInternalInstance.WithError(err)
+	}
+
+	if err := s.userRepo.Create(ctx, user); err != nil {
+		return nil, err
+	}
+
+	// Generate tokens
+	tokenPair, err := s.jwtService.GenerateTokenPair(user)
+	if err != nil {
+		return nil, err
+	}
+
+	// Save refresh token
+	if err := s.userRepo.UpdateRefreshToken(ctx, user.ID, tokenPair.RefreshToken); err != nil {
+		return nil, err
+	}
+
+	// Update last login
+	if err := s.userRepo.UpdateLastLogin(ctx, user.ID); err != nil {
+		// Non-critical error, just log it
+	}
+
+	return &model.AuthResponse{
+		User:         user.ToResponse(),
+		AccessToken:  tokenPair.AccessToken,
+		RefreshToken: tokenPair.RefreshToken,
+		ExpiresIn:    tokenPair.ExpiresIn,
+	}, nil
+}
+
+// Login authenticates a user with email and password
+func (s *authService) Login(ctx context.Context, req *model.LoginRequest) (*model.AuthResponse, error) {
+	// Find user by email
+	user, err := s.userRepo.GetByEmail(ctx, req.Email)
+	if err != nil {
+		if errors.IsNotFound(err) {
+			return nil, errors.ErrInvalidCredentialsInstance
+		}
+		return nil, err
+	}
+
+	// Check if user is active
+	if !user.IsActive {
+		return nil, errors.ErrForbiddenInstance.WithMessage("User account is deactivated")
+	}
+
+	// Verify password
+	if !user.CheckPassword(req.Password) {
+		return nil, errors.ErrInvalidCredentialsInstance
+	}
+
+	// Check if clinic subscription is active
+	clinic, err := s.clinicRepo.GetByID(ctx, user.ClinicID)
+	if err != nil {
+		return nil, err
+	}
+
+	if !clinic.IsSubscriptionActive() {
+		return nil, errors.ErrForbiddenInstance.WithMessage("Clinic subscription has expired")
+	}
+
+	// Generate tokens
+	tokenPair, err := s.jwtService.GenerateTokenPair(user)
+	if err != nil {
+		return nil, err
+	}
+
+	// Save refresh token
+	if err := s.userRepo.UpdateRefreshToken(ctx, user.ID, tokenPair.RefreshToken); err != nil {
+		return nil, err
+	}
+
+	// Update last login
+	if err := s.userRepo.UpdateLastLogin(ctx, user.ID); err != nil {
+		// Non-critical error, just log it
+	}
+
+	return &model.AuthResponse{
+		User:         user.ToResponse(),
+		AccessToken:  tokenPair.AccessToken,
+		RefreshToken: tokenPair.RefreshToken,
+		ExpiresIn:    tokenPair.ExpiresIn,
+	}, nil
+}
+
+// GoogleLogin authenticates a user using Google OAuth ID token
+func (s *authService) GoogleLogin(ctx context.Context, req *model.GoogleLoginRequest) (*model.AuthResponse, error) {
+	if s.googleClient == nil {
+		return nil, errors.ErrInternalInstance.WithMessage("Google OAuth is not configured")
+	}
+
+	// Verify the Google ID token
+	googleUser, err := s.googleClient.VerifyIDToken(ctx, req.IDToken)
+	if err != nil {
+		return nil, err
+	}
+
+	// Check if user exists
+	user, err := s.userRepo.GetByEmail(ctx, googleUser.Email)
+	if err != nil {
+		if !errors.IsNotFound(err) {
+			return nil, err
+		}
+
+		// User doesn't exist - create a new clinic and user
+		// Generate slug from user's name
+		slug := s.generateSlug(googleUser.Name)
+		slugExists, err := s.clinicRepo.ExistsBySlug(ctx, slug)
+		if err != nil {
+			return nil, err
+		}
+		if slugExists {
+			slug = slug + "-" + generateShortID()
+		}
+
+		// Calculate trial end date (14 days from now)
+		trialEndsAt := time.Now().AddDate(0, 0, 14)
+
+		// Create clinic
+		clinic := &clinic_model.Clinic{
+			Name:               googleUser.Name + "'s Clinic",
+			Slug:               slug,
+			Email:              googleUser.Email,
+			Plan:               clinic_model.PlanTypeBasic,
+			SubscriptionStatus: clinic_model.SubscriptionStatusTrial,
+			TrialEndsAt:        &trialEndsAt,
+			Settings: clinic_model.ClinicSettings{
+				Timezone:                  "America/Sao_Paulo",
+				DefaultAppointmentMinutes: 30,
+				ReminderHoursBefore:       24,
+				AllowOnlineBooking:        false,
+				RequireConfirmation:       true,
+			},
+		}
+
+		if err := s.clinicRepo.Create(ctx, clinic); err != nil {
+			return nil, err
+		}
+
+		// Create owner user (without password - Google-only login)
+		user = &user_model.User{
+			ClinicID:      clinic.ID,
+			Email:         googleUser.Email,
+			Name:          googleUser.Name,
+			Role:          user_model.UserRoleOwner,
+			EmailVerified: googleUser.VerifiedEmail,
+			IsActive:      true,
+			GoogleID:      googleUser.ID,
+			AvatarURL:     googleUser.Picture,
+		}
+
+		if err := s.userRepo.Create(ctx, user); err != nil {
+			return nil, err
+		}
+	} else {
+		// User exists - check if active
+		if !user.IsActive {
+			return nil, errors.ErrForbiddenInstance.WithMessage("User account is deactivated")
+		}
+
+		// Update Google ID and avatar if not set
+		if user.GoogleID == "" {
+			user.GoogleID = googleUser.ID
+		}
+		if user.AvatarURL == "" && googleUser.Picture != "" {
+			user.AvatarURL = googleUser.Picture
+		}
+		if err := s.userRepo.Update(ctx, user); err != nil {
+			return nil, err
+		}
+
+		// Check if clinic subscription is active
+		clinic, err := s.clinicRepo.GetByID(ctx, user.ClinicID)
+		if err != nil {
+			return nil, err
+		}
+
+		if !clinic.IsSubscriptionActive() {
+			return nil, errors.ErrForbiddenInstance.WithMessage("Clinic subscription has expired")
+		}
+	}
+
+	// Generate tokens
+	tokenPair, err := s.jwtService.GenerateTokenPair(user)
+	if err != nil {
+		return nil, err
+	}
+
+	// Save refresh token
+	if err := s.userRepo.UpdateRefreshToken(ctx, user.ID, tokenPair.RefreshToken); err != nil {
+		return nil, err
+	}
+
+	// Update last login
+	if err := s.userRepo.UpdateLastLogin(ctx, user.ID); err != nil {
+		// Non-critical error, just log it
+	}
+
+	return &model.AuthResponse{
+		User:         user.ToResponse(),
+		AccessToken:  tokenPair.AccessToken,
+		RefreshToken: tokenPair.RefreshToken,
+		ExpiresIn:    tokenPair.ExpiresIn,
+	}, nil
+}
+
+// RefreshToken generates new tokens using a valid refresh token
+func (s *authService) RefreshToken(ctx context.Context, refreshToken string) (*model.AuthResponse, error) {
+	// Validate refresh token
+	claims, err := s.jwtService.ValidateRefreshToken(refreshToken)
+	if err != nil {
+		return nil, err
+	}
+
+	// Get user
+	user, err := s.userRepo.GetByID(ctx, claims.UserID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Check if user is active
+	if !user.IsActive {
+		return nil, errors.ErrForbiddenInstance.WithMessage("User account is deactivated")
+	}
+
+	// Verify refresh token matches stored token
+	if user.RefreshToken != refreshToken {
+		return nil, errors.ErrTokenInvalidInstance.WithMessage("Token has been revoked")
+	}
+
+	// Generate new tokens
+	tokenPair, err := s.jwtService.GenerateTokenPair(user)
+	if err != nil {
+		return nil, err
+	}
+
+	// Save new refresh token
+	if err := s.userRepo.UpdateRefreshToken(ctx, user.ID, tokenPair.RefreshToken); err != nil {
+		return nil, err
+	}
+
+	return &model.AuthResponse{
+		User:         user.ToResponse(),
+		AccessToken:  tokenPair.AccessToken,
+		RefreshToken: tokenPair.RefreshToken,
+		ExpiresIn:    tokenPair.ExpiresIn,
+	}, nil
+}
+
+// Logout invalidates the user's refresh token
+func (s *authService) Logout(ctx context.Context, userID uuid.UUID) error {
+	return s.userRepo.UpdateRefreshToken(ctx, userID, "")
+}
+
+// GetCurrentUser retrieves the current user's data with clinic info
+func (s *authService) GetCurrentUser(ctx context.Context, userID uuid.UUID) (*model.CurrentUserResponse, error) {
+	user, err := s.userRepo.GetByID(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+
+	clinic, err := s.clinicRepo.GetByID(ctx, user.ClinicID)
+	if err != nil {
+		return nil, err
+	}
+
+	return &model.CurrentUserResponse{
+		User:   user.ToResponse(),
+		Clinic: clinic.ToResponse(),
+	}, nil
+}
+
+// ChangePassword changes the user's password
+func (s *authService) ChangePassword(ctx context.Context, userID uuid.UUID, req *model.ChangePasswordRequest) error {
+	user, err := s.userRepo.GetByID(ctx, userID)
+	if err != nil {
+		return err
+	}
+
+	// Verify current password
+	if !user.CheckPassword(req.CurrentPassword) {
+		return errors.ErrInvalidCredentialsInstance.WithMessage("Current password is incorrect")
+	}
+
+	// Set new password
+	if err := user.SetPassword(req.NewPassword); err != nil {
+		return errors.ErrInternalInstance.WithError(err)
+	}
+
+	// Update user
+	if err := s.userRepo.Update(ctx, user); err != nil {
+		return err
+	}
+
+	// Invalidate refresh token to force re-login
+	return s.userRepo.UpdateRefreshToken(ctx, userID, "")
+}
+
+// generateSlug creates a URL-friendly slug from a name
+func (s *authService) generateSlug(name string) string {
+	// Convert to lowercase
+	slug := strings.ToLower(name)
+
+	// Replace spaces and special characters with hyphens
+	reg := regexp.MustCompile(`[^a-z0-9]+`)
+	slug = reg.ReplaceAllString(slug, "-")
+
+	// Remove leading/trailing hyphens
+	slug = strings.Trim(slug, "-")
+
+	// Limit length
+	if len(slug) > 50 {
+		slug = slug[:50]
+	}
+
+	return slug
+}
+
+// generateShortID generates a short random ID
+func generateShortID() string {
+	id := uuid.New().String()
+	return id[:8]
+}

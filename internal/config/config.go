@@ -23,25 +23,37 @@ type Config struct {
 	JWTRefreshTokenTTL int // days
 
 	// Google OAuth (private - sensitive)
-	googleClientID     string
-	googleClientSecret string
-	GoogleRedirectURL  string
+	googleClientID        string
+	googleClientSecret    string
+	GoogleRedirectURL     string // For calendar integration
+	GoogleAuthRedirectURL string // For authentication
 
 	// Evolution API / WhatsApp (private - sensitive)
-	evolutionAPIURL   string
-	evolutionAPIKey   string
-	EvolutionInstance string
+	evolutionAPIURL       string
+	evolutionAPIKey       string
+	whatsappWebhookSecret string
 
 	// Asaas Payment (private - sensitive)
-	asaasAPIURL string
-	asaasAPIKey string
-	AsaasSandbox bool
+	asaasAPIURL       string
+	asaasAPIKey       string
+	asaasWebhookSecret string
+	AsaasSandbox      bool
 
 	// CORS
 	AllowedOrigins []string
 
 	// Logging
 	LogLevel string
+
+	// SMTP (private - sensitive)
+	smtpHost     string
+	smtpPort     int
+	smtpUser     string
+	smtpPassword string
+	smtpFrom     string
+
+	// Frontend URL
+	frontendURL string
 }
 
 // NewConfig creates a new configuration from environment variables
@@ -50,23 +62,31 @@ func NewConfig() *Config {
 	_ = godotenv.Load()
 
 	return &Config{
-		Port:               getEnv("PORT", "8080"),
+		Port:               getEnv("PORT", "4901"),
 		Environment:        getEnv("ENVIRONMENT", "development"),
 		databaseURL:        getEnv("DATABASE_URL", ""),
 		jwtSecret:          getEnv("JWT_SECRET", ""),
 		JWTAccessTokenTTL:  getEnvAsInt("JWT_ACCESS_TOKEN_TTL", 15),
 		JWTRefreshTokenTTL: getEnvAsInt("JWT_REFRESH_TOKEN_TTL", 7),
-		googleClientID:     getEnv("GOOGLE_CLIENT_ID", ""),
-		googleClientSecret: getEnv("GOOGLE_CLIENT_SECRET", ""),
-		GoogleRedirectURL:  getEnv("GOOGLE_REDIRECT_URL", ""),
-		evolutionAPIURL:    getEnv("EVOLUTION_API_URL", ""),
-		evolutionAPIKey:    getEnv("EVOLUTION_API_KEY", ""),
-		EvolutionInstance:  getEnv("EVOLUTION_INSTANCE", ""),
+		googleClientID:        getEnv("GOOGLE_CLIENT_ID", ""),
+		googleClientSecret:    getEnv("GOOGLE_CLIENT_SECRET", ""),
+		GoogleRedirectURL:     getEnv("GOOGLE_REDIRECT_URL", ""),
+		GoogleAuthRedirectURL: getEnv("GOOGLE_AUTH_REDIRECT_URL", ""),
+		evolutionAPIURL:       getEnv("EVOLUTION_API_URL", ""),
+		evolutionAPIKey:       getEnv("EVOLUTION_API_KEY", ""),
+		whatsappWebhookSecret: getEnv("WHATSAPP_WEBHOOK_SECRET", ""),
 		asaasAPIURL:        getEnv("ASAAS_API_URL", "https://sandbox.asaas.com/api/v3"),
 		asaasAPIKey:        getEnv("ASAAS_API_KEY", ""),
+		asaasWebhookSecret: getEnv("ASAAS_WEBHOOK_SECRET", ""),
 		AsaasSandbox:       getEnvAsBool("ASAAS_SANDBOX", true),
 		AllowedOrigins:     getEnvAsSlice("ALLOWED_ORIGINS", []string{"http://localhost:3000"}),
 		LogLevel:           getEnv("LOG_LEVEL", "info"),
+		smtpHost:           getEnv("SMTP_HOST", ""),
+		smtpPort:           getEnvAsInt("SMTP_PORT", 587),
+		smtpUser:           getEnv("SMTP_USER", ""),
+		smtpPassword:       getEnv("SMTP_PASSWORD", ""),
+		smtpFrom:           getEnv("SMTP_FROM", ""),
+		frontendURL:        getEnv("FRONTEND_URL", "http://localhost:3000"),
 	}
 }
 
@@ -127,6 +147,11 @@ func (c *Config) GetEvolutionAPIKey() string {
 	return c.evolutionAPIKey
 }
 
+// GetWhatsAppWebhookSecret returns the WhatsApp webhook secret
+func (c *Config) GetWhatsAppWebhookSecret() string {
+	return c.whatsappWebhookSecret
+}
+
 // GetAsaasAPIURL returns the Asaas API URL
 func (c *Config) GetAsaasAPIURL() string {
 	return c.asaasAPIURL
@@ -137,6 +162,11 @@ func (c *Config) GetAsaasAPIKey() string {
 	return c.asaasAPIKey
 }
 
+// GetAsaasWebhookSecret returns the Asaas webhook secret
+func (c *Config) GetAsaasWebhookSecret() string {
+	return c.asaasWebhookSecret
+}
+
 // IsDevelopment returns true if environment is development
 func (c *Config) IsDevelopment() bool {
 	return c.Environment == "development"
@@ -145,6 +175,36 @@ func (c *Config) IsDevelopment() bool {
 // IsProduction returns true if environment is production
 func (c *Config) IsProduction() bool {
 	return c.Environment == "production"
+}
+
+// GetSMTPHost returns the SMTP host
+func (c *Config) GetSMTPHost() string {
+	return c.smtpHost
+}
+
+// GetSMTPPort returns the SMTP port
+func (c *Config) GetSMTPPort() int {
+	return c.smtpPort
+}
+
+// GetSMTPUser returns the SMTP user
+func (c *Config) GetSMTPUser() string {
+	return c.smtpUser
+}
+
+// GetSMTPPassword returns the SMTP password
+func (c *Config) GetSMTPPassword() string {
+	return c.smtpPassword
+}
+
+// GetSMTPFrom returns the SMTP from address
+func (c *Config) GetSMTPFrom() string {
+	return c.smtpFrom
+}
+
+// GetFrontendURL returns the frontend URL
+func (c *Config) GetFrontendURL() string {
+	return c.frontendURL
 }
 
 func getEnv(key, defaultValue string) string {
