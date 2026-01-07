@@ -46,6 +46,7 @@ func (c *evolutionClient) CreateInstance(ctx context.Context, instance string) e
 	payload := map[string]interface{}{
 		"instanceName": instance,
 		"qrcode":       true,
+		"integration":  "WHATSAPP-BAILEYS",
 	}
 
 	_, err := c.doRequest(ctx, "POST", "/instance/create", payload)
@@ -189,12 +190,35 @@ func (c *evolutionClient) doRequest(ctx context.Context, method, path string, bo
 
 	if resp.StatusCode >= 400 {
 		var errResp struct {
-			Message string `json:"message"`
-			Error   string `json:"error"`
+			Message  interface{} `json:"message"` // Can be string or []string
+			Error    string      `json:"error"`
+			Response struct {
+				Message interface{} `json:"message"` // Can be string or []string
+			} `json:"response"`
 		}
 		_ = json.Unmarshal(respBody, &errResp)
 
-		errMsg := errResp.Message
+		var errMsg string
+		if errResp.Message != nil {
+			switch v := errResp.Message.(type) {
+			case string:
+				errMsg = v
+			case []interface{}:
+				if len(v) > 0 {
+					errMsg = fmt.Sprintf("%v", v[0])
+				}
+			}
+		}
+		if errMsg == "" && errResp.Response.Message != nil {
+			switch v := errResp.Response.Message.(type) {
+			case string:
+				errMsg = v
+			case []interface{}:
+				if len(v) > 0 {
+					errMsg = fmt.Sprintf("%v", v[0])
+				}
+			}
+		}
 		if errMsg == "" {
 			errMsg = errResp.Error
 		}
