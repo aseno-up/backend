@@ -89,17 +89,6 @@ type ChangePasswordRequest struct {
 	NewPassword     string `json:"new_password" binding:"required,min=8"`
 }
 
-// ResetPasswordRequest represents the reset password request
-type ResetPasswordRequest struct {
-	Email string `json:"email" binding:"required,email"`
-}
-
-// SetPasswordRequest represents setting a new password with token
-type SetPasswordRequest struct {
-	Token       string `json:"token" binding:"required"`
-	NewPassword string `json:"new_password" binding:"required,min=8"`
-}
-
 // CurrentUserResponse represents the response for getting current user data
 type CurrentUserResponse struct {
 	User   *user_model.UserResponse     `json:"user"`

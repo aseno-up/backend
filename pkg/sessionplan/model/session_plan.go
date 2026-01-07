@@ -66,6 +66,7 @@ type SessionPlan struct {
 
 	// Metadata
 	Notes          string         `json:"notes" gorm:"type:text"`
+	WhatsappConfirmation bool     `json:"whatsapp_confirmation" gorm:"default:true"`
 	PausedAt       *time.Time     `json:"paused_at"`
 	CancelledAt    *time.Time     `json:"cancelled_at"`
 	CompletedAt    *time.Time     `json:"completed_at"`
@@ -155,6 +156,7 @@ type CreateSessionPlanRequest struct {
 	SessionPrice   float64    `json:"session_price" binding:"min=0"`
 	Notes          string     `json:"notes"`
 	GenerateAll    bool       `json:"generate_all"` // If true, generate all sessions immediately
+	WhatsappConfirmation bool `json:"whatsapp_confirmation"`
 }
 
 // UpdateSessionPlanRequest represents the request to update a session plan

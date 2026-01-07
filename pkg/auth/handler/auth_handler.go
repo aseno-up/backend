@@ -21,6 +21,8 @@ type AuthHandler interface {
 	Logout(c *gin.Context)
 	GetCurrentUser(c *gin.Context)
 	ChangePassword(c *gin.Context)
+	RequestPasswordReset(c *gin.Context)
+	ResetPassword(c *gin.Context)
 }
 
 // authHandler implements AuthHandler
@@ -44,6 +46,8 @@ func (h *authHandler) RegisterRoutes(router gin.IRouter) {
 		auth.POST("/login", h.Login)
 		auth.POST("/google", h.GoogleLogin)
 		auth.POST("/refresh", h.RefreshToken)
+		auth.POST("/forgot-password", h.RequestPasswordReset)
+		auth.POST("/reset-password", h.ResetPassword)
 	}
 }
 
@@ -108,6 +112,12 @@ func (h *authHandler) Login(c *gin.Context) {
 		return
 	}
 
+	// Set HttpOnly cookies
+	// MaxAge: 15 minutes for access token, 7 days for refresh token
+	// Secure: false (dev), HttpOnly: true
+	c.SetCookie("access_token", response.AccessToken, 900, "/", "", false, true)
+	c.SetCookie("refresh_token", response.RefreshToken, 604800, "/", "", false, true)
+
 	c.JSON(http.StatusOK, response)
 }
 
@@ -135,6 +145,10 @@ func (h *authHandler) GoogleLogin(c *gin.Context) {
 		return
 	}
 
+	// Set HttpOnly cookies
+	c.SetCookie("access_token", response.AccessToken, 900, "/", "", false, true)
+	c.SetCookie("refresh_token", response.RefreshToken, 604800, "/", "", false, true)
+
 	c.JSON(http.StatusOK, response)
 }
 
@@ -150,9 +164,17 @@ func (h *authHandler) GoogleLogin(c *gin.Context) {
 // @Router /auth/refresh [post]
 func (h *authHandler) RefreshToken(c *gin.Context) {
 	var req model.RefreshRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, errors.ToResponse(errors.ErrValidationInstance.WithError(err)))
-		return
+	
+	// Check cookie first
+	cookieToken, err := c.Cookie("refresh_token")
+	if err == nil && cookieToken != "" {
+		req.RefreshToken = cookieToken
+	} else {
+		// Fallback to JSON body
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, errors.ToResponse(errors.ErrValidationInstance.WithError(err)))
+			return
+		}
 	}
 
 	response, err := h.authService.RefreshToken(c.Request.Context(), req.RefreshToken)
@@ -161,6 +183,10 @@ func (h *authHandler) RefreshToken(c *gin.Context) {
 		c.JSON(statusCode, errors.ToResponse(err))
 		return
 	}
+
+	// Set HttpOnly cookies
+	c.SetCookie("access_token", response.AccessToken, 900, "/", "", false, true)
+	c.SetCookie("refresh_token", response.RefreshToken, 604800, "/", "", false, true)
 
 	c.JSON(http.StatusOK, response)
 }
@@ -184,6 +210,10 @@ func (h *authHandler) Logout(c *gin.Context) {
 		c.JSON(statusCode, errors.ToResponse(err))
 		return
 	}
+
+	// Clear cookies
+	c.SetCookie("access_token", "", -1, "/", "", false, true)
+	c.SetCookie("refresh_token", "", -1, "/", "", false, true)
 
 	c.JSON(http.StatusOK, gin.H{"message": "Successfully logged out"})
 }
@@ -243,4 +273,55 @@ func (h *authHandler) ChangePassword(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "Password changed successfully"})
+}
+
+// RequestPasswordReset handles password reset request
+// @Summary Request password reset
+// @Tags Auth
+// @Accept json
+// @Produce json
+// @Param request body model.RequestPasswordResetRequest true "Email"
+// @Success 200 {object} map[string]string
+// @Failure 400 {object} errors.AppError
+// @Router /auth/forgot-password [post]
+func (h *authHandler) RequestPasswordReset(c *gin.Context) {
+	var req model.RequestPasswordResetRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, errors.ToResponse(errors.ErrValidationInstance.WithError(err)))
+		return
+	}
+
+	if err := h.authService.RequestPasswordReset(c.Request.Context(), &req); err != nil {
+		statusCode := errors.GetStatusCode(err)
+		c.JSON(statusCode, errors.ToResponse(err))
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "If an account exists with this email, instructions have been sent."})
+}
+
+// ResetPassword handles password reset completion
+// @Summary Reset password
+// @Tags Auth
+// @Accept json
+// @Produce json
+// @Param request body model.ResetPasswordRequest true "Token and new password"
+// @Success 200 {object} map[string]string
+// @Failure 400 {object} errors.AppError
+// @Failure 401 {object} errors.AppError
+// @Router /auth/reset-password [post]
+func (h *authHandler) ResetPassword(c *gin.Context) {
+	var req model.ResetPasswordRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, errors.ToResponse(errors.ErrValidationInstance.WithError(err)))
+		return
+	}
+
+	if err := h.authService.ResetPassword(c.Request.Context(), &req); err != nil {
+		statusCode := errors.GetStatusCode(err)
+		c.JSON(statusCode, errors.ToResponse(err))
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Password successfully reset."})
 }

@@ -14,6 +14,7 @@ import (
 type EmailService interface {
 	SendInvite(ctx context.Context, data *InviteEmailData) error
 	SendWelcome(ctx context.Context, data *WelcomeEmailData) error
+	SendPasswordReset(ctx context.Context, data *ResetPasswordEmailData) error
 }
 
 // InviteEmailData contains data for invite emails
@@ -32,6 +33,13 @@ type WelcomeEmailData struct {
 	RecipientName  string
 	ClinicName     string
 	LoginLink      string
+}
+
+// ResetPasswordEmailData contains data for password reset emails
+type ResetPasswordEmailData struct {
+	RecipientEmail string
+	RecipientName  string
+	ResetLink      string
 }
 
 // SMTPConfig holds SMTP configuration
@@ -73,6 +81,18 @@ func (s *smtpEmailService) SendWelcome(ctx context.Context, data *WelcomeEmailDa
 	body, err := s.renderWelcomeTemplate(data)
 	if err != nil {
 		return fmt.Errorf("failed to render welcome template: %w", err)
+	}
+
+	return s.sendEmail(data.RecipientEmail, subject, body)
+}
+
+// SendPasswordReset sends a password reset email
+func (s *smtpEmailService) SendPasswordReset(ctx context.Context, data *ResetPasswordEmailData) error {
+	subject := "Redefinição de senha — Aseno"
+
+	body, err := s.renderPasswordResetTemplate(data)
+	if err != nil {
+		return fmt.Errorf("failed to render password reset template: %w", err)
 	}
 
 	return s.sendEmail(data.RecipientEmail, subject, body)
@@ -243,6 +263,56 @@ func (s *smtpEmailService) renderWelcomeTemplate(data *WelcomeEmailData) (string
 	return buf.String(), nil
 }
 
+func (s *smtpEmailService) renderPasswordResetTemplate(data *ResetPasswordEmailData) (string, error) {
+	tmpl := `
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <style>
+        body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+        .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+        .header { background: #4F46E5; color: white; padding: 20px; text-align: center; border-radius: 8px 8px 0 0; }
+        .content { background: #f9fafb; padding: 30px; border-radius: 0 0 8px 8px; }
+        .button { display: inline-block; background: #4F46E5; color: white; padding: 12px 30px; text-decoration: none; border-radius: 6px; margin: 20px 0; }
+        .footer { text-align: center; color: #666; font-size: 12px; margin-top: 20px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Redefinicao de Senha</h1>
+        </div>
+        <div class="content">
+            <p>Ola,</p>
+            <p>Recebemos uma solicitacao para redefinir sua senha.</p>
+            <p>Clique no botao abaixo para criar uma nova senha:</p>
+            <p style="text-align: center;">
+                <a href="{{.ResetLink}}" class="button">Redefinir Senha</a>
+            </p>
+            <p><small>Este link expira em 15 minutos.</small></p>
+            <p><small>Se voce nao solicitou isso, ignore este e-mail.</small></p>
+        </div>
+        <div class="footer">
+            <p>Este email foi enviado automaticamente. Por favor, nao responda.</p>
+        </div>
+    </div>
+</body>
+</html>
+`
+	t, err := template.New("reset_password").Parse(tmpl)
+	if err != nil {
+		return "", err
+	}
+
+	var buf bytes.Buffer
+	if err := t.Execute(&buf, data); err != nil {
+		return "", err
+	}
+
+	return buf.String(), nil
+}
+
 // NoOpEmailService is a no-operation email service for development
 type noOpEmailService struct{}
 
@@ -260,5 +330,11 @@ func (s *noOpEmailService) SendInvite(ctx context.Context, data *InviteEmailData
 func (s *noOpEmailService) SendWelcome(ctx context.Context, data *WelcomeEmailData) error {
 	fmt.Printf("[EMAIL] Would send welcome to %s (%s) for %s\n",
 		data.RecipientEmail, data.RecipientName, data.ClinicName)
+	return nil
+}
+
+func (s *noOpEmailService) SendPasswordReset(ctx context.Context, data *ResetPasswordEmailData) error {
+	fmt.Printf("[EMAIL] Would send password reset to %s (link: %s)\n",
+		data.RecipientEmail, data.ResetLink)
 	return nil
 }

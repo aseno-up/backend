@@ -42,22 +42,30 @@ func NewAuthMiddleware(jwtService service.JWTService) AuthMiddleware {
 // Authenticate validates the JWT token and sets user context
 func (m *authMiddleware) Authenticate() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		authHeader := c.GetHeader("Authorization")
-		if authHeader == "" {
-			c.JSON(http.StatusUnauthorized, errors.ToResponse(errors.ErrUnauthorizedInstance.WithMessage("Missing authorization header")))
+		var tokenString string
+
+		// 1. Try to get from Cookie
+		cookie, err := c.Cookie("access_token")
+		if err == nil && cookie != "" {
+			tokenString = cookie
+		}
+
+		// 2. If no cookie, try Authorization header
+		if tokenString == "" {
+			authHeader := c.GetHeader("Authorization")
+			if authHeader != "" {
+				parts := strings.SplitN(authHeader, " ", 2)
+				if len(parts) == 2 && strings.ToLower(parts[0]) == "bearer" {
+					tokenString = parts[1]
+				}
+			}
+		}
+
+		if tokenString == "" {
+			c.JSON(http.StatusUnauthorized, errors.ToResponse(errors.ErrUnauthorizedInstance.WithMessage("Missing authorization token")))
 			c.Abort()
 			return
 		}
-
-		// Check Bearer scheme
-		parts := strings.SplitN(authHeader, " ", 2)
-		if len(parts) != 2 || strings.ToLower(parts[0]) != "bearer" {
-			c.JSON(http.StatusUnauthorized, errors.ToResponse(errors.ErrUnauthorizedInstance.WithMessage("Invalid authorization header format")))
-			c.Abort()
-			return
-		}
-
-		tokenString := parts[1]
 
 		// Validate token
 		claims, err := m.jwtService.ValidateAccessToken(tokenString)
@@ -120,19 +128,30 @@ func (m *authMiddleware) RequireOwner() gin.HandlerFunc {
 // OptionalAuth tries to authenticate but doesn't fail if no token is provided
 func (m *authMiddleware) OptionalAuth() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		authHeader := c.GetHeader("Authorization")
-		if authHeader == "" {
+		var tokenString string
+
+		// 1. Try to get from Cookie
+		cookie, err := c.Cookie("access_token")
+		if err == nil && cookie != "" {
+			tokenString = cookie
+		}
+
+		// 2. If no cookie, try Authorization header
+		if tokenString == "" {
+			authHeader := c.GetHeader("Authorization")
+			if authHeader != "" {
+				parts := strings.SplitN(authHeader, " ", 2)
+				if len(parts) == 2 && strings.ToLower(parts[0]) == "bearer" {
+					tokenString = parts[1]
+				}
+			}
+		}
+
+		if tokenString == "" {
 			c.Next()
 			return
 		}
 
-		parts := strings.SplitN(authHeader, " ", 2)
-		if len(parts) != 2 || strings.ToLower(parts[0]) != "bearer" {
-			c.Next()
-			return
-		}
-
-		tokenString := parts[1]
 		claims, err := m.jwtService.ValidateAccessToken(tokenString)
 		if err != nil {
 			c.Next()

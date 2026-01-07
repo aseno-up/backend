@@ -22,6 +22,8 @@ import (
 	auth_google "github.com/aseno/backend/pkg/auth/client/google"
 	auth_handler "github.com/aseno/backend/pkg/auth/handler"
 	auth_middleware "github.com/aseno/backend/pkg/auth/middleware"
+	auth_model "github.com/aseno/backend/pkg/auth/model"
+	auth_repository "github.com/aseno/backend/pkg/auth/repository"
 	auth_service "github.com/aseno/backend/pkg/auth/service"
 	calendar_google "github.com/aseno/backend/pkg/calendar/client/google"
 	calendar_handler "github.com/aseno/backend/pkg/calendar/handler"
@@ -30,6 +32,9 @@ import (
 	calendar_service "github.com/aseno/backend/pkg/calendar/service"
 	clinic_model "github.com/aseno/backend/pkg/clinic/model"
 	clinic_repository "github.com/aseno/backend/pkg/clinic/repository"
+	dashboard_handler "github.com/aseno/backend/pkg/dashboard/handler"
+	dashboard_repository "github.com/aseno/backend/pkg/dashboard/repository"
+	dashboard_service "github.com/aseno/backend/pkg/dashboard/service"
 	email_service "github.com/aseno/backend/pkg/email/service"
 	health_handler "github.com/aseno/backend/pkg/health/handler"
 	invite_handler "github.com/aseno/backend/pkg/invite/handler"
@@ -111,6 +116,8 @@ func main() {
 	sessionPlanRepo := sessionplan_repository.NewSessionPlanRepository(db.GetDB())
 	inviteRepo := invite_repository.NewInviteRepository(db.GetDB())
 	patientRecordRepo := patientrecord_repository.NewPatientRecordRepository(db.GetDB())
+	dashboardRepo := dashboard_repository.NewDashboardRepository(db.GetDB())
+	passwordResetRepo := auth_repository.NewPasswordResetRepository(db.GetDB())
 
 	// Initialize WhatsApp client (Evolution API)
 	var whatsappClient whatsapp_service.WhatsAppClient
@@ -162,12 +169,29 @@ func main() {
 		cfg.JWTRefreshTokenTTL,
 	)
 
+	// Initialize Email service
+	var emailSvc email_service.EmailService
+	if cfg.GetSMTPHost() != "" {
+		emailSvc = email_service.NewSMTPEmailService(email_service.SMTPConfig{
+			Host:        cfg.GetSMTPHost(),
+			Port:        cfg.GetSMTPPort(),
+			User:        cfg.GetSMTPUser(),
+			Password:    cfg.GetSMTPPassword(),
+			From:        cfg.GetSMTPFrom(),
+			FrontendURL: cfg.GetFrontendURL(),
+		})
+		log.Println("SMTP email service initialized")
+	} else {
+		emailSvc = email_service.NewNoOpEmailService()
+		log.Println("Using no-op email service (SMTP not configured)")
+	}
+
 	// Initialize auth service with or without Google OAuth
 	var authService auth_service.AuthService
 	if googleAuthClient != nil {
-		authService = auth_service.NewAuthServiceWithGoogle(userRepo, clinicRepo, jwtService, &googleAuthAdapter{client: googleAuthClient})
+		authService = auth_service.NewAuthServiceWithGoogle(userRepo, clinicRepo, passwordResetRepo, jwtService, &googleAuthAdapter{client: googleAuthClient}, emailSvc)
 	} else {
-		authService = auth_service.NewAuthService(userRepo, clinicRepo, jwtService)
+		authService = auth_service.NewAuthService(userRepo, clinicRepo, passwordResetRepo, jwtService, emailSvc)
 	}
 	professionalService := professional_service.NewProfessionalService(professionalRepo)
 	patientService := patient_service.NewPatientService(patientRepo)
@@ -194,23 +218,6 @@ func main() {
 	// Initialize Session Plan service
 	sessionPlanService := sessionplan_service.NewSessionPlanService(sessionPlanRepo, appointmentRepo)
 
-	// Initialize Email service
-	var emailSvc email_service.EmailService
-	if cfg.GetSMTPHost() != "" {
-		emailSvc = email_service.NewSMTPEmailService(email_service.SMTPConfig{
-			Host:        cfg.GetSMTPHost(),
-			Port:        cfg.GetSMTPPort(),
-			User:        cfg.GetSMTPUser(),
-			Password:    cfg.GetSMTPPassword(),
-			From:        cfg.GetSMTPFrom(),
-			FrontendURL: cfg.GetFrontendURL(),
-		})
-		log.Println("SMTP email service initialized")
-	} else {
-		emailSvc = email_service.NewNoOpEmailService()
-		log.Println("Using no-op email service (SMTP not configured)")
-	}
-
 	// Initialize Invite service
 	inviteSvc := invite_service.NewInviteService(
 		inviteRepo,
@@ -226,6 +233,9 @@ func main() {
 
 	// Initialize Patient Record service
 	patientRecordSvc := patientrecord_service.NewPatientRecordService(patientRecordRepo)
+
+	// Initialize Dashboard service
+	dashboardSvc := dashboard_service.NewDashboardService(dashboardRepo)
 
 	// Initialize Session Plan worker (runs every hour)
 	sessionPlanWorker := worker.NewSessionPlanWorker(sessionPlanService, 1*time.Hour)
@@ -272,6 +282,9 @@ func main() {
 	// Initialize Patient Record handler
 	patientRecordHdlr := patientrecord_handler.NewPatientRecordHandler(patientRecordSvc)
 
+	// Initialize Dashboard handler
+	dashboardHdlr := dashboard_handler.NewDashboardHandler(dashboardSvc)
+
 	// Setup router
 	router := setupRouter(
 		cfg,
@@ -287,6 +300,7 @@ func main() {
 		inviteHdlr,
 		userHdlr,
 		patientRecordHdlr,
+		dashboardHdlr,
 		authMiddleware,
 		tenantMiddleware,
 	)
@@ -343,6 +357,7 @@ func setupRouter(
 	inviteHandler invite_handler.InviteHandler,
 	userHandler user_handler.UserHandler,
 	patientRecordHandler patientrecord_handler.PatientRecordHandler,
+	dashboardHandler *dashboard_handler.DashboardHandler,
 	authMiddleware auth_middleware.AuthMiddleware,
 	tenantMiddleware auth_middleware.TenantMiddleware,
 ) *gin.Engine {
@@ -422,6 +437,12 @@ func setupRouter(
 
 			// Patient Record routes (clinical records and session notes)
 			patientRecordHandler.RegisterRoutes(protected)
+
+			// Dashboard routes
+			dashboard := protected.Group("/dashboard")
+			{
+				dashboard.GET("/metrics", dashboardHandler.GetMetrics)
+			}
 
 			// Admin-only routes
 			adminProtected := protected.Group("")
@@ -504,6 +525,7 @@ func runMigrations(db *database.Database) error {
 		&invite_model.Invite{},
 		&patientrecord_model.PatientRecord{},
 		&patientrecord_model.SessionNote{},
+		&auth_model.PasswordReset{},
 	}
 
 	if err := db.AutoMigrate(models...); err != nil {
