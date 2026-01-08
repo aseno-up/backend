@@ -14,6 +14,7 @@ import (
 
 	"github.com/aseno/backend/internal/config"
 	"github.com/aseno/backend/internal/database"
+	"github.com/aseno/backend/internal/queue"
 	"github.com/aseno/backend/internal/worker"
 	appointment_handler "github.com/aseno/backend/pkg/appointment/handler"
 	appointment_model "github.com/aseno/backend/pkg/appointment/model"
@@ -241,6 +242,45 @@ func main() {
 	sessionPlanWorker := worker.NewSessionPlanWorker(sessionPlanService, 1*time.Hour)
 	go sessionPlanWorker.Start()
 
+	// Initialize worker configuration
+	workerCfg := config.NewWorkerConfig()
+
+	// Initialize RabbitMQ queue (if configured)
+	var messageQueue queue.Queue
+	var reminderWorker *worker.ReminderWorker
+	var messageSenderWorker *worker.MessageSenderWorker
+
+	if workerCfg.RabbitMQURL != "" {
+		messageQueue = queue.NewRabbitMQ(queue.RabbitMQConfig{
+			URL:           workerCfg.RabbitMQURL,
+			QueueName:     workerCfg.RabbitMQQueue,
+			DLQName:       workerCfg.RabbitMQDLQ,
+			PrefetchCount: 1,
+		})
+
+		// Connect to RabbitMQ
+		if err := messageQueue.Connect(context.Background()); err != nil {
+			log.Printf("Warning: Failed to connect to RabbitMQ: %v", err)
+			log.Println("Reminder workers will be disabled")
+		} else {
+			log.Println("RabbitMQ connected successfully")
+
+			// Initialize and start Reminder Worker (only if WhatsApp is configured)
+			if whatsappService != nil && workerCfg.ReminderWorkerEnabled {
+				reminderWorker = worker.NewReminderWorker(workerCfg, appointmentRepo, messageQueue)
+				go reminderWorker.Start()
+
+				// Initialize and start Message Sender Worker
+				messageSenderWorker = worker.NewMessageSenderWorker(workerCfg, messageQueue, whatsappService)
+				go messageSenderWorker.Start()
+
+				log.Println("Reminder and Message Sender workers started")
+			}
+		}
+	} else {
+		log.Println("RabbitMQ not configured - reminder workers disabled")
+	}
+
 	// Initialize middleware
 	authMiddleware := auth_middleware.NewAuthMiddleware(jwtService)
 	tenantMiddleware := auth_middleware.NewTenantMiddleware(clinicRepo)
@@ -332,6 +372,15 @@ func main() {
 
 	// Stop workers
 	sessionPlanWorker.Stop()
+	if reminderWorker != nil {
+		reminderWorker.Stop()
+	}
+	if messageSenderWorker != nil {
+		messageSenderWorker.Stop()
+	}
+	if messageQueue != nil {
+		messageQueue.Close()
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()

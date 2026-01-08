@@ -45,6 +45,12 @@ type Appointment struct {
 	ConfirmedAt     *time.Time        `json:"confirmed_at,omitempty"`
 	CanceledAt      *time.Time        `json:"canceled_at,omitempty"`
 	CancelReason    string            `json:"cancel_reason"`
+	// Reminder tracking fields
+	Reminder48hSentAt *time.Time `json:"reminder_48h_sent_at,omitempty"`
+	Reminder24hSentAt *time.Time `json:"reminder_24h_sent_at,omitempty"`
+	Reminder2hSentAt  *time.Time `json:"reminder_2h_sent_at,omitempty"`
+
+	// Legacy field (deprecated, use specific reminder fields)
 	ReminderSentAt  *time.Time        `json:"reminder_sent_at,omitempty"`
 	GoogleEventID   string            `json:"-"`                                     // Google Calendar event ID
 	CreatedAt       time.Time         `json:"created_at"`
@@ -194,4 +200,12 @@ type ConfirmAppointmentRequest struct {
 // CancelAppointmentRequest represents a cancellation request
 type CancelAppointmentRequest struct {
 	Reason string `json:"reason"`
+}
+
+// AppointmentWithClinic represents an appointment with clinic info for reminders
+type AppointmentWithClinic struct {
+	Appointment
+	ClinicName        string `json:"clinic_name"`
+	WhatsAppInstance  string `json:"whatsapp_instance"`
+	WhatsAppConnected bool   `json:"whatsapp_connected"`
 }

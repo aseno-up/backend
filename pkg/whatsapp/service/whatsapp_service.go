@@ -52,6 +52,9 @@ type WhatsAppService interface {
 	// CreateInstance creates a new WhatsApp instance for a clinic
 	CreateInstance(ctx context.Context, instance string) error
 
+	// SendTextMessage sends a simple text message
+	SendTextMessage(ctx context.Context, instance, phone, message string) (*model.SendMessageResponse, error)
+
 	// SendConfirmationMessage sends appointment confirmation
 	SendConfirmationMessage(ctx context.Context, instance string, msg *model.ConfirmationMessage) error
 
@@ -106,6 +109,12 @@ func NewWhatsAppService(
 // CreateInstance creates a new WhatsApp instance for a clinic
 func (s *whatsAppService) CreateInstance(ctx context.Context, instance string) error {
 	return s.client.CreateInstance(ctx, instance)
+}
+
+// SendTextMessage sends a simple text message
+func (s *whatsAppService) SendTextMessage(ctx context.Context, instance, phone, message string) (*model.SendMessageResponse, error) {
+	formattedPhone := formatPhoneNumber(phone)
+	return s.client.SendTextMessage(ctx, instance, formattedPhone, message)
 }
 
 // SendConfirmationMessage sends an appointment confirmation message

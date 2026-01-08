@@ -23,6 +23,10 @@ type AppointmentRepository interface {
 	CheckConflict(ctx context.Context, clinicID, professionalID uuid.UUID, start, end time.Time, excludeID *uuid.UUID) (bool, error)
 	GetByPatient(ctx context.Context, patientID, clinicID uuid.UUID, limit int) ([]*model.Appointment, error)
 	UpdateStatus(ctx context.Context, id, clinicID uuid.UUID, status model.AppointmentStatus) error
+
+	// Reminder-related methods
+	GetPendingReminders(ctx context.Context, reminderType string, windowStart, windowEnd time.Time) ([]*model.AppointmentWithClinic, error)
+	MarkReminderSent(ctx context.Context, id uuid.UUID, reminderType string) error
 }
 
 // appointmentRepository implements AppointmentRepository
@@ -236,6 +240,91 @@ func (r *appointmentRepository) UpdateStatus(ctx context.Context, id, clinicID u
 	}
 	if result.RowsAffected == 0 {
 		return errors.ErrAppointmentNotFoundInstance
+	}
+	return nil
+}
+
+// GetPendingReminders retrieves appointments that need reminders
+// reminderType: "48h", "24h", or "2h"
+// windowStart/windowEnd: the time window for appointments
+func (r *appointmentRepository) GetPendingReminders(ctx context.Context, reminderType string, windowStart, windowEnd time.Time) ([]*model.AppointmentWithClinic, error) {
+	var results []*model.AppointmentWithClinic
+
+	// Determine which reminder field to check
+	var reminderField string
+	switch reminderType {
+	case "48h":
+		reminderField = "reminder_48h_sent_at"
+	case "24h":
+		reminderField = "reminder_24h_sent_at"
+	case "2h":
+		reminderField = "reminder_2h_sent_at"
+	default:
+		return nil, errors.ErrValidationInstance.WithMessage("invalid reminder type")
+	}
+
+	query := `
+		SELECT
+			a.*,
+			c.name as clinic_name,
+			c.whatsapp_instance,
+			c.whatsapp_connected
+		FROM appointments a
+		INNER JOIN clinics c ON a.clinic_id = c.id
+		WHERE a.deleted_at IS NULL
+			AND a.status IN ('pending', 'confirmed')
+			AND a.start_time >= ?
+			AND a.start_time < ?
+			AND a.` + reminderField + ` IS NULL
+			AND c.whatsapp_connected = true
+			AND c.whatsapp_instance IS NOT NULL
+			AND c.whatsapp_instance != ''
+		ORDER BY a.start_time ASC
+		LIMIT 100
+	`
+
+	if err := r.db.WithContext(ctx).Raw(query, windowStart, windowEnd).Scan(&results).Error; err != nil {
+		return nil, errors.ErrInternalInstance.WithError(err)
+	}
+
+	// Load patient and professional info for each appointment
+	for i := range results {
+		r.db.WithContext(ctx).
+			Model(&model.PatientInfo{}).
+			Where("id = ?", results[i].PatientID).
+			First(&results[i].Patient)
+
+		r.db.WithContext(ctx).
+			Model(&model.ProfessionalInfo{}).
+			Where("id = ?", results[i].ProfessionalID).
+			First(&results[i].Professional)
+	}
+
+	return results, nil
+}
+
+// MarkReminderSent marks a specific reminder type as sent for an appointment
+func (r *appointmentRepository) MarkReminderSent(ctx context.Context, id uuid.UUID, reminderType string) error {
+	var fieldName string
+	switch reminderType {
+	case "48h":
+		fieldName = "reminder_48h_sent_at"
+	case "24h":
+		fieldName = "reminder_24h_sent_at"
+	case "2h":
+		fieldName = "reminder_2h_sent_at"
+	default:
+		return errors.ErrValidationInstance.WithMessage("invalid reminder type")
+	}
+
+	now := time.Now()
+	result := r.db.WithContext(ctx).
+		Model(&model.Appointment{}).
+		Where("id = ?", id).
+		Update(fieldName, now)
+
+	if result.Error != nil {
+		return errors.ErrInternalInstance.WithError(result.Error)
 	}
 	return nil
 }

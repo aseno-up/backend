@@ -1,0 +1,266 @@
+package worker
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/google/uuid"
+
+	"github.com/aseno/backend/internal/config"
+	"github.com/aseno/backend/internal/queue"
+	appointment_model "github.com/aseno/backend/pkg/appointment/model"
+	appointment_repository "github.com/aseno/backend/pkg/appointment/repository"
+)
+
+// ReminderWorker scans for appointments needing reminders and enqueues messages
+type ReminderWorker struct {
+	config          *config.WorkerConfig
+	appointmentRepo appointment_repository.AppointmentRepository
+	queue           queue.Queue
+	stopCh          chan struct{}
+}
+
+// NewReminderWorker creates a new reminder worker
+func NewReminderWorker(
+	cfg *config.WorkerConfig,
+	appointmentRepo appointment_repository.AppointmentRepository,
+	q queue.Queue,
+) *ReminderWorker {
+	return &ReminderWorker{
+		config:          cfg,
+		appointmentRepo: appointmentRepo,
+		queue:           q,
+		stopCh:          make(chan struct{}),
+	}
+}
+
+// Start starts the reminder worker
+func (w *ReminderWorker) Start() {
+	if !w.config.ReminderWorkerEnabled {
+		log.Println("Reminder worker is disabled")
+		return
+	}
+
+	log.Printf("Starting reminder worker (interval: %v)", w.config.ReminderWorkerInterval)
+
+	// Run immediately on start
+	w.processReminders()
+
+	ticker := time.NewTicker(w.config.ReminderWorkerInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			w.processReminders()
+		case <-w.stopCh:
+			log.Println("Reminder worker stopped")
+			return
+		}
+	}
+}
+
+// Stop stops the reminder worker
+func (w *ReminderWorker) Stop() {
+	close(w.stopCh)
+}
+
+// processReminders processes all reminder thresholds
+func (w *ReminderWorker) processReminders() {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	log.Println("Processing reminders...")
+
+	thresholds := w.config.GetReminderThresholds()
+	totalEnqueued := 0
+
+	for _, threshold := range thresholds {
+		count, err := w.processThreshold(ctx, threshold)
+		if err != nil {
+			log.Printf("Error processing %s reminders: %v", threshold.Name, err)
+			continue
+		}
+		totalEnqueued += count
+	}
+
+	if totalEnqueued > 0 {
+		log.Printf("Reminder processing completed: %d messages enqueued", totalEnqueued)
+	} else {
+		log.Println("Reminder processing completed: no messages to send")
+	}
+}
+
+// processThreshold processes a single reminder threshold
+func (w *ReminderWorker) processThreshold(ctx context.Context, threshold config.ReminderThreshold) (int, error) {
+	now := time.Now()
+
+	// Calculate the window for this threshold
+	// For 48h reminder: appointments between 47h and 49h from now (1 hour window around 48h)
+	windowBuffer := 30 * time.Minute
+	windowStart := now.Add(threshold.Duration - windowBuffer)
+	windowEnd := now.Add(threshold.Duration + windowBuffer)
+
+	appointments, err := w.appointmentRepo.GetPendingReminders(ctx, threshold.Name, windowStart, windowEnd)
+	if err != nil {
+		return 0, fmt.Errorf("failed to get pending reminders: %w", err)
+	}
+
+	enqueued := 0
+	for _, apt := range appointments {
+		// Skip if no patient info
+		if apt.Patient == nil {
+			log.Printf("Skipping appointment %s: no patient info", apt.ID)
+			continue
+		}
+
+		// Skip if no patient phone
+		phone := apt.Patient.WhatsApp
+		if phone == "" {
+			phone = apt.Patient.Phone
+		}
+		if phone == "" {
+			log.Printf("Skipping appointment %s: no patient phone", apt.ID)
+			continue
+		}
+
+		// Get professional name
+		professionalName := ""
+		if apt.Professional != nil {
+			professionalName = apt.Professional.Name
+		}
+
+		// Build the reminder message
+		message := w.buildReminderMessage(apt.Patient.Name, professionalName, apt.StartTime, threshold)
+
+		// Create the job
+		job := &queue.MessageJob{
+			ID:            uuid.New().String(),
+			ClinicID:      apt.ClinicID.String(),
+			AppointmentID: apt.ID.String(),
+			Instance:      apt.WhatsAppInstance,
+			Phone:         phone,
+			PatientName:   apt.Patient.Name,
+			Message:       message,
+			MessageType:   threshold.Type,
+			Attempts:      0,
+			MaxAttempts:   w.config.MessageRetryMax,
+			CreatedAt:     time.Now(),
+			ScheduledAt:   time.Now(),
+		}
+
+		// Enqueue the message
+		if err := w.queue.Publish(ctx, job); err != nil {
+			log.Printf("Failed to enqueue reminder for appointment %s: %v", apt.ID, err)
+			continue
+		}
+
+		// Mark reminder as sent
+		if err := w.appointmentRepo.MarkReminderSent(ctx, apt.ID, threshold.Name); err != nil {
+			log.Printf("Failed to mark reminder sent for appointment %s: %v", apt.ID, err)
+		}
+
+		enqueued++
+	}
+
+	if enqueued > 0 {
+		log.Printf("Enqueued %d %s reminders", enqueued, threshold.Name)
+	}
+
+	return enqueued, nil
+}
+
+// buildReminderMessage builds the reminder message based on threshold
+func (w *ReminderWorker) buildReminderMessage(patientName, professionalName string, startTime time.Time, threshold config.ReminderThreshold) string {
+	// Format the date and time in Brazilian format
+	loc, _ := time.LoadLocation("America/Sao_Paulo")
+	startTimeLocal := startTime.In(loc)
+	dateStr := startTimeLocal.Format("02/01/2006")
+	timeStr := startTimeLocal.Format("15:04")
+
+	var greeting string
+	hour := time.Now().In(loc).Hour()
+	switch {
+	case hour < 12:
+		greeting = "Bom dia"
+	case hour < 18:
+		greeting = "Boa tarde"
+	default:
+		greeting = "Boa noite"
+	}
+
+	switch threshold.Type {
+	case "reminder_48h":
+		return fmt.Sprintf(
+			"%s, %s! 📅\n\n"+
+				"Lembramos que você tem uma consulta agendada:\n\n"+
+				"📆 Data: %s\n"+
+				"🕐 Horário: %s\n"+
+				"👨‍⚕️ Profissional: %s\n\n"+
+				"Por favor, confirme sua presença respondendo:\n"+
+				"✅ *SIM* - para confirmar\n"+
+				"❌ *NÃO* - para cancelar\n\n"+
+				"Caso precise reagendar, entre em contato conosco.",
+			greeting, patientName, dateStr, timeStr, professionalName,
+		)
+
+	case "reminder_24h":
+		return fmt.Sprintf(
+			"%s, %s! ⏰\n\n"+
+				"Sua consulta está marcada para *amanhã*:\n\n"+
+				"📆 Data: %s\n"+
+				"🕐 Horário: %s\n"+
+				"👨‍⚕️ Profissional: %s\n\n"+
+				"Confirme sua presença respondendo *SIM* ou *NÃO*.",
+			greeting, patientName, dateStr, timeStr, professionalName,
+		)
+
+	case "reminder_2h":
+		return fmt.Sprintf(
+			"%s, %s! 🔔\n\n"+
+				"Sua consulta é *hoje* às *%s*.\n\n"+
+				"👨‍⚕️ Profissional: %s\n\n"+
+				"Estamos te esperando! 😊",
+			greeting, patientName, timeStr, professionalName,
+		)
+
+	default:
+		return fmt.Sprintf(
+			"Lembrete de consulta: %s às %s com %s",
+			dateStr, timeStr, professionalName,
+		)
+	}
+}
+
+// ReminderStats holds statistics about reminder processing
+type ReminderStats struct {
+	ThresholdName string
+	Processed     int
+	Enqueued      int
+	Failed        int
+}
+
+// GetStats returns current statistics (for monitoring)
+func (w *ReminderWorker) GetStats(ctx context.Context) ([]ReminderStats, error) {
+	// This could be expanded to track actual stats
+	// For now, just return queue length
+	length, err := w.queue.QueueLength(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	return []ReminderStats{
+		{
+			ThresholdName: "queue",
+			Processed:     length,
+		},
+	}, nil
+}
+
+// Compile-time check that the repository has the required methods
+var _ interface {
+	GetPendingReminders(ctx context.Context, reminderType string, windowStart, windowEnd time.Time) ([]*appointment_model.AppointmentWithClinic, error)
+	MarkReminderSent(ctx context.Context, id uuid.UUID, reminderType string) error
+} = (appointment_repository.AppointmentRepository)(nil)

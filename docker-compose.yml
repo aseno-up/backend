@@ -33,6 +33,26 @@ services:
       timeout: 5s
       retries: 5
 
+  # RabbitMQ for message queuing (reminder workers)
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    container_name: aseno_rabbitmq
+    restart: unless-stopped
+    ports:
+      - "5672:5672"   # AMQP protocol
+      - "15672:15672" # Management UI
+    environment:
+      RABBITMQ_DEFAULT_USER: aseno
+      RABBITMQ_DEFAULT_PASS: aseno_password
+      RABBITMQ_DEFAULT_VHOST: aseno
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   # Evolution API for WhatsApp integration (optional for development)
   # Uncomment when ready to test WhatsApp integration
   # evolution:
@@ -75,5 +95,6 @@ services:
 volumes:
   postgres_data:
   redis_data:
+  rabbitmq_data:
   pgadmin_data:
   # evolution_instances:

@@ -82,6 +82,21 @@ pgadmin-down:
 	@echo "Stopping pgAdmin..."
 	docker-compose --profile tools stop pgadmin
 
+# Start RabbitMQ
+rabbitmq:
+	@echo "Starting RabbitMQ on amqp://localhost:5672..."
+	@echo "Management UI: http://localhost:15672 (aseno/aseno_password)"
+	docker-compose up -d rabbitmq
+
+# Stop RabbitMQ
+rabbitmq-down:
+	@echo "Stopping RabbitMQ..."
+	docker-compose stop rabbitmq
+
+# RabbitMQ logs
+rabbitmq-logs:
+	docker-compose logs -f rabbitmq
+
 # Create new migration (usage: make migration name=create_users_table)
 migration:
 	@echo "Creating migration..."
@@ -100,9 +115,12 @@ help:
 	@echo "  make lint           - Lint the code"
 	@echo "  make clean          - Clean build artifacts"
 	@echo "  make deps           - Download dependencies"
-	@echo "  make docker-up      - Start Docker services"
+	@echo "  make docker-up      - Start Docker services (Postgres, Redis, RabbitMQ)"
 	@echo "  make docker-down    - Stop Docker services"
-	@echo "  make pgadmin        - Start pgAdmin on http://localhost:5050"
+	@echo "  make pgadmin        - Start pgAdmin on http://localhost:5555"
 	@echo "  make pgadmin-down   - Stop pgAdmin"
+	@echo "  make rabbitmq       - Start RabbitMQ on http://localhost:15672"
+	@echo "  make rabbitmq-down  - Stop RabbitMQ"
+	@echo "  make rabbitmq-logs  - Show RabbitMQ logs"
 	@echo "  make migration      - Create new migration file"
 	@echo "  make help           - Show this help"
