@@ -77,6 +77,9 @@ import (
 	whatsapp_model "github.com/aseno/backend/pkg/whatsapp/model"
 	whatsapp_repository "github.com/aseno/backend/pkg/whatsapp/repository"
 	whatsapp_service "github.com/aseno/backend/pkg/whatsapp/service"
+	analytics_handler "github.com/aseno/backend/pkg/analytics/handler"
+	analytics_repository "github.com/aseno/backend/pkg/analytics/repository"
+	analytics_service "github.com/aseno/backend/pkg/analytics/service"
 )
 
 func main() {
@@ -125,6 +128,7 @@ func main() {
 	dashboardRepo := dashboard_repository.NewDashboardRepository(db.GetDB())
 	passwordResetRepo := auth_repository.NewPasswordResetRepository(db.GetDB())
 	waitlistRepo := waitlist_repository.NewWaitlistRepository(db.GetDB())
+	analyticsRepo := analytics_repository.NewAnalyticsRepository(db.GetDB())
 
 	// Initialize WhatsApp client (Evolution API)
 	var whatsappClient whatsapp_service.WhatsAppClient
@@ -208,6 +212,11 @@ func main() {
 	var whatsappService whatsapp_service.WhatsAppService
 	if whatsappClient != nil {
 		whatsappService = whatsapp_service.NewWhatsAppService(whatsappClient, messageRepo, nil)
+
+		// Wire up appointment status updater for WhatsApp confirmations/cancellations
+		whatsappService.SetAppointmentUpdater(&appointmentStatusAdapter{appointmentService: appointmentService})
+		whatsappService.SetAppointmentFinder(&appointmentFinderAdapter{appointmentRepo: appointmentRepo})
+		log.Println("WhatsApp appointment status updater connected")
 	}
 
 	// Initialize Payment service (if Asaas client is configured)
@@ -243,6 +252,9 @@ func main() {
 
 	// Initialize Dashboard service
 	dashboardSvc := dashboard_service.NewDashboardService(dashboardRepo)
+
+	// Initialize Analytics service
+	analyticsSvc := analytics_service.NewAnalyticsService(analyticsRepo)
 
 	// Initialize Waitlist service (if WhatsApp and queue are available)
 	var waitlistSvc waitlist_service.WaitlistService
@@ -307,6 +319,10 @@ func main() {
 		log.Println("RabbitMQ not configured - reminder workers and waitlist disabled")
 	}
 
+	// Wire patient risk calculator into appointment service (always enabled)
+	appointmentService.SetPatientRiskCalculator(&patientRiskAdapter{patientService: patientService})
+	log.Println("Patient risk calculator connected to appointment service")
+
 	// Initialize middleware
 	authMiddleware := auth_middleware.NewAuthMiddleware(jwtService)
 	tenantMiddleware := auth_middleware.NewTenantMiddleware(clinicRepo)
@@ -351,6 +367,9 @@ func main() {
 	// Initialize Dashboard handler
 	dashboardHdlr := dashboard_handler.NewDashboardHandler(dashboardSvc)
 
+	// Initialize Analytics handler
+	analyticsHdlr := analytics_handler.NewAnalyticsHandler(analyticsSvc)
+
 	// Initialize Waitlist handler
 	var waitlistHdlr waitlist_handler.WaitlistHandler
 	if waitlistSvc != nil {
@@ -373,6 +392,7 @@ func main() {
 		userHdlr,
 		patientRecordHdlr,
 		dashboardHdlr,
+		analyticsHdlr,
 		waitlistHdlr,
 		authMiddleware,
 		tenantMiddleware,
@@ -440,6 +460,7 @@ func setupRouter(
 	userHandler user_handler.UserHandler,
 	patientRecordHandler patientrecord_handler.PatientRecordHandler,
 	dashboardHandler *dashboard_handler.DashboardHandler,
+	analyticsHandler analytics_handler.AnalyticsHandler,
 	waitlistHandler waitlist_handler.WaitlistHandler,
 	authMiddleware auth_middleware.AuthMiddleware,
 	tenantMiddleware auth_middleware.TenantMiddleware,
@@ -531,6 +552,9 @@ func setupRouter(
 			{
 				dashboard.GET("/metrics", dashboardHandler.GetMetrics)
 			}
+
+			// Analytics routes (slot suggestions)
+			analyticsHandler.RegisterRoutes(protected)
 
 			// Admin-only routes
 			adminProtected := protected.Group("")
@@ -668,4 +692,48 @@ type appointmentCreatorAdapter struct {
 
 func (a *appointmentCreatorAdapter) CreateFromWaitlist(ctx context.Context, clinicID, patientID, professionalID uuid.UUID, startTime time.Time, durationMinutes int) (uuid.UUID, error) {
 	return a.appointmentService.CreateFromWaitlist(ctx, clinicID, patientID, professionalID, startTime, durationMinutes)
+}
+
+// patientRiskAdapter adapts patient_service to appointment_service.PatientRiskCalculator
+type patientRiskAdapter struct {
+	patientService patient_service.PatientService
+}
+
+func (a *patientRiskAdapter) CalculateRiskScore(ctx context.Context, patientID, clinicID uuid.UUID) error {
+	return a.patientService.CalculateRiskScore(ctx, patientID, clinicID)
+}
+
+// appointmentStatusAdapter adapts appointment_service to whatsapp_service.AppointmentStatusUpdater
+type appointmentStatusAdapter struct {
+	appointmentService appointment_service.AppointmentService
+}
+
+func (a *appointmentStatusAdapter) ConfirmByPatient(ctx context.Context, appointmentID, clinicID uuid.UUID, patientNotes string) error {
+	_, err := a.appointmentService.Confirm(ctx, appointmentID, clinicID, &appointment_model.ConfirmAppointmentRequest{
+		PatientNotes: patientNotes,
+	})
+	return err
+}
+
+func (a *appointmentStatusAdapter) CancelByPatient(ctx context.Context, appointmentID, clinicID uuid.UUID, reason string) error {
+	_, err := a.appointmentService.Cancel(ctx, appointmentID, clinicID, &appointment_model.CancelAppointmentRequest{
+		Reason: reason,
+	})
+	return err
+}
+
+// appointmentFinderAdapter adapts appointment_repository to whatsapp_service.AppointmentFinder
+type appointmentFinderAdapter struct {
+	appointmentRepo appointment_repository.AppointmentRepository
+}
+
+func (a *appointmentFinderAdapter) GetPendingByPhone(ctx context.Context, clinicID uuid.UUID, phone string) (*uuid.UUID, error) {
+	apt, err := a.appointmentRepo.GetPendingByPhone(ctx, clinicID, phone)
+	if err != nil {
+		return nil, err
+	}
+	if apt == nil {
+		return nil, nil
+	}
+	return &apt.ID, nil
 }

@@ -18,6 +18,11 @@ type WaitlistProcessor interface {
 	ProcessCancelledAppointment(ctx context.Context, clinicID, professionalID uuid.UUID, slotTime time.Time, durationMinutes int) error
 }
 
+// PatientRiskCalculator calculates patient no-show risk
+type PatientRiskCalculator interface {
+	CalculateRiskScore(ctx context.Context, patientID, clinicID uuid.UUID) error
+}
+
 // AppointmentService defines the interface for appointment business logic
 type AppointmentService interface {
 	Create(ctx context.Context, clinicID uuid.UUID, req *model.CreateAppointmentRequest) (*model.AppointmentResponse, error)
@@ -37,12 +42,16 @@ type AppointmentService interface {
 
 	// SetWaitlistProcessor sets the waitlist processor for encaixe
 	SetWaitlistProcessor(processor WaitlistProcessor)
+
+	// SetPatientRiskCalculator sets the patient risk calculator
+	SetPatientRiskCalculator(calculator PatientRiskCalculator)
 }
 
 // appointmentService implements AppointmentService
 type appointmentService struct {
-	repo               repository.AppointmentRepository
-	waitlistProcessor  WaitlistProcessor
+	repo              repository.AppointmentRepository
+	waitlistProcessor WaitlistProcessor
+	riskCalculator    PatientRiskCalculator
 }
 
 // NewAppointmentService creates a new appointment service
@@ -53,6 +62,11 @@ func NewAppointmentService(repo repository.AppointmentRepository) AppointmentSer
 // SetWaitlistProcessor sets the waitlist processor
 func (s *appointmentService) SetWaitlistProcessor(processor WaitlistProcessor) {
 	s.waitlistProcessor = processor
+}
+
+// SetPatientRiskCalculator sets the patient risk calculator
+func (s *appointmentService) SetPatientRiskCalculator(calculator PatientRiskCalculator) {
+	s.riskCalculator = calculator
 }
 
 // Create creates a new appointment
@@ -312,17 +326,51 @@ func (s *appointmentService) Cancel(ctx context.Context, id, clinicID uuid.UUID,
 
 // Complete marks an appointment as completed
 func (s *appointmentService) Complete(ctx context.Context, id, clinicID uuid.UUID) (*model.AppointmentResponse, error) {
+	// Get appointment to retrieve patient ID for risk recalculation
+	appointment, err := s.repo.GetByID(ctx, id, clinicID)
+	if err != nil {
+		return nil, err
+	}
+
 	if err := s.repo.UpdateStatus(ctx, id, clinicID, model.AppointmentStatusCompleted); err != nil {
 		return nil, err
 	}
+
+	// Recalculate patient risk score in background
+	if s.riskCalculator != nil {
+		go func() {
+			bgCtx := context.Background()
+			if err := s.riskCalculator.CalculateRiskScore(bgCtx, appointment.PatientID, clinicID); err != nil {
+				log.Printf("[Appointment] Error recalculating patient risk after completion: %v", err)
+			}
+		}()
+	}
+
 	return s.GetByID(ctx, id, clinicID)
 }
 
 // MarkNoShow marks an appointment as no-show
 func (s *appointmentService) MarkNoShow(ctx context.Context, id, clinicID uuid.UUID) (*model.AppointmentResponse, error) {
+	// Get appointment to retrieve patient ID for risk recalculation
+	appointment, err := s.repo.GetByID(ctx, id, clinicID)
+	if err != nil {
+		return nil, err
+	}
+
 	if err := s.repo.UpdateStatus(ctx, id, clinicID, model.AppointmentStatusNoShow); err != nil {
 		return nil, err
 	}
+
+	// Recalculate patient risk score in background
+	if s.riskCalculator != nil {
+		go func() {
+			bgCtx := context.Background()
+			if err := s.riskCalculator.CalculateRiskScore(bgCtx, appointment.PatientID, clinicID); err != nil {
+				log.Printf("[Appointment] Error recalculating patient risk after no-show: %v", err)
+			}
+		}()
+	}
+
 	return s.GetByID(ctx, id, clinicID)
 }
 

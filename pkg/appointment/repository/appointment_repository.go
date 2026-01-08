@@ -257,11 +257,11 @@ func (r *appointmentRepository) GetPendingReminders(ctx context.Context, reminde
 	var reminderField string
 	switch reminderType {
 	case "48h":
-		reminderField = "reminder_48h_sent_at"
+		reminderField = "reminder48h_sent_at"
 	case "24h":
-		reminderField = "reminder_24h_sent_at"
+		reminderField = "reminder24h_sent_at"
 	case "2h":
-		reminderField = "reminder_2h_sent_at"
+		reminderField = "reminder2h_sent_at"
 	default:
 		return nil, errors.ErrValidationInstance.WithMessage("invalid reminder type")
 	}
@@ -270,18 +270,18 @@ func (r *appointmentRepository) GetPendingReminders(ctx context.Context, reminde
 		SELECT
 			a.*,
 			c.name as clinic_name,
-			c.whatsapp_instance,
-			c.whatsapp_connected
+			c.whats_app_instance as whatsapp_instance,
+			c.whats_app_connected as whatsapp_connected
 		FROM appointments a
 		INNER JOIN clinics c ON a.clinic_id = c.id
 		WHERE a.deleted_at IS NULL
-			AND a.status IN ('pending', 'confirmed')
+			AND a.status = 'pending'
 			AND a.start_time >= ?
 			AND a.start_time < ?
 			AND a.` + reminderField + ` IS NULL
-			AND c.whatsapp_connected = true
-			AND c.whatsapp_instance IS NOT NULL
-			AND c.whatsapp_instance != ''
+			AND c.whats_app_connected = true
+			AND c.whats_app_instance IS NOT NULL
+			AND c.whats_app_instance != ''
 		ORDER BY a.start_time ASC
 		LIMIT 100
 	`
@@ -311,11 +311,11 @@ func (r *appointmentRepository) MarkReminderSent(ctx context.Context, id uuid.UU
 	var fieldName string
 	switch reminderType {
 	case "48h":
-		fieldName = "reminder_48h_sent_at"
+		fieldName = "reminder48h_sent_at"
 	case "24h":
-		fieldName = "reminder_24h_sent_at"
+		fieldName = "reminder24h_sent_at"
 	case "2h":
-		fieldName = "reminder_2h_sent_at"
+		fieldName = "reminder2h_sent_at"
 	default:
 		return errors.ErrValidationInstance.WithMessage("invalid reminder type")
 	}

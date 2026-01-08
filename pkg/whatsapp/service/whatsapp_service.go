@@ -78,6 +78,15 @@ type WhatsAppService interface {
 
 	// DeleteInstance removes a WhatsApp instance
 	DeleteInstance(ctx context.Context, instance string) error
+
+	// SetAppointmentFinder sets the appointment finder for WhatsApp response handling
+	SetAppointmentFinder(finder AppointmentFinder)
+
+	// SetWaitlistHandler sets the waitlist handler for encaixe responses
+	SetWaitlistHandler(handler WaitlistResponseHandler)
+
+	// SetAppointmentUpdater sets the appointment status updater for WhatsApp responses
+	SetAppointmentUpdater(updater AppointmentStatusUpdater)
 }
 
 // whatsAppService implements WhatsAppService
@@ -126,6 +135,11 @@ func (s *whatsAppService) SetAppointmentFinder(finder AppointmentFinder) {
 // SetWaitlistHandler sets the waitlist handler for encaixe responses
 func (s *whatsAppService) SetWaitlistHandler(handler WaitlistResponseHandler) {
 	s.waitlistHandler = handler
+}
+
+// SetAppointmentUpdater sets the appointment status updater for WhatsApp responses
+func (s *whatsAppService) SetAppointmentUpdater(updater AppointmentStatusUpdater) {
+	s.appointmentUpdater = updater
 }
 
 // CreateInstance creates a new WhatsApp instance for a clinic

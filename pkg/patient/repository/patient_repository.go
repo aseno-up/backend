@@ -20,6 +20,10 @@ type PatientRepository interface {
 	Delete(ctx context.Context, id, clinicID uuid.UUID) error
 	GetByPhone(ctx context.Context, phone string, clinicID uuid.UUID) (*model.Patient, error)
 	GetByDocument(ctx context.Context, document string, clinicID uuid.UUID) (*model.Patient, error)
+	// Risk assessment methods
+	GetAppointmentStats(ctx context.Context, patientID, clinicID uuid.UUID) (*model.PatientAppointmentStats, error)
+	UpdateRiskScore(ctx context.Context, patientID, clinicID uuid.UUID, risk model.NoShowRisk, stats *model.PatientAppointmentStats) error
+	GetAllByClinicID(ctx context.Context, clinicID uuid.UUID) ([]*model.Patient, error)
 }
 
 // patientRepository implements PatientRepository
@@ -165,4 +169,68 @@ func (r *patientRepository) GetByDocument(ctx context.Context, document string, 
 		return nil, errors.ErrInternalInstance.WithError(result.Error)
 	}
 	return &patient, nil
+}
+
+// GetAppointmentStats retrieves appointment statistics for risk calculation
+func (r *patientRepository) GetAppointmentStats(ctx context.Context, patientID, clinicID uuid.UUID) (*model.PatientAppointmentStats, error) {
+	var stats model.PatientAppointmentStats
+
+	err := r.db.WithContext(ctx).Table("appointments").
+		Select(`
+			COUNT(*) as total_appointments,
+			COUNT(CASE WHEN status = 'completed' THEN 1 END) as completed_count,
+			COUNT(CASE WHEN status = 'no_show' THEN 1 END) as no_show_count
+		`).
+		Where("patient_id = ? AND clinic_id = ? AND deleted_at IS NULL", patientID, clinicID).
+		Scan(&stats).Error
+
+	if err != nil {
+		return nil, errors.ErrInternalInstance.WithError(err)
+	}
+
+	return &stats, nil
+}
+
+// UpdateRiskScore updates the patient's risk score and statistics
+func (r *patientRepository) UpdateRiskScore(ctx context.Context, patientID, clinicID uuid.UUID, risk model.NoShowRisk, stats *model.PatientAppointmentStats) error {
+	attendanceRate := 0.0
+	attended := stats.CompletedCount
+	total := stats.CompletedCount + stats.NoShowCount
+	if total > 0 {
+		attendanceRate = (float64(attended) / float64(total)) * 100
+	}
+
+	result := r.db.WithContext(ctx).
+		Model(&model.Patient{}).
+		Where("id = ? AND clinic_id = ? AND deleted_at IS NULL", patientID, clinicID).
+		Updates(map[string]interface{}{
+			"no_show_risk":        risk,
+			"total_appointments":  stats.TotalAppointments,
+			"no_show_count":       stats.NoShowCount,
+			"attendance_rate":     attendanceRate,
+			"risk_updated_at":     gorm.Expr("NOW()"),
+		})
+
+	if result.Error != nil {
+		return errors.ErrInternalInstance.WithError(result.Error)
+	}
+	if result.RowsAffected == 0 {
+		return errors.ErrPatientNotFoundInstance
+	}
+	return nil
+}
+
+// GetAllByClinicID retrieves all patients for a clinic (for batch recalculation)
+func (r *patientRepository) GetAllByClinicID(ctx context.Context, clinicID uuid.UUID) ([]*model.Patient, error) {
+	var patients []*model.Patient
+
+	result := r.db.WithContext(ctx).
+		Where("clinic_id = ? AND deleted_at IS NULL", clinicID).
+		Find(&patients)
+
+	if result.Error != nil {
+		return nil, errors.ErrInternalInstance.WithError(result.Error)
+	}
+
+	return patients, nil
 }

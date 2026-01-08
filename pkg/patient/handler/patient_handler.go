@@ -20,6 +20,10 @@ type PatientHandler interface {
 	List(c *gin.Context)
 	Update(c *gin.Context)
 	Delete(c *gin.Context)
+	// Risk assessment endpoints
+	GetRisk(c *gin.Context)
+	RecalculateRisk(c *gin.Context)
+	RecalculateAllRisks(c *gin.Context)
 }
 
 // patientHandler implements PatientHandler
@@ -38,9 +42,12 @@ func (h *patientHandler) RegisterRoutes(router gin.IRouter) {
 	{
 		patients.POST("", h.Create)
 		patients.GET("", h.List)
+		patients.POST("/risk/recalculate-all", h.RecalculateAllRisks)
 		patients.GET("/:id", h.GetByID)
 		patients.PUT("/:id", h.Update)
 		patients.DELETE("/:id", h.Delete)
+		patients.GET("/:id/risk", h.GetRisk)
+		patients.POST("/:id/risk/recalculate", h.RecalculateRisk)
 	}
 }
 
@@ -156,4 +163,70 @@ func (h *patientHandler) Delete(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "Patient deleted successfully"})
+}
+
+// GetRisk handles getting a patient's risk assessment
+func (h *patientHandler) GetRisk(c *gin.Context) {
+	clinicID, _ := c.Get("clinic_id")
+
+	idParam := c.Param("id")
+	id, err := uuid.Parse(idParam)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, errors.ToResponse(errors.ErrValidationInstance.WithMessage("Invalid patient ID")))
+		return
+	}
+
+	risk, err := h.service.GetRisk(c.Request.Context(), id, clinicID.(uuid.UUID))
+	if err != nil {
+		statusCode := errors.GetStatusCode(err)
+		c.JSON(statusCode, errors.ToResponse(err))
+		return
+	}
+
+	c.JSON(http.StatusOK, risk)
+}
+
+// RecalculateRisk handles recalculating a patient's risk score
+func (h *patientHandler) RecalculateRisk(c *gin.Context) {
+	clinicID, _ := c.Get("clinic_id")
+
+	idParam := c.Param("id")
+	id, err := uuid.Parse(idParam)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, errors.ToResponse(errors.ErrValidationInstance.WithMessage("Invalid patient ID")))
+		return
+	}
+
+	if err := h.service.CalculateRiskScore(c.Request.Context(), id, clinicID.(uuid.UUID)); err != nil {
+		statusCode := errors.GetStatusCode(err)
+		c.JSON(statusCode, errors.ToResponse(err))
+		return
+	}
+
+	// Return updated risk
+	risk, err := h.service.GetRisk(c.Request.Context(), id, clinicID.(uuid.UUID))
+	if err != nil {
+		statusCode := errors.GetStatusCode(err)
+		c.JSON(statusCode, errors.ToResponse(err))
+		return
+	}
+
+	c.JSON(http.StatusOK, risk)
+}
+
+// RecalculateAllRisks handles recalculating risk scores for all patients
+func (h *patientHandler) RecalculateAllRisks(c *gin.Context) {
+	clinicID, _ := c.Get("clinic_id")
+
+	updated, err := h.service.RecalculateAllRiskScores(c.Request.Context(), clinicID.(uuid.UUID))
+	if err != nil {
+		statusCode := errors.GetStatusCode(err)
+		c.JSON(statusCode, errors.ToResponse(err))
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message":          "Risk scores recalculated successfully",
+		"patients_updated": updated,
+	})
 }

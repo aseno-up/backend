@@ -18,6 +18,10 @@ type PatientService interface {
 	Search(ctx context.Context, clinicID uuid.UUID, query string, page, perPage int) (*model.PatientListResponse, error)
 	Update(ctx context.Context, id, clinicID uuid.UUID, req *model.UpdatePatientRequest) (*model.PatientResponse, error)
 	Delete(ctx context.Context, id, clinicID uuid.UUID) error
+	// Risk assessment methods
+	GetRisk(ctx context.Context, id, clinicID uuid.UUID) (*model.PatientRiskResponse, error)
+	CalculateRiskScore(ctx context.Context, patientID, clinicID uuid.UUID) error
+	RecalculateAllRiskScores(ctx context.Context, clinicID uuid.UUID) (int, error)
 }
 
 // patientService implements PatientService
@@ -192,4 +196,66 @@ func (s *patientService) Update(ctx context.Context, id, clinicID uuid.UUID, req
 // Delete deletes a patient
 func (s *patientService) Delete(ctx context.Context, id, clinicID uuid.UUID) error {
 	return s.repo.Delete(ctx, id, clinicID)
+}
+
+// GetRisk retrieves the risk assessment for a patient
+func (s *patientService) GetRisk(ctx context.Context, id, clinicID uuid.UUID) (*model.PatientRiskResponse, error) {
+	patient, err := s.repo.GetByID(ctx, id, clinicID)
+	if err != nil {
+		return nil, err
+	}
+	return patient.ToRiskResponse(), nil
+}
+
+// CalculateRiskScore calculates and updates the risk score for a patient
+func (s *patientService) CalculateRiskScore(ctx context.Context, patientID, clinicID uuid.UUID) error {
+	// Get appointment statistics
+	stats, err := s.repo.GetAppointmentStats(ctx, patientID, clinicID)
+	if err != nil {
+		return err
+	}
+
+	// Calculate risk level
+	risk := calculateRisk(stats.CompletedCount, stats.NoShowCount)
+
+	// Update patient with risk score
+	return s.repo.UpdateRiskScore(ctx, patientID, clinicID, risk, stats)
+}
+
+// RecalculateAllRiskScores recalculates risk scores for all patients in a clinic
+func (s *patientService) RecalculateAllRiskScores(ctx context.Context, clinicID uuid.UUID) (int, error) {
+	patients, err := s.repo.GetAllByClinicID(ctx, clinicID)
+	if err != nil {
+		return 0, err
+	}
+
+	updated := 0
+	for _, patient := range patients {
+		if err := s.CalculateRiskScore(ctx, patient.ID, clinicID); err != nil {
+			// Log error but continue with other patients
+			continue
+		}
+		updated++
+	}
+
+	return updated, nil
+}
+
+// calculateRisk determines the risk level based on attendance statistics
+func calculateRisk(completed, noShows int) model.NoShowRisk {
+	total := completed + noShows
+
+	// Need at least 3 appointments to calculate risk
+	if total < 3 {
+		return model.NoShowRiskUnknown
+	}
+
+	attendanceRate := float64(completed) / float64(total) * 100
+
+	if attendanceRate >= 90 {
+		return model.NoShowRiskLow
+	} else if attendanceRate >= 70 {
+		return model.NoShowRiskMedium
+	}
+	return model.NoShowRiskHigh
 }

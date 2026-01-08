@@ -132,8 +132,11 @@ func (w *ReminderWorker) processThreshold(ctx context.Context, threshold config.
 			professionalName = apt.Professional.Name
 		}
 
+		// Check if this is a follow-up message (previous reminder was sent but patient didn't respond)
+		isFollowUp := w.isFollowUpReminder(apt, threshold)
+
 		// Build the reminder message
-		message := w.buildReminderMessage(apt.Patient.Name, professionalName, apt.StartTime, threshold)
+		message := w.buildReminderMessage(apt.Patient.Name, professionalName, apt.StartTime, threshold, isFollowUp)
 
 		// Create the job
 		job := &queue.MessageJob{
@@ -172,8 +175,22 @@ func (w *ReminderWorker) processThreshold(ctx context.Context, threshold config.
 	return enqueued, nil
 }
 
+// isFollowUpReminder checks if this reminder is a follow-up (previous reminder was sent but patient didn't respond)
+func (w *ReminderWorker) isFollowUpReminder(apt *appointment_model.AppointmentWithClinic, threshold config.ReminderThreshold) bool {
+	switch threshold.Type {
+	case "reminder_24h":
+		// If 48h reminder was already sent, this is a follow-up
+		return apt.Reminder48hSentAt != nil
+	case "reminder_2h":
+		// If 24h reminder was already sent, this is a follow-up
+		return apt.Reminder24hSentAt != nil
+	default:
+		return false
+	}
+}
+
 // buildReminderMessage builds the reminder message based on threshold
-func (w *ReminderWorker) buildReminderMessage(patientName, professionalName string, startTime time.Time, threshold config.ReminderThreshold) string {
+func (w *ReminderWorker) buildReminderMessage(patientName, professionalName string, startTime time.Time, threshold config.ReminderThreshold, isFollowUp bool) string {
 	// Format the date and time in Brazilian format
 	loc, _ := time.LoadLocation("America/Sao_Paulo")
 	startTimeLocal := startTime.In(loc)
@@ -207,6 +224,20 @@ func (w *ReminderWorker) buildReminderMessage(patientName, professionalName stri
 		)
 
 	case "reminder_24h":
+		if isFollowUp {
+			// Follow-up message - patient didn't respond to 48h reminder
+			return fmt.Sprintf(
+				"%s, %s! ⚠️\n\n"+
+					"*Ainda não recebemos sua confirmação.*\n\n"+
+					"Sua consulta está marcada para *amanhã*:\n\n"+
+					"📆 Data: %s\n"+
+					"🕐 Horário: %s\n"+
+					"👨‍⚕️ Profissional: %s\n\n"+
+					"⚡ Por favor, responda *SIM* para confirmar ou *NÃO* para cancelar.\n\n"+
+					"Precisamos da sua confirmação para manter o horário reservado.",
+				greeting, patientName, dateStr, timeStr, professionalName,
+			)
+		}
 		return fmt.Sprintf(
 			"%s, %s! ⏰\n\n"+
 				"Sua consulta está marcada para *amanhã*:\n\n"+
@@ -218,11 +249,22 @@ func (w *ReminderWorker) buildReminderMessage(patientName, professionalName stri
 		)
 
 	case "reminder_2h":
+		if isFollowUp {
+			// Follow-up message - patient didn't respond to previous reminders
+			return fmt.Sprintf(
+				"%s, %s! 🚨\n\n"+
+					"*Última chamada!*\n\n"+
+					"Sua consulta é *HOJE* às *%s*.\n\n"+
+					"👨‍⚕️ Profissional: %s\n\n"+
+					"Você irá comparecer? Responda *SIM* ou *NÃO*.",
+				greeting, patientName, timeStr, professionalName,
+			)
+		}
 		return fmt.Sprintf(
 			"%s, %s! 🔔\n\n"+
 				"Sua consulta é *hoje* às *%s*.\n\n"+
 				"👨‍⚕️ Profissional: %s\n\n"+
-				"Estamos te esperando! 😊",
+				"Estamos te esperando!",
 			greeting, patientName, timeStr, professionalName,
 		)
 
