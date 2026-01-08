@@ -3,12 +3,14 @@ package service
 import (
 	"context"
 	"fmt"
+	"log"
 	"regexp"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/aseno/backend/pkg/whatsapp/classifier"
 	"github.com/aseno/backend/pkg/whatsapp/model"
 )
 
@@ -87,6 +89,9 @@ type WhatsAppService interface {
 
 	// SetAppointmentUpdater sets the appointment status updater for WhatsApp responses
 	SetAppointmentUpdater(updater AppointmentStatusUpdater)
+
+	// SetClassifier sets the AI classifier for message classification
+	SetClassifier(c classifier.MessageClassifier, confidenceThreshold float64)
 }
 
 // whatsAppService implements WhatsAppService
@@ -96,6 +101,8 @@ type whatsAppService struct {
 	appointmentUpdater  AppointmentStatusUpdater
 	appointmentFinder   AppointmentFinder
 	waitlistHandler     WaitlistResponseHandler
+	classifier          classifier.MessageClassifier
+	confidenceThreshold float64
 }
 
 // AppointmentStatusUpdater interface for updating appointment status
@@ -104,9 +111,17 @@ type AppointmentStatusUpdater interface {
 	CancelByPatient(ctx context.Context, appointmentID, clinicID uuid.UUID, reason string) error
 }
 
+// AppointmentInfo represents appointment info for WhatsApp messages
+type AppointmentInfo struct {
+	ID           uuid.UUID
+	PatientName  string
+	Professional string
+	StartTime    time.Time
+}
+
 // AppointmentFinder interface for finding appointments by phone
 type AppointmentFinder interface {
-	GetPendingByPhone(ctx context.Context, clinicID uuid.UUID, phone string) (appointmentID *uuid.UUID, err error)
+	GetPendingByPhone(ctx context.Context, clinicID uuid.UUID, phone string) (*AppointmentInfo, error)
 }
 
 // WaitlistResponseHandler interface for handling waitlist responses
@@ -142,6 +157,12 @@ func (s *whatsAppService) SetAppointmentUpdater(updater AppointmentStatusUpdater
 	s.appointmentUpdater = updater
 }
 
+// SetClassifier sets the AI classifier for message classification
+func (s *whatsAppService) SetClassifier(c classifier.MessageClassifier, confidenceThreshold float64) {
+	s.classifier = c
+	s.confidenceThreshold = confidenceThreshold
+}
+
 // CreateInstance creates a new WhatsApp instance for a clinic
 func (s *whatsAppService) CreateInstance(ctx context.Context, instance string) error {
 	return s.client.CreateInstance(ctx, instance)
@@ -151,6 +172,29 @@ func (s *whatsAppService) CreateInstance(ctx context.Context, instance string) e
 func (s *whatsAppService) SendTextMessage(ctx context.Context, instance, phone, message string) (*model.SendMessageResponse, error) {
 	formattedPhone := formatPhoneNumber(phone)
 	return s.client.SendTextMessage(ctx, instance, formattedPhone, message)
+}
+
+// SendConfirmationFeedback sends a message confirming the appointment was confirmed
+func (s *whatsAppService) SendConfirmationFeedback(ctx context.Context, instance, phone string, apt *AppointmentInfo) error {
+	dateStr := apt.StartTime.Format("02/01/2006")
+	timeStr := apt.StartTime.Format("15:04")
+	
+	message := fmt.Sprintf(
+		"✅ Confirmado! Te aguardamos no dia %s as %s com %s.\n\nAte la! 😊",
+		dateStr,
+		timeStr,
+		apt.Professional,
+	)
+
+	_, err := s.SendTextMessage(ctx, instance, phone, message)
+	return err
+}
+
+// SendCancellationFeedback sends a message confirming the appointment was cancelled
+func (s *whatsAppService) SendCancellationFeedback(ctx context.Context, instance, phone string) error {
+	message := "❌ Entendido, seu agendamento foi cancelado.\n\nSe precisar reagendar, entre em contato conosco."
+	_, err := s.SendTextMessage(ctx, instance, phone, message)
+	return err
 }
 
 // SendConfirmationMessage sends an appointment confirmation message
@@ -206,6 +250,8 @@ func (s *whatsAppService) SendReminderMessage(ctx context.Context, instance stri
 
 	var reminderText string
 	switch msg.ReminderType {
+	case model.ReminderType48Hours:
+		reminderText = "Lembrete: sua consulta e em 2 dias!"
 	case model.ReminderType24Hours:
 		reminderText = "Lembrete: sua consulta e amanha!"
 	case model.ReminderType2Hours:
@@ -276,10 +322,11 @@ func (s *whatsAppService) HandleIncomingMessage(ctx context.Context, clinicID uu
 
 		// If not a waitlist response, try to confirm an appointment
 		if s.appointmentFinder != nil && s.appointmentUpdater != nil {
-			appointmentID, err := s.appointmentFinder.GetPendingByPhone(ctx, clinicID, msg.Phone)
-			if err == nil && appointmentID != nil {
-				if err := s.appointmentUpdater.ConfirmByPatient(ctx, *appointmentID, clinicID, ""); err == nil {
-					// Appointment confirmed successfully
+			apt, err := s.appointmentFinder.GetPendingByPhone(ctx, clinicID, msg.Phone)
+			if err == nil && apt != nil {
+				if err := s.appointmentUpdater.ConfirmByPatient(ctx, apt.ID, clinicID, ""); err == nil {
+					// Send feedback message
+					s.SendConfirmationFeedback(ctx, msg.Instance, msg.Phone, apt)
 					return nil
 				}
 			}
@@ -296,10 +343,11 @@ func (s *whatsAppService) HandleIncomingMessage(ctx context.Context, clinicID uu
 
 		// If not a waitlist response, try to cancel an appointment
 		if s.appointmentFinder != nil && s.appointmentUpdater != nil {
-			appointmentID, err := s.appointmentFinder.GetPendingByPhone(ctx, clinicID, msg.Phone)
-			if err == nil && appointmentID != nil {
-				if err := s.appointmentUpdater.CancelByPatient(ctx, *appointmentID, clinicID, "Cancelado via WhatsApp"); err == nil {
-					// Appointment cancelled successfully
+			apt, err := s.appointmentFinder.GetPendingByPhone(ctx, clinicID, msg.Phone)
+			if err == nil && apt != nil {
+				if err := s.appointmentUpdater.CancelByPatient(ctx, apt.ID, clinicID, "Cancelado via WhatsApp"); err == nil {
+					// Send feedback message
+					s.SendCancellationFeedback(ctx, msg.Instance, msg.Phone)
 					return nil
 				}
 			}
@@ -318,8 +366,35 @@ func (s *whatsAppService) HandleIncomingMessage(ctx context.Context, clinicID uu
 	return nil
 }
 
-// ClassifyMessage classifies the intent of a message
+// ClassifyMessage classifies the intent of a message (uses AI with regex fallback)
 func (s *whatsAppService) ClassifyMessage(content string) model.MessageIntent {
+	// Use AI classification if available
+	if s.classifier != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		result, err := s.classifier.Classify(ctx, content)
+		if err == nil && result.Confidence >= s.confidenceThreshold {
+			log.Printf("[Classifier] AI (%s/%s): intent=%s confidence=%.2f latency=%v reason=%q",
+				result.Provider, result.Model, result.Intent, result.Confidence, result.Latency, result.Reasoning)
+			return result.Intent
+		}
+		if err != nil {
+			log.Printf("[Classifier] AI error, falling back to regex: %v", err)
+		} else {
+			log.Printf("[Classifier] AI confidence %.2f below threshold %.2f, falling back to regex",
+				result.Confidence, s.confidenceThreshold)
+		}
+	}
+
+	// Fallback to regex classification
+	intent := s.classifyWithRegex(content)
+	log.Printf("[Classifier] Regex fallback: intent=%s content=%q", intent, content)
+	return intent
+}
+
+// classifyWithRegex classifies the intent using regex patterns (fallback)
+func (s *whatsAppService) classifyWithRegex(content string) model.MessageIntent {
 	content = strings.ToLower(strings.TrimSpace(content))
 
 	// Confirm patterns

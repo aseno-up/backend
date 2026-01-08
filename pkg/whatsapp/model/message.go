@@ -102,6 +102,7 @@ type ConfirmationMessage struct {
 type ReminderType string
 
 const (
+	ReminderType48Hours ReminderType = "48h"
 	ReminderType24Hours ReminderType = "24h"
 	ReminderType2Hours  ReminderType = "2h"
 	ReminderType1Hour   ReminderType = "1h"

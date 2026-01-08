@@ -54,6 +54,16 @@ type Config struct {
 
 	// Frontend URL
 	frontendURL string
+
+	// AI Classifier
+	aiClassifierEnabled             bool
+	aiClassifierProvider            string
+	aiClassifierModel               string
+	aiClassifierTimeout             int // seconds
+	aiClassifierConfidenceThreshold float64
+	geminiAPIKey                    string
+	anthropicAPIKey                 string
+	openaiAPIKey                    string
 }
 
 // NewConfig creates a new configuration from environment variables
@@ -87,6 +97,16 @@ func NewConfig() *Config {
 		smtpPassword:       getEnv("SMTP_PASSWORD", ""),
 		smtpFrom:           getEnv("SMTP_FROM", ""),
 		frontendURL:        getEnv("FRONTEND_URL", "http://localhost:3000"),
+
+		// AI Classifier defaults
+		aiClassifierEnabled:             getEnvAsBool("AI_CLASSIFIER_ENABLED", false),
+		aiClassifierProvider:            getEnv("AI_CLASSIFIER_PROVIDER", "gemini"),
+		aiClassifierModel:               getEnv("AI_CLASSIFIER_MODEL", "gemini-1.5-flash"),
+		aiClassifierTimeout:             getEnvAsInt("AI_CLASSIFIER_TIMEOUT", 5),
+		aiClassifierConfidenceThreshold: getEnvAsFloat64("AI_CLASSIFIER_CONFIDENCE_THRESHOLD", 0.7),
+		geminiAPIKey:                    getEnv("GEMINI_API_KEY", ""),
+		anthropicAPIKey:                 getEnv("ANTHROPIC_API_KEY", ""),
+		openaiAPIKey:                    getEnv("OPENAI_API_KEY", ""),
 	}
 }
 
@@ -207,6 +227,46 @@ func (c *Config) GetFrontendURL() string {
 	return c.frontendURL
 }
 
+// AIClassifierEnabled returns whether AI classification is enabled
+func (c *Config) AIClassifierEnabled() bool {
+	return c.aiClassifierEnabled
+}
+
+// AIClassifierProvider returns the AI provider (gemini, claude, openai)
+func (c *Config) AIClassifierProvider() string {
+	return c.aiClassifierProvider
+}
+
+// AIClassifierModel returns the AI model to use
+func (c *Config) AIClassifierModel() string {
+	return c.aiClassifierModel
+}
+
+// AIClassifierTimeout returns the timeout in seconds for AI classification
+func (c *Config) AIClassifierTimeout() int {
+	return c.aiClassifierTimeout
+}
+
+// AIClassifierConfidenceThreshold returns the minimum confidence threshold
+func (c *Config) AIClassifierConfidenceThreshold() float64 {
+	return c.aiClassifierConfidenceThreshold
+}
+
+// GetGeminiAPIKey returns the Gemini API key
+func (c *Config) GetGeminiAPIKey() string {
+	return c.geminiAPIKey
+}
+
+// GetAnthropicAPIKey returns the Anthropic API key
+func (c *Config) GetAnthropicAPIKey() string {
+	return c.anthropicAPIKey
+}
+
+// GetOpenAIAPIKey returns the OpenAI API key
+func (c *Config) GetOpenAIAPIKey() string {
+	return c.openaiAPIKey
+}
+
 func getEnv(key, defaultValue string) string {
 	if value := os.Getenv(key); value != "" {
 		return value
@@ -227,6 +287,15 @@ func getEnvAsBool(key string, defaultValue bool) bool {
 	if value := os.Getenv(key); value != "" {
 		if boolValue, err := strconv.ParseBool(value); err == nil {
 			return boolValue
+		}
+	}
+	return defaultValue
+}
+
+func getEnvAsFloat64(key string, defaultValue float64) float64 {
+	if value := os.Getenv(key); value != "" {
+		if floatValue, err := strconv.ParseFloat(value, 64); err == nil {
+			return floatValue
 		}
 	}
 	return defaultValue

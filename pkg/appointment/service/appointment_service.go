@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"math"
 	"time"
@@ -11,11 +12,14 @@ import (
 	"github.com/aseno/backend/internal/errors"
 	"github.com/aseno/backend/pkg/appointment/model"
 	"github.com/aseno/backend/pkg/appointment/repository"
+	profModel "github.com/aseno/backend/pkg/professional/model"
+	waitlist_model "github.com/aseno/backend/pkg/waitlist/model"
 )
 
-// WaitlistProcessor processes cancelled appointments for waitlist
-type WaitlistProcessor interface {
+// WaitlistService defines the interface for waitlist operations needed by appointment service
+type WaitlistService interface {
 	ProcessCancelledAppointment(ctx context.Context, clinicID, professionalID uuid.UUID, slotTime time.Time, durationMinutes int) error
+	Create(ctx context.Context, clinicID uuid.UUID, req *waitlist_model.CreateWaitlistRequest) (*waitlist_model.WaitlistEntryResponse, error)
 }
 
 // PatientRiskCalculator calculates patient no-show risk
@@ -40,33 +44,247 @@ type AppointmentService interface {
 	// CreateFromWaitlist creates an appointment from a waitlist entry
 	CreateFromWaitlist(ctx context.Context, clinicID, patientID, professionalID uuid.UUID, startTime time.Time, durationMinutes int) (uuid.UUID, error)
 
+	// Reschedule updates an appointment's time and professional (used by waitlist anticipation)
+	Reschedule(ctx context.Context, appointmentID, clinicID, professionalID uuid.UUID, startTime time.Time, durationMinutes int) error
+
 	// SetWaitlistProcessor sets the waitlist processor for encaixe
-	SetWaitlistProcessor(processor WaitlistProcessor)
+	SetWaitlistProcessor(service WaitlistService)
 
 	// SetPatientRiskCalculator sets the patient risk calculator
 	SetPatientRiskCalculator(calculator PatientRiskCalculator)
+
+	// SuggestSmartSlots suggests best time slots based on historical data
+	SuggestSmartSlots(ctx context.Context, clinicID, professionalID uuid.UUID, date time.Time, days int, durationMinutes int) ([]*model.SmartSlotSuggestion, error)
+}
+
+// ProfessionalInfoProvider provides professional information
+type ProfessionalInfoProvider interface {
+	GetByID(ctx context.Context, id, clinicID uuid.UUID) (*profModel.Professional, error)
 }
 
 // appointmentService implements AppointmentService
 type appointmentService struct {
 	repo              repository.AppointmentRepository
-	waitlistProcessor WaitlistProcessor
+	profRepo          ProfessionalInfoProvider
+	waitlistService   WaitlistService
 	riskCalculator    PatientRiskCalculator
 }
 
 // NewAppointmentService creates a new appointment service
-func NewAppointmentService(repo repository.AppointmentRepository) AppointmentService {
-	return &appointmentService{repo: repo}
+func NewAppointmentService(repo repository.AppointmentRepository, profRepo ProfessionalInfoProvider) AppointmentService {
+	return &appointmentService{
+		repo:     repo,
+		profRepo: profRepo,
+	}
 }
 
-// SetWaitlistProcessor sets the waitlist processor
-func (s *appointmentService) SetWaitlistProcessor(processor WaitlistProcessor) {
-	s.waitlistProcessor = processor
+// Reschedule updates an appointment's time and professional
+func (s *appointmentService) Reschedule(ctx context.Context, appointmentID, clinicID, professionalID uuid.UUID, startTime time.Time, durationMinutes int) error {
+	appointment, err := s.repo.GetByID(ctx, appointmentID, clinicID)
+	if err != nil {
+		return err
+	}
+
+	endTime := startTime.Add(time.Duration(durationMinutes) * time.Minute)
+
+	// Check for conflicts, excluding the current appointment
+	hasConflict, err := s.repo.CheckConflict(ctx, clinicID, professionalID, startTime, endTime, &appointmentID)
+	if err != nil {
+		return err
+	}
+	if hasConflict {
+		return errors.ErrSlotUnavailableInstance
+	}
+
+	// Update fields
+	appointment.ProfessionalID = professionalID
+	appointment.StartTime = startTime
+	appointment.EndTime = endTime
+	appointment.Status = model.AppointmentStatusConfirmed // Auto-confirm for anticipation
+	
+	// Add note about rescheduling
+	now := time.Now()
+	appointment.UpdatedAt = now
+	appointment.Notes = appointment.Notes + "\n[Sistema] Antecipado em " + now.Format("02/01/2006 15:04")
+
+	return s.repo.Update(ctx, appointment)
+}
+
+// SetWaitlistProcessor sets the waitlist service
+func (s *appointmentService) SetWaitlistProcessor(service WaitlistService) {
+	s.waitlistService = service
 }
 
 // SetPatientRiskCalculator sets the patient risk calculator
 func (s *appointmentService) SetPatientRiskCalculator(calculator PatientRiskCalculator) {
 	s.riskCalculator = calculator
+}
+
+// SuggestSmartSlots suggests best time slots based on historical data
+func (s *appointmentService) SuggestSmartSlots(ctx context.Context, clinicID, professionalID uuid.UUID, date time.Time, days int, durationMinutes int) ([]*model.SmartSlotSuggestion, error) {
+	// 1. Get Professional Working Hours
+	prof, err := s.profRepo.GetByID(ctx, professionalID, clinicID)
+	if err != nil {
+		return nil, err
+	}
+
+	// 2. Get Performance Stats
+	stats, err := s.repo.GetSlotPerformanceStats(ctx, clinicID, professionalID)
+	if err != nil {
+		// Log error but continue without stats
+		log.Printf("Error getting slot stats: %v", err)
+	}
+
+	// Map stats for easy lookup: [DayOfWeek][Hour] -> Rate
+	statMap := make(map[int]map[int]float64)
+	for _, stat := range stats {
+		if _, ok := statMap[stat.DayOfWeek]; !ok {
+			statMap[stat.DayOfWeek] = make(map[int]float64)
+		}
+		statMap[stat.DayOfWeek][stat.HourOfDay] = stat.Rate
+	}
+
+	// 3. Generate Slots
+	var suggestions []*model.SmartSlotSuggestion
+	
+	// Normalize start date to beginning of day
+	currentDate := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, date.Location())
+	endDate := currentDate.AddDate(0, 0, days)
+
+	// Fetch existing appointments for the whole range for conflict checking
+	existingAppointments, err := s.repo.GetByDateRange(ctx, clinicID, currentDate, endDate, &professionalID)
+	if err != nil {
+		return nil, err
+	}
+
+	for d := 0; d < days; d++ {
+		dayDate := currentDate.AddDate(0, 0, d)
+		weekday := dayDate.Weekday()
+
+		var slots []profModel.TimeSlot
+		switch weekday {
+		case time.Monday:
+			slots = prof.WorkingHours.Monday
+		case time.Tuesday:
+			slots = prof.WorkingHours.Tuesday
+		case time.Wednesday:
+			slots = prof.WorkingHours.Wednesday
+		case time.Thursday:
+			slots = prof.WorkingHours.Thursday
+		case time.Friday:
+			slots = prof.WorkingHours.Friday
+		case time.Saturday:
+			slots = prof.WorkingHours.Saturday
+		case time.Sunday:
+			slots = prof.WorkingHours.Sunday
+		}
+
+		for _, slot := range slots {
+			// Parse start/end times (HH:MM)
+			h1, m1 := parseTime(slot.Start)
+			h2, m2 := parseTime(slot.End)
+
+			slotStart := time.Date(dayDate.Year(), dayDate.Month(), dayDate.Day(), h1, m1, 0, 0, dayDate.Location())
+			slotEnd := time.Date(dayDate.Year(), dayDate.Month(), dayDate.Day(), h2, m2, 0, 0, dayDate.Location())
+
+			// Generate chunks of 'durationMinutes'
+			for curr := slotStart; curr.Add(time.Duration(durationMinutes)*time.Minute).Before(slotEnd) || curr.Add(time.Duration(durationMinutes)*time.Minute).Equal(slotEnd); curr = curr.Add(time.Duration(durationMinutes) * time.Minute) {
+				
+				candStart := curr
+				candEnd := curr.Add(time.Duration(durationMinutes) * time.Minute)
+
+				// Check if in past
+				if candStart.Before(time.Now()) {
+					continue
+				}
+
+				// Check conflicts
+				isConflict := false
+				for _, apt := range existingAppointments {
+					// Check overlap
+					if (apt.StartTime.Before(candEnd) && apt.EndTime.After(candStart)) {
+						isConflict = true
+						break
+					}
+				}
+				if isConflict {
+					continue
+				}
+
+				// Calculate Score
+				score := 5.0 // Base score
+				reason := "Horário disponível"
+				
+				dow := int(weekday)
+				hour := candStart.Hour()
+				
+				if dayStats, ok := statMap[dow]; ok {
+					if rate, ok := dayStats[hour]; ok {
+						if rate >= 0.9 {
+							score += 3.0
+							reason = "Alta taxa de comparecimento histórico"
+						} else if rate >= 0.7 {
+							score += 1.0
+							reason = "Boa taxa de comparecimento"
+						} else if rate < 0.5 {
+							score -= 2.0
+							reason = "Histórico de faltas neste horário"
+						}
+					}
+				}
+
+				// Prefer working hours core (9-17) slightly
+				if hour >= 9 && hour <= 17 {
+					score += 0.5
+				}
+
+				// Create suggestion
+				suggestions = append(suggestions, &model.SmartSlotSuggestion{
+					StartTime: candStart,
+					EndTime:   candEnd,
+					Score:     score,
+					Label:     getScoreLabel(score),
+					Reason:    reason,
+				})
+			}
+		}
+	}
+
+	// Sort by score desc
+	// (Simple bubble sort or slice sort, doing simple for now)
+	for i := 0; i < len(suggestions); i++ {
+		for j := i + 1; j < len(suggestions); j++ {
+			if suggestions[i].Score < suggestions[j].Score {
+				suggestions[i], suggestions[j] = suggestions[j], suggestions[i]
+			}
+		}
+	}
+
+	// Limit to top 20
+	if len(suggestions) > 20 {
+		suggestions = suggestions[:20]
+	}
+
+	return suggestions, nil
+}
+
+func parseTime(t string) (int, int) {
+	var h, m int
+	fmt.Sscanf(t, "%d:%d", &h, &m)
+	return h, m
+}
+
+func getScoreLabel(score float64) string {
+	if score >= 8.0 {
+		return "Excelente"
+	}
+	if score >= 6.0 {
+		return "Bom"
+	}
+	if score >= 4.0 {
+		return "Regular"
+	}
+	return "Arriscado"
 }
 
 // Create creates a new appointment
@@ -102,6 +320,32 @@ func (s *appointmentService) Create(ctx context.Context, clinicID uuid.UUID, req
 
 	if err := s.repo.Create(ctx, appointment); err != nil {
 		return nil, err
+	}
+
+	// Handle anticipation request (add to waitlist)
+	if req.WantsAnticipation && s.waitlistService != nil {
+		// Use a background context or the current one? Current is safer for now, but async might be better for latency.
+		// Let's do it async to not block the response, but log errors.
+		go func() {
+			bgCtx := context.Background()
+			
+			// Default preferences: same professional, any day, business hours
+			days := []string{"monday", "tuesday", "wednesday", "thursday", "friday"}
+			
+			wlReq := &waitlist_model.CreateWaitlistRequest{
+				PatientID:             req.PatientID,
+				ProfessionalID:        &req.ProfessionalID,
+				OriginalAppointmentID: &appointment.ID,
+				PreferredDays:         days,
+				PreferredTimeStart:    "08:00",
+				PreferredTimeEnd:      "19:00",
+				Notes:                 "Solicitação de antecipação criada automaticamente",
+			}
+			
+			if _, err := s.waitlistService.Create(bgCtx, clinicID, wlReq); err != nil {
+				log.Printf("[Appointment] Error creating anticipation waitlist entry: %v", err)
+			}
+		}()
 	}
 
 	// Reload with relations
@@ -312,10 +556,10 @@ func (s *appointmentService) Cancel(ctx context.Context, id, clinicID uuid.UUID,
 	}
 
 	// Process waitlist (encaixe) in background if the slot is in the future
-	if s.waitlistProcessor != nil && slotTime.After(time.Now()) {
+	if s.waitlistService != nil && slotTime.After(time.Now()) {
 		go func() {
 			bgCtx := context.Background()
-			if err := s.waitlistProcessor.ProcessCancelledAppointment(bgCtx, clinicID, professionalID, slotTime, durationMinutes); err != nil {
+			if err := s.waitlistService.ProcessCancelledAppointment(bgCtx, clinicID, professionalID, slotTime, durationMinutes); err != nil {
 				log.Printf("[Appointment] Error processing waitlist for cancelled appointment: %v", err)
 			}
 		}()

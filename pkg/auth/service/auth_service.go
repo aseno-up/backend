@@ -129,7 +129,7 @@ func (s *authService) Register(ctx context.Context, req *model.RegisterRequest) 
 		Slug:               slug,
 		Email:              req.Email,
 		Phone:              req.Phone,
-		Plan:               clinic_model.PlanTypeBasic,
+		Plan:               clinic_model.PlanTypeProfessional,
 		SubscriptionStatus: clinic_model.SubscriptionStatusTrial,
 		TrialEndsAt:        &trialEndsAt,
 		Settings: clinic_model.ClinicSettings{
@@ -281,7 +281,7 @@ func (s *authService) GoogleLogin(ctx context.Context, req *model.GoogleLoginReq
 			Name:               googleUser.Name + "'s Clinic",
 			Slug:               slug,
 			Email:              googleUser.Email,
-			Plan:               clinic_model.PlanTypeBasic,
+			Plan:               clinic_model.PlanTypeProfessional,
 			SubscriptionStatus: clinic_model.SubscriptionStatusTrial,
 			TrialEndsAt:        &trialEndsAt,
 			Settings: clinic_model.ClinicSettings{

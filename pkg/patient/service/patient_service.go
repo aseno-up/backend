@@ -6,6 +6,9 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/aseno/backend/internal/errors"
+	clinic_model "github.com/aseno/backend/pkg/clinic/model"
+	clinic_repository "github.com/aseno/backend/pkg/clinic/repository"
 	"github.com/aseno/backend/pkg/patient/model"
 	"github.com/aseno/backend/pkg/patient/repository"
 )
@@ -26,12 +29,36 @@ type PatientService interface {
 
 // patientService implements PatientService
 type patientService struct {
-	repo repository.PatientRepository
+	repo       repository.PatientRepository
+	clinicRepo clinic_repository.ClinicRepository
 }
 
 // NewPatientService creates a new patient service
-func NewPatientService(repo repository.PatientRepository) PatientService {
-	return &patientService{repo: repo}
+func NewPatientService(repo repository.PatientRepository, clinicRepo clinic_repository.ClinicRepository) PatientService {
+	return &patientService{
+		repo:       repo,
+		clinicRepo: clinicRepo,
+	}
+}
+
+// checkPlanForRiskData returns true if the plan allows accessing risk data
+func (s *patientService) checkPlanForRiskData(ctx context.Context, clinicID uuid.UUID) (bool, error) {
+	clinic, err := s.clinicRepo.GetByID(ctx, clinicID)
+	if err != nil {
+		return false, err
+	}
+
+	// Risk data is available for Professional and Advanced plans
+	return clinic.Plan != clinic_model.PlanTypeBasic, nil
+}
+
+// maskRiskData hides risk data from the response
+func maskRiskData(resp *model.PatientResponse) {
+	resp.NoShowRisk = model.NoShowRiskUnknown
+	resp.TotalAppointments = 0
+	resp.NoShowCount = 0
+	resp.AttendanceRate = 0
+	resp.RiskUpdatedAt = nil
 }
 
 // Create creates a new patient
@@ -71,7 +98,16 @@ func (s *patientService) GetByID(ctx context.Context, id, clinicID uuid.UUID) (*
 	if err != nil {
 		return nil, err
 	}
-	return patient.ToResponse(), nil
+
+	resp := patient.ToResponse()
+
+	// Check plan and mask if necessary
+	allowed, err := s.checkPlanForRiskData(ctx, clinicID)
+	if err == nil && !allowed {
+		maskRiskData(resp)
+	}
+
+	return resp, nil
 }
 
 // List retrieves a paginated list of patients
@@ -91,8 +127,16 @@ func (s *patientService) List(ctx context.Context, clinicID uuid.UUID, page, per
 	}
 
 	data := make([]*model.PatientResponse, len(patients))
+	
+	// Check plan once for the list
+	allowed, _ := s.checkPlanForRiskData(ctx, clinicID)
+
 	for i, p := range patients {
-		data[i] = p.ToResponse()
+		resp := p.ToResponse()
+		if !allowed {
+			maskRiskData(resp)
+		}
+		data[i] = resp
 	}
 
 	totalPages := int(math.Ceil(float64(total) / float64(perPage)))
@@ -123,8 +167,16 @@ func (s *patientService) Search(ctx context.Context, clinicID uuid.UUID, query s
 	}
 
 	data := make([]*model.PatientResponse, len(patients))
+	
+	// Check plan once for the list
+	allowed, _ := s.checkPlanForRiskData(ctx, clinicID)
+
 	for i, p := range patients {
-		data[i] = p.ToResponse()
+		resp := p.ToResponse()
+		if !allowed {
+			maskRiskData(resp)
+		}
+		data[i] = resp
 	}
 
 	totalPages := int(math.Ceil(float64(total) / float64(perPage)))
@@ -200,6 +252,15 @@ func (s *patientService) Delete(ctx context.Context, id, clinicID uuid.UUID) err
 
 // GetRisk retrieves the risk assessment for a patient
 func (s *patientService) GetRisk(ctx context.Context, id, clinicID uuid.UUID) (*model.PatientRiskResponse, error) {
+	// Check plan
+	allowed, err := s.checkPlanForRiskData(ctx, clinicID)
+	if err != nil {
+		return nil, err
+	}
+	if !allowed {
+		return nil, errors.ErrUpgradeRequiredInstance.WithMessage("Histórico de faltas e análise de risco disponíveis apenas nos planos Profissional e Avançado")
+	}
+
 	patient, err := s.repo.GetByID(ctx, id, clinicID)
 	if err != nil {
 		return nil, err

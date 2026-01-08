@@ -156,6 +156,7 @@ type CreateAppointmentRequest struct {
 	Notes           string    `json:"notes"`
 	Price           float64   `json:"price"`
 	Type            AppointmentType `json:"type"`
+	WantsAnticipation bool `json:"wants_anticipation"` // If true, adds to waitlist for earlier slot
 }
 
 // UpdateAppointmentRequest represents the request to update an appointment
@@ -170,6 +171,7 @@ type UpdateAppointmentRequest struct {
 	PatientNotes    string            `json:"patient_notes"`
 	Price           *float64          `json:"price"`
 	CancelReason    string            `json:"cancel_reason"`
+	WantsAnticipation *bool `json:"wants_anticipation"` // Update anticipation preference
 }
 
 // AppointmentListResponse represents a list of appointments
@@ -208,4 +210,22 @@ type AppointmentWithClinic struct {
 	ClinicName        string `json:"clinic_name"`
 	WhatsAppInstance  string `json:"whatsapp_instance"`
 	WhatsAppConnected bool   `json:"whatsapp_connected"`
+}
+
+// SlotPerformanceStats represents historical performance of a time slot
+type SlotPerformanceStats struct {
+	DayOfWeek int     `json:"day_of_week"` // 0 = Sunday, 1 = Monday, ...
+	HourOfDay int     `json:"hour_of_day"` // 0-23
+	Total     int     `json:"total"`
+	Completed int     `json:"completed"`
+	Rate      float64 `json:"rate"` // Completed / Total (0.0 to 1.0)
+}
+
+// SmartSlotSuggestion represents a suggested time slot with a score
+type SmartSlotSuggestion struct {
+	StartTime time.Time `json:"start_time"`
+	EndTime   time.Time `json:"end_time"`
+	Score     float64   `json:"score"`  // 0.0 to 10.0 (higher is better)
+	Label     string    `json:"label"`  // e.g. "Alta chance de comparecimento"
+	Reason    string    `json:"reason"` // e.g. "Histórico de 90% de presença neste horário"
 }

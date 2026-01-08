@@ -7,8 +7,11 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/aseno/backend/internal/errors"
 	"github.com/aseno/backend/pkg/analytics/model"
 	"github.com/aseno/backend/pkg/analytics/repository"
+	clinic_model "github.com/aseno/backend/pkg/clinic/model"
+	clinic_repository "github.com/aseno/backend/pkg/clinic/repository"
 )
 
 // AnalyticsService defines the interface for analytics business logic
@@ -21,16 +24,38 @@ type AnalyticsService interface {
 
 // analyticsService implements AnalyticsService
 type analyticsService struct {
-	repo repository.AnalyticsRepository
+	repo       repository.AnalyticsRepository
+	clinicRepo clinic_repository.ClinicRepository
 }
 
 // NewAnalyticsService creates a new analytics service
-func NewAnalyticsService(repo repository.AnalyticsRepository) AnalyticsService {
-	return &analyticsService{repo: repo}
+func NewAnalyticsService(repo repository.AnalyticsRepository, clinicRepo clinic_repository.ClinicRepository) AnalyticsService {
+	return &analyticsService{
+		repo:       repo,
+		clinicRepo: clinicRepo,
+	}
+}
+
+// checkPlanRestriction checks if the clinic plan allows access to advanced features
+func (s *analyticsService) checkPlanRestriction(ctx context.Context, clinicID uuid.UUID) error {
+	clinic, err := s.clinicRepo.GetByID(ctx, clinicID)
+	if err != nil {
+		return err
+	}
+
+	if clinic.Plan == clinic_model.PlanTypeBasic {
+		return errors.ErrUpgradeRequiredInstance.WithMessage("Relatórios avançados disponíveis apenas nos planos Profissional e Avançado")
+	}
+
+	return nil
 }
 
 // GetSlotAnalytics returns complete slot analytics
 func (s *analyticsService) GetSlotAnalytics(ctx context.Context, clinicID uuid.UUID, filter *model.AnalyticsFilter) (*model.AnalyticsResponse, error) {
+	if err := s.checkPlanRestriction(ctx, clinicID); err != nil {
+		return nil, err
+	}
+
 	start, end := s.getPeriodRange(filter.Period)
 
 	// Get stats by day of week
@@ -78,6 +103,10 @@ func (s *analyticsService) GetSlotAnalytics(ctx context.Context, clinicID uuid.U
 
 // GetBestSlots returns the top N best performing time slots
 func (s *analyticsService) GetBestSlots(ctx context.Context, clinicID uuid.UUID, professionalID *uuid.UUID, limit int) ([]model.SlotSuggestion, error) {
+	if err := s.checkPlanRestriction(ctx, clinicID); err != nil {
+		return nil, err
+	}
+
 	start, end := s.getPeriodRange("6m")
 
 	stats, err := s.repo.GetStatsByDayAndHour(ctx, clinicID, professionalID, start, end)
@@ -108,6 +137,10 @@ func (s *analyticsService) GetBestSlots(ctx context.Context, clinicID uuid.UUID,
 
 // GetWorstSlots returns the top N worst performing time slots
 func (s *analyticsService) GetWorstSlots(ctx context.Context, clinicID uuid.UUID, professionalID *uuid.UUID, limit int) ([]model.SlotSuggestion, error) {
+	if err := s.checkPlanRestriction(ctx, clinicID); err != nil {
+		return nil, err
+	}
+
 	start, end := s.getPeriodRange("6m")
 
 	stats, err := s.repo.GetStatsByDayAndHour(ctx, clinicID, professionalID, start, end)
@@ -244,6 +277,10 @@ func (s *analyticsService) findBestWorstHour(stats []model.TimeSlotStats, summar
 
 // GetReportMetrics returns the "Relatórios que DOEM" metrics
 func (s *analyticsService) GetReportMetrics(ctx context.Context, clinicID uuid.UUID, filter *model.ReportFilter) (*model.ReportMetrics, error) {
+	if err := s.checkPlanRestriction(ctx, clinicID); err != nil {
+		return nil, err
+	}
+
 	start, end := s.getReportPeriodRange(filter.Period)
 
 	// Get monthly breakdown from repository

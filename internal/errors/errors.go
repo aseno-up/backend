@@ -45,6 +45,7 @@ const (
 	ErrCannotRemoveOwner = "CANNOT_REMOVE_OWNER"
 	ErrPatientRecordNotFound = "PATIENT_RECORD_NOT_FOUND"
 	ErrSessionNoteNotFound = "SESSION_NOTE_NOT_FOUND"
+	ErrUpgradeRequired     = "UPGRADE_REQUIRED"
 )
 
 // AppError represents an application error with context
@@ -160,6 +161,7 @@ var (
 	ErrCannotRemoveOwnerInstance = NewError(ErrCannotRemoveOwner, "The clinic owner cannot be removed", http.StatusForbidden)
 	ErrPatientRecordNotFoundInstance = NewError(ErrPatientRecordNotFound, "Patient record not found", http.StatusNotFound)
 	ErrSessionNoteNotFoundInstance = NewError(ErrSessionNoteNotFound, "Session note not found", http.StatusNotFound)
+	ErrUpgradeRequiredInstance     = NewError(ErrUpgradeRequired, "Upgrade required to access this feature", http.StatusForbidden)
 )
 
 // IsNotFound checks if error is a not found error

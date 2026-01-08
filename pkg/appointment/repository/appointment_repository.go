@@ -30,6 +30,9 @@ type AppointmentRepository interface {
 
 	// WhatsApp response handling
 	GetPendingByPhone(ctx context.Context, clinicID uuid.UUID, phone string) (*model.Appointment, error)
+
+	// Smart Scheduling
+	GetSlotPerformanceStats(ctx context.Context, clinicID, professionalID uuid.UUID) ([]*model.SlotPerformanceStats, error)
 }
 
 // appointmentRepository implements AppointmentRepository
@@ -40,6 +43,39 @@ type appointmentRepository struct {
 // NewAppointmentRepository creates a new appointment repository
 func NewAppointmentRepository(db *gorm.DB) AppointmentRepository {
 	return &appointmentRepository{db: db}
+}
+
+// GetSlotPerformanceStats retrieves historical performance of time slots
+func (r *appointmentRepository) GetSlotPerformanceStats(ctx context.Context, clinicID, professionalID uuid.UUID) ([]*model.SlotPerformanceStats, error) {
+	var stats []*model.SlotPerformanceStats
+
+	// Query last 90 days of appointments to calculate completion rates by day/hour
+	query := `
+		SELECT
+			EXTRACT(DOW FROM start_time) as day_of_week,
+			EXTRACT(HOUR FROM start_time) as hour_of_day,
+			COUNT(*) as total,
+			SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed
+		FROM appointments
+		WHERE clinic_id = ? 
+		  AND professional_id = ?
+		  AND deleted_at IS NULL
+		  AND start_time > NOW() - INTERVAL '90 days'
+		GROUP BY 1, 2
+	`
+
+	if err := r.db.WithContext(ctx).Raw(query, clinicID, professionalID).Scan(&stats).Error; err != nil {
+		return nil, errors.ErrInternalInstance.WithError(err)
+	}
+
+	// Calculate rates
+	for _, s := range stats {
+		if s.Total > 0 {
+			s.Rate = float64(s.Completed) / float64(s.Total)
+		}
+	}
+
+	return stats, nil
 }
 
 // Create creates a new appointment

@@ -6,6 +6,9 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/aseno/backend/internal/errors"
+	clinic_model "github.com/aseno/backend/pkg/clinic/model"
+	clinic_repository "github.com/aseno/backend/pkg/clinic/repository"
 	"github.com/aseno/backend/pkg/professional/model"
 	"github.com/aseno/backend/pkg/professional/repository"
 )
@@ -21,16 +24,49 @@ type ProfessionalService interface {
 
 // professionalService implements ProfessionalService
 type professionalService struct {
-	repo repository.ProfessionalRepository
+	repo       repository.ProfessionalRepository
+	clinicRepo clinic_repository.ClinicRepository
 }
 
 // NewProfessionalService creates a new professional service
-func NewProfessionalService(repo repository.ProfessionalRepository) ProfessionalService {
-	return &professionalService{repo: repo}
+func NewProfessionalService(repo repository.ProfessionalRepository, clinicRepo clinic_repository.ClinicRepository) ProfessionalService {
+	return &professionalService{
+		repo:       repo,
+		clinicRepo: clinicRepo,
+	}
 }
 
 // Create creates a new professional
 func (s *professionalService) Create(ctx context.Context, clinicID uuid.UUID, req *model.CreateProfessionalRequest) (*model.ProfessionalResponse, error) {
+	// 1. Check plan limits
+	clinic, err := s.clinicRepo.GetByID(ctx, clinicID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Count active professionals
+	_, count, err := s.repo.GetByClinicID(ctx, clinicID, true, 1, 0)
+	if err != nil {
+		return nil, err
+	}
+
+	var limit int
+	switch clinic.Plan {
+	case clinic_model.PlanTypeBasic:
+		limit = 2
+	case clinic_model.PlanTypeProfessional:
+		limit = 10
+	case clinic_model.PlanTypeAdvanced:
+		limit = 1000 // Unlimited practically
+	default:
+		limit = 2 // Default to basic
+	}
+
+	if int(count) >= limit {
+		return nil, errors.ErrValidationInstance.WithMessage("Limite de profissionais do seu plano atingido. Faça upgrade para adicionar mais.")
+	}
+
+	// 2. Create professional
 	professional := &model.Professional{
 		ClinicID:        clinicID,
 		Name:            req.Name,

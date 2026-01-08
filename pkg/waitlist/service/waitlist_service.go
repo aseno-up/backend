@@ -10,7 +10,10 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/aseno/backend/internal/errors"
 	"github.com/aseno/backend/internal/queue"
+	clinic_model "github.com/aseno/backend/pkg/clinic/model"
+	clinic_repository "github.com/aseno/backend/pkg/clinic/repository"
 	"github.com/aseno/backend/pkg/waitlist/model"
 	"github.com/aseno/backend/pkg/waitlist/repository"
 )
@@ -42,6 +45,7 @@ type ProfessionalInfo struct {
 // AppointmentCreator creates appointments for waitlist patients
 type AppointmentCreator interface {
 	CreateFromWaitlist(ctx context.Context, clinicID, patientID, professionalID uuid.UUID, startTime time.Time, durationMinutes int) (uuid.UUID, error)
+	Reschedule(ctx context.Context, appointmentID, clinicID, professionalID uuid.UUID, startTime time.Time, durationMinutes int) error
 }
 
 // WaitlistService defines the interface for waitlist business logic
@@ -66,6 +70,7 @@ type waitlistService struct {
 	appointmentCreator  AppointmentCreator
 	messageQueue        queue.Queue
 	defaultDuration     int // Default appointment duration in minutes
+	clinicRepo          clinic_repository.ClinicRepository
 }
 
 // NewWaitlistService creates a new waitlist service
@@ -75,6 +80,7 @@ func NewWaitlistService(
 	professionalProvider ProfessionalInfoProvider,
 	appointmentCreator AppointmentCreator,
 	messageQueue queue.Queue,
+	clinicRepo clinic_repository.ClinicRepository,
 ) WaitlistService {
 	return &waitlistService{
 		repo:                repo,
@@ -83,11 +89,30 @@ func NewWaitlistService(
 		appointmentCreator:  appointmentCreator,
 		messageQueue:        messageQueue,
 		defaultDuration:     50, // Default 50 minutes
+		clinicRepo:          clinicRepo,
 	}
+}
+
+// checkPlanRestriction checks if the clinic plan allows access to advanced features
+func (s *waitlistService) checkPlanRestriction(ctx context.Context, clinicID uuid.UUID) error {
+	clinic, err := s.clinicRepo.GetByID(ctx, clinicID)
+	if err != nil {
+		return err
+	}
+
+	if clinic.Plan == clinic_model.PlanTypeBasic {
+		return errors.ErrUpgradeRequiredInstance.WithMessage("Lista de encaixe disponível apenas nos planos Profissional e Avançado")
+	}
+
+	return nil
 }
 
 // Create adds a patient to the waitlist
 func (s *waitlistService) Create(ctx context.Context, clinicID uuid.UUID, req *model.CreateWaitlistRequest) (*model.WaitlistEntryResponse, error) {
+	if err := s.checkPlanRestriction(ctx, clinicID); err != nil {
+		return nil, err
+	}
+
 	// Set default time range if not provided
 	timeStart := req.PreferredTimeStart
 	if timeStart == "" {
@@ -217,6 +242,12 @@ func (s *waitlistService) Delete(ctx context.Context, id, clinicID uuid.UUID) er
 
 // ProcessCancelledAppointment handles the encaixe logic when an appointment is cancelled
 func (s *waitlistService) ProcessCancelledAppointment(ctx context.Context, clinicID, professionalID uuid.UUID, slotTime time.Time, durationMinutes int) error {
+	// Check plan restriction silently (log instead of error return, since this is async)
+	if err := s.checkPlanRestriction(ctx, clinicID); err != nil {
+		log.Printf("[Waitlist] Skipping encaixe for clinic %s: %v", clinicID, err)
+		return nil
+	}
+
 	// Get clinic info for WhatsApp
 	clinic, err := s.clinicProvider.GetClinicInfo(ctx, clinicID)
 	if err != nil {
@@ -262,7 +293,7 @@ func (s *waitlistService) ProcessCancelledAppointment(ctx context.Context, clini
 	}
 
 	// Build and send WhatsApp message
-	message := s.buildSlotOfferMessage(entry.PatientName, professionalName, clinic.Name, slotTime)
+	message := s.buildSlotOfferMessage(entry.PatientName, professionalName, clinic.Name, slotTime, entry.OriginalAppointmentID != nil)
 
 	if s.messageQueue != nil && s.messageQueue.IsConnected() {
 		job := &queue.MessageJob{
@@ -305,36 +336,60 @@ func (s *waitlistService) HandlePatientResponse(ctx context.Context, clinicID uu
 	}
 
 	if accepted {
-		// Patient accepted - create the appointment
+		// Patient accepted - create the appointment or reschedule existing one
 		if s.appointmentCreator != nil && entry.PendingSlotTime != nil && entry.PendingSlotProfessional != nil {
-			appointmentID, err := s.appointmentCreator.CreateFromWaitlist(
-				ctx,
-				clinicID,
-				entry.PatientID,
-				*entry.PendingSlotProfessional,
-				*entry.PendingSlotTime,
-				s.defaultDuration,
-			)
-			if err != nil {
-				log.Printf("[Waitlist] Error creating appointment: %v", err)
-				// Still mark as scheduled even if appointment creation fails
+			var err error
+			var action string
+
+			if entry.OriginalAppointmentID != nil {
+				// Anticipation: Reschedule existing appointment
+				err = s.appointmentCreator.Reschedule(
+					ctx,
+					*entry.OriginalAppointmentID,
+					clinicID,
+					*entry.PendingSlotProfessional,
+					*entry.PendingSlotTime,
+					s.defaultDuration,
+				)
+				action = "rescheduled"
 			} else {
-				log.Printf("[Waitlist] Created appointment %s from waitlist entry %s", appointmentID, entry.ID)
+				// Regular waitlist: Create new appointment
+				var newID uuid.UUID
+				newID, err = s.appointmentCreator.CreateFromWaitlist(
+					ctx,
+					clinicID,
+					entry.PatientID,
+					*entry.PendingSlotProfessional,
+					*entry.PendingSlotTime,
+					s.defaultDuration,
+				)
+				if err == nil {
+					log.Printf("[Waitlist] Created appointment %s from waitlist entry %s", newID, entry.ID)
+				}
+				action = "created"
+			}
+
+			if err != nil {
+				log.Printf("[Waitlist] Error processing acceptance (%s): %v", action, err)
+				// Still mark as scheduled? No, maybe kept as notified or failed?
+				// For now, let's keep it simple and mark as scheduled but log error, 
+				// or maybe we should send a message saying "sorry, slot taken"?
+				// Ideally we should handle this failure gracefully.
+			} else {
+				log.Printf("[Waitlist] Successfully %s appointment for entry %s", action, entry.ID)
+				
+				// Mark entry as scheduled only if successful
+				err = s.repo.UpdateStatus(ctx, entry.ID, model.WaitlistStatusScheduled, nil, nil, nil)
+				if err != nil {
+					log.Printf("[Waitlist] Error updating status to scheduled: %v", err)
+				}
+
+				// Send confirmation message
+				if err := s.sendConfirmationMessage(ctx, clinicID, entry); err != nil {
+					log.Printf("[Waitlist] Error sending confirmation message: %v", err)
+				}
 			}
 		}
-
-		// Mark entry as scheduled
-		err = s.repo.UpdateStatus(ctx, entry.ID, model.WaitlistStatusScheduled, nil, nil, nil)
-		if err != nil {
-			return err
-		}
-
-		// Send confirmation message
-		if err := s.sendConfirmationMessage(ctx, clinicID, entry); err != nil {
-			log.Printf("[Waitlist] Error sending confirmation message: %v", err)
-		}
-
-		log.Printf("[Waitlist] Patient %s accepted slot, entry marked as scheduled", entry.PatientID)
 	} else {
 		// Patient declined - mark as declined and offer to next patient
 		err = s.repo.UpdateStatus(ctx, entry.ID, model.WaitlistStatusDeclined, nil, nil, nil)
@@ -360,7 +415,7 @@ func (s *waitlistService) HandlePatientResponse(ctx context.Context, clinicID uu
 }
 
 // buildSlotOfferMessage creates the WhatsApp message for a slot offer
-func (s *waitlistService) buildSlotOfferMessage(patientName, professionalName, clinicName string, slotTime time.Time) string {
+func (s *waitlistService) buildSlotOfferMessage(patientName, professionalName, clinicName string, slotTime time.Time, isAnticipation bool) string {
 	// Get weekday name in Portuguese
 	weekdays := map[string]string{
 		"Sunday":    "Domingo",
@@ -375,6 +430,24 @@ func (s *waitlistService) buildSlotOfferMessage(patientName, professionalName, c
 
 	dateStr := slotTime.Format("02/01/2006")
 	timeStr := slotTime.Format("15:04")
+
+	if isAnticipation {
+		return fmt.Sprintf(
+			"Ola %s!\n\n"+
+				"Surgiu uma vaga para *ANTECIPAR* sua consulta!\n\n"+
+				"📅 %s, %s as %s\n"+
+				"👨‍⚕️ %s\n"+
+				"🏥 %s\n\n"+
+				"Deseja trocar seu horario atual para este novo horario?\n"+
+				"Responda SIM para confirmar ou NAO para manter o agendamento atual.",
+			patientName,
+			weekday,
+			dateStr,
+			timeStr,
+			professionalName,
+			clinicName,
+		)
+	}
 
 	return fmt.Sprintf(
 		"Ola %s!\n\n"+

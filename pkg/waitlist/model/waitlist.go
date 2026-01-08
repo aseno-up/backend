@@ -27,6 +27,7 @@ type WaitlistEntry struct {
 	ClinicID       uuid.UUID      `json:"clinic_id" gorm:"type:uuid;not null;index"`
 	PatientID      uuid.UUID      `json:"patient_id" gorm:"type:uuid;not null;index"`
 	ProfessionalID *uuid.UUID     `json:"professional_id" gorm:"type:uuid;index"` // nil = qualquer profissional
+	OriginalAppointmentID *uuid.UUID `json:"original_appointment_id,omitempty" gorm:"type:uuid;index"` // If set, this is an anticipation request for an existing appointment
 
 	// Preferências de horário
 	PreferredDays      PreferredDays `json:"preferred_days" gorm:"serializer:json"`       // ["monday", "tuesday", ...]
@@ -68,6 +69,7 @@ type WaitlistEntryResponse struct {
 	PatientPhone       string         `json:"patient_phone,omitempty"`
 	ProfessionalID     *uuid.UUID     `json:"professional_id,omitempty"`
 	ProfessionalName   string         `json:"professional_name,omitempty"`
+	OriginalAppointmentID *uuid.UUID  `json:"original_appointment_id,omitempty"`
 	PreferredDays      []string       `json:"preferred_days"`
 	PreferredTimeStart string         `json:"preferred_time_start"`
 	PreferredTimeEnd   string         `json:"preferred_time_end"`
@@ -86,6 +88,7 @@ func (w *WaitlistEntry) ToResponse() *WaitlistEntryResponse {
 		ClinicID:           w.ClinicID,
 		PatientID:          w.PatientID,
 		ProfessionalID:     w.ProfessionalID,
+		OriginalAppointmentID: w.OriginalAppointmentID,
 		PreferredDays:      w.PreferredDays,
 		PreferredTimeStart: w.PreferredTimeStart,
 		PreferredTimeEnd:   w.PreferredTimeEnd,
@@ -102,6 +105,7 @@ func (w *WaitlistEntry) ToResponse() *WaitlistEntryResponse {
 type CreateWaitlistRequest struct {
 	PatientID          uuid.UUID  `json:"patient_id" binding:"required"`
 	ProfessionalID     *uuid.UUID `json:"professional_id"`                              // nil = qualquer profissional
+	OriginalAppointmentID *uuid.UUID `json:"original_appointment_id"`                   // Optional: link to existing appointment
 	PreferredDays      []string   `json:"preferred_days" binding:"required,min=1"`      // ["monday", "tuesday", ...]
 	PreferredTimeStart string     `json:"preferred_time_start" binding:"omitempty"`     // "08:00"
 	PreferredTimeEnd   string     `json:"preferred_time_end" binding:"omitempty"`       // "18:00"

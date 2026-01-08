@@ -309,10 +309,9 @@ func (h *paymentHandler) GetSubscription(c *gin.Context) {
 
 // CreateSubscriptionRequest represents the request to create a subscription
 type CreateSubscriptionRequest struct {
-	BillingType string  `json:"billing_type" binding:"required"`
-	Value       float64 `json:"value" binding:"required,gt=0"`
-	Cycle       string  `json:"cycle" binding:"required"`
-	Description string  `json:"description"`
+	BillingType string `json:"billing_type" binding:"required"`
+	Plan        string `json:"plan" binding:"required,oneof=basic professional advanced"`
+	Cycle       string `json:"cycle" binding:"required"`
 }
 
 // CreateSubscription creates a new subscription
@@ -329,11 +328,27 @@ func (h *paymentHandler) CreateSubscription(c *gin.Context) {
 		return
 	}
 
+	// Price lookup based on plan strategy
+	var value float64
+	var description string
+
+	switch req.Plan {
+	case "basic":
+		value = 99.00
+		description = "Plano Básico - Aseno"
+	case "professional":
+		value = 199.00
+		description = "Plano Profissional - Aseno"
+	case "advanced":
+		value = 349.00
+		description = "Plano Avançado - Aseno"
+	}
+
 	input := &service.CreateSubscriptionInput{
 		BillingType: model.BillingType(req.BillingType),
-		Value:       req.Value,
+		Value:       value,
 		Cycle:       model.BillingCycle(req.Cycle),
-		Description: req.Description,
+		Description: description,
 	}
 
 	subscription, err := h.service.CreateSubscription(c.Request.Context(), clinicID.(uuid.UUID), input)

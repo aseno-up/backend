@@ -9,6 +9,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/aseno/backend/pkg/dashboard/model"
 	"github.com/aseno/backend/pkg/dashboard/repository"
+	clinic_model "github.com/aseno/backend/pkg/clinic/model"
+	clinic_repository "github.com/aseno/backend/pkg/clinic/repository"
 	profModel "github.com/aseno/backend/pkg/professional/model"
 )
 
@@ -17,11 +19,15 @@ type DashboardService interface {
 }
 
 type dashboardService struct {
-	repo repository.DashboardRepository
+	repo       repository.DashboardRepository
+	clinicRepo clinic_repository.ClinicRepository
 }
 
-func NewDashboardService(repo repository.DashboardRepository) DashboardService {
-	return &dashboardService{repo: repo}
+func NewDashboardService(repo repository.DashboardRepository, clinicRepo clinic_repository.ClinicRepository) DashboardService {
+	return &dashboardService{
+		repo:       repo,
+		clinicRepo: clinicRepo,
+	}
 }
 
 func (s *dashboardService) GetMetrics(ctx context.Context, clinicID uuid.UUID, start, end time.Time) (*model.DashboardMetrics, error) {
@@ -135,7 +141,7 @@ func (s *dashboardService) GetMetrics(ctx context.Context, clinicID uuid.UUID, s
 		insights = append(insights, fmt.Sprintf("Paciente %s teve %d faltas.", absentees[0].Name, absentees[0].AbsentCount))
 	}
 
-	return &model.DashboardMetrics{
+	metrics := &model.DashboardMetrics{
 		EstimatedRevenue:       stats.TotalRevenue,
 		CompletedConsultations: stats.CompletedCount,
 		ConfirmedConsultations: stats.ConfirmedCount,
@@ -152,7 +158,20 @@ func (s *dashboardService) GetMetrics(ctx context.Context, clinicID uuid.UUID, s
 		PreservedRevenue:       preservedRevenue,
 		TopAbsentees:           absentees,
 		Insights:               insights,
-	}, nil
+	}
+
+	// Check plan and mask financial data if Basic
+	clinic, err := s.clinicRepo.GetByID(ctx, clinicID)
+	if err == nil && clinic.Plan == clinic_model.PlanTypeBasic {
+		metrics.EstimatedRevenue = 0
+		metrics.EstimatedLostRevenue = 0
+		metrics.PotentialRevenue = 0
+		metrics.PreservedRevenue = 0
+		metrics.Insights = []string{"Faça upgrade para o plano Profissional para ver insights e dados financeiros."}
+		// We keep operational stats (counts, occupancy) visible
+	}
+
+	return metrics, nil
 }
 
 func (s *dashboardService) calculateCapacity(wh profModel.WorkingHours, start, end time.Time) int {

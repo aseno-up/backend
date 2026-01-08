@@ -72,6 +72,7 @@ import (
 	waitlist_model "github.com/aseno/backend/pkg/waitlist/model"
 	waitlist_repository "github.com/aseno/backend/pkg/waitlist/repository"
 	waitlist_service "github.com/aseno/backend/pkg/waitlist/service"
+	whatsapp_classifier "github.com/aseno/backend/pkg/whatsapp/classifier"
 	whatsapp_evolution "github.com/aseno/backend/pkg/whatsapp/client/evolution"
 	whatsapp_handler "github.com/aseno/backend/pkg/whatsapp/handler"
 	whatsapp_model "github.com/aseno/backend/pkg/whatsapp/model"
@@ -204,9 +205,9 @@ func main() {
 	} else {
 		authService = auth_service.NewAuthService(userRepo, clinicRepo, passwordResetRepo, jwtService, emailSvc)
 	}
-	professionalService := professional_service.NewProfessionalService(professionalRepo)
-	patientService := patient_service.NewPatientService(patientRepo)
-	appointmentService := appointment_service.NewAppointmentService(appointmentRepo)
+	professionalService := professional_service.NewProfessionalService(professionalRepo, clinicRepo)
+	patientService := patient_service.NewPatientService(patientRepo, clinicRepo)
+	appointmentService := appointment_service.NewAppointmentService(appointmentRepo, professionalRepo)
 
 	// Initialize WhatsApp service (if client is configured)
 	var whatsappService whatsapp_service.WhatsAppService
@@ -217,6 +218,38 @@ func main() {
 		whatsappService.SetAppointmentUpdater(&appointmentStatusAdapter{appointmentService: appointmentService})
 		whatsappService.SetAppointmentFinder(&appointmentFinderAdapter{appointmentRepo: appointmentRepo})
 		log.Println("WhatsApp appointment status updater connected")
+
+		// Initialize AI Classifier for message classification (if enabled)
+		if cfg.AIClassifierEnabled() {
+			var apiKey string
+			switch cfg.AIClassifierProvider() {
+			case "gemini":
+				apiKey = cfg.GetGeminiAPIKey()
+			case "claude":
+				apiKey = cfg.GetAnthropicAPIKey()
+			case "openai":
+				apiKey = cfg.GetOpenAIAPIKey()
+			}
+
+			if apiKey != "" {
+				aiClassifier, err := whatsapp_classifier.NewClassifier(whatsapp_classifier.Config{
+					Provider: cfg.AIClassifierProvider(),
+					Model:    cfg.AIClassifierModel(),
+					APIKey:   apiKey,
+					Timeout:  time.Duration(cfg.AIClassifierTimeout()) * time.Second,
+				})
+				if err != nil {
+					log.Printf("Warning: Failed to initialize AI classifier: %v", err)
+				} else {
+					whatsappService.SetClassifier(aiClassifier, cfg.AIClassifierConfidenceThreshold())
+					log.Printf("AI Classifier initialized: provider=%s model=%s threshold=%.2f",
+						cfg.AIClassifierProvider(), cfg.AIClassifierModel(), cfg.AIClassifierConfidenceThreshold())
+				}
+			} else {
+				log.Printf("Warning: AI_CLASSIFIER_ENABLED=true but no API key for provider %s",
+					cfg.AIClassifierProvider())
+			}
+		}
 	}
 
 	// Initialize Payment service (if Asaas client is configured)
@@ -228,7 +261,7 @@ func main() {
 	// Initialize Calendar service (if Google client is configured)
 	var calendarService calendar_service.CalendarService
 	if googleCalendarClient != nil {
-		calendarService = calendar_service.NewCalendarService(googleCalendarClient, calendarIntegrationRepo, calendarSyncRepo)
+		calendarService = calendar_service.NewCalendarService(googleCalendarClient, calendarIntegrationRepo, calendarSyncRepo, clinicRepo)
 	}
 
 	// Initialize Session Plan service
@@ -251,10 +284,10 @@ func main() {
 	patientRecordSvc := patientrecord_service.NewPatientRecordService(patientRecordRepo)
 
 	// Initialize Dashboard service
-	dashboardSvc := dashboard_service.NewDashboardService(dashboardRepo)
+	dashboardSvc := dashboard_service.NewDashboardService(dashboardRepo, clinicRepo)
 
 	// Initialize Analytics service
-	analyticsSvc := analytics_service.NewAnalyticsService(analyticsRepo)
+	analyticsSvc := analytics_service.NewAnalyticsService(analyticsRepo, clinicRepo)
 
 	// Initialize Waitlist service (if WhatsApp and queue are available)
 	var waitlistSvc waitlist_service.WaitlistService
@@ -307,10 +340,14 @@ func main() {
 					&professionalInfoAdapter{professionalRepo: professionalRepo},
 					&appointmentCreatorAdapter{appointmentService: appointmentService},
 					messageQueue,
+					clinicRepo,
 				)
 
 				// Wire waitlist service into appointment service
 				appointmentService.SetWaitlistProcessor(waitlistSvc)
+
+				// Wire waitlist service into whatsapp service for response handling
+				whatsappService.SetWaitlistHandler(waitlistSvc)
 
 				log.Println("Waitlist (encaixe) service initialized")
 			}
@@ -694,6 +731,10 @@ func (a *appointmentCreatorAdapter) CreateFromWaitlist(ctx context.Context, clin
 	return a.appointmentService.CreateFromWaitlist(ctx, clinicID, patientID, professionalID, startTime, durationMinutes)
 }
 
+func (a *appointmentCreatorAdapter) Reschedule(ctx context.Context, appointmentID, clinicID, professionalID uuid.UUID, startTime time.Time, durationMinutes int) error {
+	return a.appointmentService.Reschedule(ctx, appointmentID, clinicID, professionalID, startTime, durationMinutes)
+}
+
 // patientRiskAdapter adapts patient_service to appointment_service.PatientRiskCalculator
 type patientRiskAdapter struct {
 	patientService patient_service.PatientService
@@ -727,7 +768,7 @@ type appointmentFinderAdapter struct {
 	appointmentRepo appointment_repository.AppointmentRepository
 }
 
-func (a *appointmentFinderAdapter) GetPendingByPhone(ctx context.Context, clinicID uuid.UUID, phone string) (*uuid.UUID, error) {
+func (a *appointmentFinderAdapter) GetPendingByPhone(ctx context.Context, clinicID uuid.UUID, phone string) (*whatsapp_service.AppointmentInfo, error) {
 	apt, err := a.appointmentRepo.GetPendingByPhone(ctx, clinicID, phone)
 	if err != nil {
 		return nil, err
@@ -735,5 +776,21 @@ func (a *appointmentFinderAdapter) GetPendingByPhone(ctx context.Context, clinic
 	if apt == nil {
 		return nil, nil
 	}
-	return &apt.ID, nil
+	
+	profName := ""
+	if apt.Professional != nil {
+		profName = apt.Professional.Name
+	}
+	
+	patientName := ""
+	if apt.Patient != nil {
+		patientName = apt.Patient.Name
+	}
+
+	return &whatsapp_service.AppointmentInfo{
+		ID:           apt.ID,
+		PatientName:  patientName,
+		Professional: profName,
+		StartTime:    apt.StartTime,
+	}, nil
 }

@@ -9,6 +9,8 @@ import (
 
 	"github.com/aseno/backend/internal/errors"
 	"github.com/aseno/backend/pkg/calendar/model"
+	clinic_model "github.com/aseno/backend/pkg/clinic/model"
+	clinic_repository "github.com/aseno/backend/pkg/clinic/repository"
 )
 
 // GoogleCalendarClient defines the interface for Google Calendar operations
@@ -48,7 +50,7 @@ type SyncRepository interface {
 // CalendarService defines the interface for calendar operations
 type CalendarService interface {
 	// OAuth
-	GetAuthURL(clinicID uuid.UUID) string
+	GetAuthURL(ctx context.Context, clinicID uuid.UUID) (string, error)
 	HandleCallback(ctx context.Context, clinicID uuid.UUID, code string) (*model.CalendarIntegration, error)
 
 	// Integration management
@@ -82,6 +84,7 @@ type calendarService struct {
 	client          GoogleCalendarClient
 	integrationRepo IntegrationRepository
 	syncRepo        SyncRepository
+	clinicRepo      clinic_repository.ClinicRepository
 }
 
 // NewCalendarService creates a new calendar service
@@ -89,21 +92,43 @@ func NewCalendarService(
 	client GoogleCalendarClient,
 	integrationRepo IntegrationRepository,
 	syncRepo SyncRepository,
+	clinicRepo clinic_repository.ClinicRepository,
 ) CalendarService {
 	return &calendarService{
 		client:          client,
 		integrationRepo: integrationRepo,
 		syncRepo:        syncRepo,
+		clinicRepo:      clinicRepo,
 	}
 }
 
 // GetAuthURL returns the Google OAuth authorization URL
-func (s *calendarService) GetAuthURL(clinicID uuid.UUID) string {
-	return s.client.GetAuthURL(clinicID.String())
+func (s *calendarService) GetAuthURL(ctx context.Context, clinicID uuid.UUID) (string, error) {
+	// Check plan limit
+	clinic, err := s.clinicRepo.GetByID(ctx, clinicID)
+	if err != nil {
+		return "", err
+	}
+
+	if clinic.Plan == clinic_model.PlanTypeBasic {
+		return "", errors.ErrValidationInstance.WithMessage("Integração com Google Calendar disponível apenas nos planos Profissional e Avançado.")
+	}
+
+	return s.client.GetAuthURL(clinicID.String()), nil
 }
 
 // HandleCallback handles the OAuth callback and saves the integration
 func (s *calendarService) HandleCallback(ctx context.Context, clinicID uuid.UUID, code string) (*model.CalendarIntegration, error) {
+	// Check plan limit
+	clinic, err := s.clinicRepo.GetByID(ctx, clinicID)
+	if err != nil {
+		return nil, err
+	}
+
+	if clinic.Plan == clinic_model.PlanTypeBasic {
+		return nil, errors.ErrValidationInstance.WithMessage("Integração com Google Calendar disponível apenas nos planos Profissional e Avançado.")
+	}
+
 	// Exchange code for tokens
 	tokens, err := s.client.ExchangeCode(ctx, code)
 	if err != nil {

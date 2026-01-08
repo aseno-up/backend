@@ -57,10 +57,15 @@ func (h *calendarHandler) GetAuthURL(c *gin.Context) {
 		return
 	}
 
-	authURL := h.service.GetAuthURL(clinicID.(uuid.UUID))
+	url, err := h.service.GetAuthURL(c.Request.Context(), clinicID.(uuid.UUID))
+	if err != nil {
+		statusCode := errors.GetStatusCode(err)
+		c.JSON(statusCode, errors.ToResponse(err))
+		return
+	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"auth_url": authURL,
+		"auth_url": url,
 	})
 }
 
