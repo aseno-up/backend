@@ -82,15 +82,27 @@ type WhatsAppService interface {
 
 // whatsAppService implements WhatsAppService
 type whatsAppService struct {
-	client     WhatsAppClient
-	messageRepo MessageRepository
-	appointmentUpdater AppointmentStatusUpdater
+	client              WhatsAppClient
+	messageRepo         MessageRepository
+	appointmentUpdater  AppointmentStatusUpdater
+	appointmentFinder   AppointmentFinder
+	waitlistHandler     WaitlistResponseHandler
 }
 
 // AppointmentStatusUpdater interface for updating appointment status
 type AppointmentStatusUpdater interface {
 	ConfirmByPatient(ctx context.Context, appointmentID, clinicID uuid.UUID, patientNotes string) error
 	CancelByPatient(ctx context.Context, appointmentID, clinicID uuid.UUID, reason string) error
+}
+
+// AppointmentFinder interface for finding appointments by phone
+type AppointmentFinder interface {
+	GetPendingByPhone(ctx context.Context, clinicID uuid.UUID, phone string) (appointmentID *uuid.UUID, err error)
+}
+
+// WaitlistResponseHandler interface for handling waitlist responses
+type WaitlistResponseHandler interface {
+	HandlePatientResponse(ctx context.Context, clinicID uuid.UUID, phone string, accepted bool) error
 }
 
 // NewWhatsAppService creates a new WhatsApp service
@@ -104,6 +116,16 @@ func NewWhatsAppService(
 		messageRepo:        messageRepo,
 		appointmentUpdater: appointmentUpdater,
 	}
+}
+
+// SetAppointmentFinder sets the appointment finder for WhatsApp response handling
+func (s *whatsAppService) SetAppointmentFinder(finder AppointmentFinder) {
+	s.appointmentFinder = finder
+}
+
+// SetWaitlistHandler sets the waitlist handler for encaixe responses
+func (s *whatsAppService) SetWaitlistHandler(handler WaitlistResponseHandler) {
+	s.waitlistHandler = handler
 }
 
 // CreateInstance creates a new WhatsApp instance for a clinic
@@ -227,9 +249,57 @@ func (s *whatsAppService) HandleIncomingMessage(ctx context.Context, clinicID uu
 		}
 	}
 
-	// TODO: Find the pending appointment for this phone number
-	// For now, just log the intent
-	_ = intent
+	// Handle the response based on intent
+	switch intent {
+	case model.MessageIntentConfirm:
+		// First check if this is a waitlist response
+		if s.waitlistHandler != nil {
+			if err := s.waitlistHandler.HandlePatientResponse(ctx, clinicID, msg.Phone, true); err == nil {
+				// Waitlist response handled successfully
+				return nil
+			}
+		}
+
+		// If not a waitlist response, try to confirm an appointment
+		if s.appointmentFinder != nil && s.appointmentUpdater != nil {
+			appointmentID, err := s.appointmentFinder.GetPendingByPhone(ctx, clinicID, msg.Phone)
+			if err == nil && appointmentID != nil {
+				if err := s.appointmentUpdater.ConfirmByPatient(ctx, *appointmentID, clinicID, ""); err == nil {
+					// Appointment confirmed successfully
+					return nil
+				}
+			}
+		}
+
+	case model.MessageIntentCancel:
+		// First check if this is a waitlist response (declining a slot offer)
+		if s.waitlistHandler != nil {
+			if err := s.waitlistHandler.HandlePatientResponse(ctx, clinicID, msg.Phone, false); err == nil {
+				// Waitlist response handled successfully
+				return nil
+			}
+		}
+
+		// If not a waitlist response, try to cancel an appointment
+		if s.appointmentFinder != nil && s.appointmentUpdater != nil {
+			appointmentID, err := s.appointmentFinder.GetPendingByPhone(ctx, clinicID, msg.Phone)
+			if err == nil && appointmentID != nil {
+				if err := s.appointmentUpdater.CancelByPatient(ctx, *appointmentID, clinicID, "Cancelado via WhatsApp"); err == nil {
+					// Appointment cancelled successfully
+					return nil
+				}
+			}
+		}
+
+	case model.MessageIntentReschedule:
+		// Reschedule requests need manual handling for now
+		// Could send a message asking to contact the clinic
+		break
+
+	case model.MessageIntentQuestion, model.MessageIntentUnknown:
+		// Unknown or question intents - no automatic action
+		break
+	}
 
 	return nil
 }

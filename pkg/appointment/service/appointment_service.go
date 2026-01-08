@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"log"
 	"math"
 	"time"
 
@@ -11,6 +12,11 @@ import (
 	"github.com/aseno/backend/pkg/appointment/model"
 	"github.com/aseno/backend/pkg/appointment/repository"
 )
+
+// WaitlistProcessor processes cancelled appointments for waitlist
+type WaitlistProcessor interface {
+	ProcessCancelledAppointment(ctx context.Context, clinicID, professionalID uuid.UUID, slotTime time.Time, durationMinutes int) error
+}
 
 // AppointmentService defines the interface for appointment business logic
 type AppointmentService interface {
@@ -25,16 +31,28 @@ type AppointmentService interface {
 	Cancel(ctx context.Context, id, clinicID uuid.UUID, req *model.CancelAppointmentRequest) (*model.AppointmentResponse, error)
 	Complete(ctx context.Context, id, clinicID uuid.UUID) (*model.AppointmentResponse, error)
 	MarkNoShow(ctx context.Context, id, clinicID uuid.UUID) (*model.AppointmentResponse, error)
+
+	// CreateFromWaitlist creates an appointment from a waitlist entry
+	CreateFromWaitlist(ctx context.Context, clinicID, patientID, professionalID uuid.UUID, startTime time.Time, durationMinutes int) (uuid.UUID, error)
+
+	// SetWaitlistProcessor sets the waitlist processor for encaixe
+	SetWaitlistProcessor(processor WaitlistProcessor)
 }
 
 // appointmentService implements AppointmentService
 type appointmentService struct {
-	repo repository.AppointmentRepository
+	repo               repository.AppointmentRepository
+	waitlistProcessor  WaitlistProcessor
 }
 
 // NewAppointmentService creates a new appointment service
 func NewAppointmentService(repo repository.AppointmentRepository) AppointmentService {
 	return &appointmentService{repo: repo}
+}
+
+// SetWaitlistProcessor sets the waitlist processor
+func (s *appointmentService) SetWaitlistProcessor(processor WaitlistProcessor) {
+	s.waitlistProcessor = processor
 }
 
 // Create creates a new appointment
@@ -263,6 +281,11 @@ func (s *appointmentService) Cancel(ctx context.Context, id, clinicID uuid.UUID,
 		return nil, err
 	}
 
+	// Store appointment info before cancellation for waitlist processing
+	slotTime := appointment.StartTime
+	professionalID := appointment.ProfessionalID
+	durationMinutes := appointment.DurationMinutes()
+
 	now := time.Now()
 	appointment.Status = model.AppointmentStatusCanceled
 	appointment.CanceledAt = &now
@@ -272,6 +295,16 @@ func (s *appointmentService) Cancel(ctx context.Context, id, clinicID uuid.UUID,
 
 	if err := s.repo.Update(ctx, appointment); err != nil {
 		return nil, err
+	}
+
+	// Process waitlist (encaixe) in background if the slot is in the future
+	if s.waitlistProcessor != nil && slotTime.After(time.Now()) {
+		go func() {
+			bgCtx := context.Background()
+			if err := s.waitlistProcessor.ProcessCancelledAppointment(bgCtx, clinicID, professionalID, slotTime, durationMinutes); err != nil {
+				log.Printf("[Appointment] Error processing waitlist for cancelled appointment: %v", err)
+			}
+		}()
 	}
 
 	return s.GetByID(ctx, id, clinicID)
@@ -291,4 +324,40 @@ func (s *appointmentService) MarkNoShow(ctx context.Context, id, clinicID uuid.U
 		return nil, err
 	}
 	return s.GetByID(ctx, id, clinicID)
+}
+
+// CreateFromWaitlist creates an appointment from a waitlist entry
+func (s *appointmentService) CreateFromWaitlist(ctx context.Context, clinicID, patientID, professionalID uuid.UUID, startTime time.Time, durationMinutes int) (uuid.UUID, error) {
+	endTime := startTime.Add(time.Duration(durationMinutes) * time.Minute)
+
+	// Check for conflicts (slot might have been taken)
+	hasConflict, err := s.repo.CheckConflict(ctx, clinicID, professionalID, startTime, endTime, nil)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	if hasConflict {
+		return uuid.Nil, errors.ErrSlotUnavailableInstance
+	}
+
+	appointment := &model.Appointment{
+		ClinicID:       clinicID,
+		PatientID:      patientID,
+		ProfessionalID: professionalID,
+		StartTime:      startTime,
+		EndTime:        endTime,
+		Status:         model.AppointmentStatusConfirmed, // Auto-confirm since patient said SIM
+		Type:           model.AppointmentTypeRegular,
+		Title:          "Encaixe",
+		Notes:          "Agendamento criado via lista de espera",
+	}
+
+	// Set confirmed timestamp
+	now := time.Now()
+	appointment.ConfirmedAt = &now
+
+	if err := s.repo.Create(ctx, appointment); err != nil {
+		return uuid.Nil, err
+	}
+
+	return appointment.ID, nil
 }

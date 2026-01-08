@@ -11,6 +11,7 @@ import (
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 
 	"github.com/aseno/backend/internal/config"
 	"github.com/aseno/backend/internal/database"
@@ -67,6 +68,10 @@ import (
 	user_model "github.com/aseno/backend/pkg/user/model"
 	user_repository "github.com/aseno/backend/pkg/user/repository"
 	user_service "github.com/aseno/backend/pkg/user/service"
+	waitlist_handler "github.com/aseno/backend/pkg/waitlist/handler"
+	waitlist_model "github.com/aseno/backend/pkg/waitlist/model"
+	waitlist_repository "github.com/aseno/backend/pkg/waitlist/repository"
+	waitlist_service "github.com/aseno/backend/pkg/waitlist/service"
 	whatsapp_evolution "github.com/aseno/backend/pkg/whatsapp/client/evolution"
 	whatsapp_handler "github.com/aseno/backend/pkg/whatsapp/handler"
 	whatsapp_model "github.com/aseno/backend/pkg/whatsapp/model"
@@ -119,6 +124,7 @@ func main() {
 	patientRecordRepo := patientrecord_repository.NewPatientRecordRepository(db.GetDB())
 	dashboardRepo := dashboard_repository.NewDashboardRepository(db.GetDB())
 	passwordResetRepo := auth_repository.NewPasswordResetRepository(db.GetDB())
+	waitlistRepo := waitlist_repository.NewWaitlistRepository(db.GetDB())
 
 	// Initialize WhatsApp client (Evolution API)
 	var whatsappClient whatsapp_service.WhatsAppClient
@@ -238,6 +244,10 @@ func main() {
 	// Initialize Dashboard service
 	dashboardSvc := dashboard_service.NewDashboardService(dashboardRepo)
 
+	// Initialize Waitlist service (if WhatsApp and queue are available)
+	var waitlistSvc waitlist_service.WaitlistService
+	// Note: We'll fully initialize this after the queue is set up
+
 	// Initialize Session Plan worker (runs every hour)
 	sessionPlanWorker := worker.NewSessionPlanWorker(sessionPlanService, 1*time.Hour)
 	go sessionPlanWorker.Start()
@@ -276,9 +286,25 @@ func main() {
 
 				log.Println("Reminder and Message Sender workers started")
 			}
+
+			// Initialize Waitlist service (requires WhatsApp and queue)
+			if whatsappService != nil {
+				waitlistSvc = waitlist_service.NewWaitlistService(
+					waitlistRepo,
+					&clinicInfoAdapter{clinicRepo: clinicRepo},
+					&professionalInfoAdapter{professionalRepo: professionalRepo},
+					&appointmentCreatorAdapter{appointmentService: appointmentService},
+					messageQueue,
+				)
+
+				// Wire waitlist service into appointment service
+				appointmentService.SetWaitlistProcessor(waitlistSvc)
+
+				log.Println("Waitlist (encaixe) service initialized")
+			}
 		}
 	} else {
-		log.Println("RabbitMQ not configured - reminder workers disabled")
+		log.Println("RabbitMQ not configured - reminder workers and waitlist disabled")
 	}
 
 	// Initialize middleware
@@ -325,6 +351,12 @@ func main() {
 	// Initialize Dashboard handler
 	dashboardHdlr := dashboard_handler.NewDashboardHandler(dashboardSvc)
 
+	// Initialize Waitlist handler
+	var waitlistHdlr waitlist_handler.WaitlistHandler
+	if waitlistSvc != nil {
+		waitlistHdlr = waitlist_handler.NewWaitlistHandler(waitlistSvc)
+	}
+
 	// Setup router
 	router := setupRouter(
 		cfg,
@@ -341,6 +373,7 @@ func main() {
 		userHdlr,
 		patientRecordHdlr,
 		dashboardHdlr,
+		waitlistHdlr,
 		authMiddleware,
 		tenantMiddleware,
 	)
@@ -407,6 +440,7 @@ func setupRouter(
 	userHandler user_handler.UserHandler,
 	patientRecordHandler patientrecord_handler.PatientRecordHandler,
 	dashboardHandler *dashboard_handler.DashboardHandler,
+	waitlistHandler waitlist_handler.WaitlistHandler,
 	authMiddleware auth_middleware.AuthMiddleware,
 	tenantMiddleware auth_middleware.TenantMiddleware,
 ) *gin.Engine {
@@ -486,6 +520,11 @@ func setupRouter(
 
 			// Patient Record routes (clinical records and session notes)
 			patientRecordHandler.RegisterRoutes(protected)
+
+			// Waitlist routes (lista de encaixe)
+			if waitlistHandler != nil {
+				waitlistHandler.RegisterRoutes(protected)
+			}
 
 			// Dashboard routes
 			dashboard := protected.Group("/dashboard")
@@ -575,6 +614,7 @@ func runMigrations(db *database.Database) error {
 		&patientrecord_model.PatientRecord{},
 		&patientrecord_model.SessionNote{},
 		&auth_model.PasswordReset{},
+		&waitlist_model.WaitlistEntry{},
 	}
 
 	if err := db.AutoMigrate(models...); err != nil {
@@ -583,4 +623,49 @@ func runMigrations(db *database.Database) error {
 
 	log.Println("Database migrations completed")
 	return nil
+}
+
+// Adapters for waitlist service dependencies
+
+// clinicInfoAdapter adapts clinic_repository to waitlist_service.ClinicInfoProvider
+type clinicInfoAdapter struct {
+	clinicRepo clinic_repository.ClinicRepository
+}
+
+func (a *clinicInfoAdapter) GetClinicInfo(ctx context.Context, clinicID uuid.UUID) (*waitlist_service.ClinicInfo, error) {
+	clinic, err := a.clinicRepo.GetByID(ctx, clinicID)
+	if err != nil {
+		return nil, err
+	}
+	return &waitlist_service.ClinicInfo{
+		ID:               clinic.ID,
+		Name:             clinic.Name,
+		WhatsAppInstance: clinic.WhatsAppInstance,
+		WhatsAppConnected: clinic.WhatsAppConnected,
+	}, nil
+}
+
+// professionalInfoAdapter adapts professional_repository to waitlist_service.ProfessionalInfoProvider
+type professionalInfoAdapter struct {
+	professionalRepo professional_repository.ProfessionalRepository
+}
+
+func (a *professionalInfoAdapter) GetProfessionalInfo(ctx context.Context, professionalID, clinicID uuid.UUID) (*waitlist_service.ProfessionalInfo, error) {
+	professional, err := a.professionalRepo.GetByID(ctx, professionalID, clinicID)
+	if err != nil {
+		return nil, err
+	}
+	return &waitlist_service.ProfessionalInfo{
+		ID:   professional.ID,
+		Name: professional.Name,
+	}, nil
+}
+
+// appointmentCreatorAdapter adapts appointment_service to waitlist_service.AppointmentCreator
+type appointmentCreatorAdapter struct {
+	appointmentService appointment_service.AppointmentService
+}
+
+func (a *appointmentCreatorAdapter) CreateFromWaitlist(ctx context.Context, clinicID, patientID, professionalID uuid.UUID, startTime time.Time, durationMinutes int) (uuid.UUID, error) {
+	return a.appointmentService.CreateFromWaitlist(ctx, clinicID, patientID, professionalID, startTime, durationMinutes)
 }

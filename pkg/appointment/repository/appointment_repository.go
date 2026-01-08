@@ -27,6 +27,9 @@ type AppointmentRepository interface {
 	// Reminder-related methods
 	GetPendingReminders(ctx context.Context, reminderType string, windowStart, windowEnd time.Time) ([]*model.AppointmentWithClinic, error)
 	MarkReminderSent(ctx context.Context, id uuid.UUID, reminderType string) error
+
+	// WhatsApp response handling
+	GetPendingByPhone(ctx context.Context, clinicID uuid.UUID, phone string) (*model.Appointment, error)
 }
 
 // appointmentRepository implements AppointmentRepository
@@ -327,4 +330,57 @@ func (r *appointmentRepository) MarkReminderSent(ctx context.Context, id uuid.UU
 		return errors.ErrInternalInstance.WithError(result.Error)
 	}
 	return nil
+}
+
+// GetPendingByPhone finds the most recent pending/confirmed appointment for a patient by phone
+// This is used to match incoming WhatsApp responses to appointments
+func (r *appointmentRepository) GetPendingByPhone(ctx context.Context, clinicID uuid.UUID, phone string) (*model.Appointment, error) {
+	var appointment model.Appointment
+
+	// Clean phone - remove non-digits for comparison
+	// The query will handle flexible matching
+
+	query := `
+		SELECT a.*
+		FROM appointments a
+		INNER JOIN patients p ON a.patient_id = p.id AND p.deleted_at IS NULL
+		WHERE a.clinic_id = ?
+			AND a.deleted_at IS NULL
+			AND a.status IN ('pending', 'confirmed')
+			AND a.start_time > NOW()
+			AND (
+				REGEXP_REPLACE(p.phone, '[^0-9]', '', 'g') LIKE '%' || REGEXP_REPLACE(?, '[^0-9]', '', 'g') || '%'
+				OR REGEXP_REPLACE(p.whatsapp, '[^0-9]', '', 'g') LIKE '%' || REGEXP_REPLACE(?, '[^0-9]', '', 'g') || '%'
+				OR REGEXP_REPLACE(?, '[^0-9]', '', 'g') LIKE '%' || REGEXP_REPLACE(p.phone, '[^0-9]', '', 'g') || '%'
+				OR REGEXP_REPLACE(?, '[^0-9]', '', 'g') LIKE '%' || REGEXP_REPLACE(p.whatsapp, '[^0-9]', '', 'g') || '%'
+			)
+		ORDER BY a.start_time ASC
+		LIMIT 1
+	`
+
+	err := r.db.WithContext(ctx).Raw(query, clinicID, phone, phone, phone, phone).Scan(&appointment).Error
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil, nil
+		}
+		return nil, errors.ErrInternalInstance.WithError(err)
+	}
+
+	// Check if we got a result
+	if appointment.ID == uuid.Nil {
+		return nil, nil
+	}
+
+	// Load relations
+	r.db.WithContext(ctx).
+		Model(&model.PatientInfo{}).
+		Where("id = ?", appointment.PatientID).
+		First(&appointment.Patient)
+
+	r.db.WithContext(ctx).
+		Model(&model.ProfessionalInfo{}).
+		Where("id = ?", appointment.ProfessionalID).
+		First(&appointment.Professional)
+
+	return &appointment, nil
 }
