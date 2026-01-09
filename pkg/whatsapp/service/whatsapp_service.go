@@ -5,11 +5,14 @@ import (
 	"fmt"
 	"log"
 	"regexp"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
 
+	aptModel "github.com/aseno/backend/pkg/appointment/model"
 	"github.com/aseno/backend/pkg/whatsapp/classifier"
 	"github.com/aseno/backend/pkg/whatsapp/model"
 )
@@ -92,6 +95,12 @@ type WhatsAppService interface {
 
 	// SetClassifier sets the AI classifier for message classification
 	SetClassifier(c classifier.MessageClassifier, confidenceThreshold float64)
+
+	// SetSlotSuggester sets the slot suggester for reschedule options
+	SetSlotSuggester(suggester SlotSuggester)
+
+	// SetAppointmentCreator sets the appointment creator for reschedule
+	SetAppointmentCreator(creator AppointmentCreator)
 }
 
 // whatsAppService implements WhatsAppService
@@ -101,6 +110,9 @@ type whatsAppService struct {
 	appointmentUpdater  AppointmentStatusUpdater
 	appointmentFinder   AppointmentFinder
 	waitlistHandler     WaitlistResponseHandler
+	slotSuggester       SlotSuggester
+	appointmentCreator  AppointmentCreator
+	rescheduleCache     *rescheduleCache
 	classifier          classifier.MessageClassifier
 	confidenceThreshold float64
 }
@@ -113,10 +125,73 @@ type AppointmentStatusUpdater interface {
 
 // AppointmentInfo represents appointment info for WhatsApp messages
 type AppointmentInfo struct {
-	ID           uuid.UUID
-	PatientName  string
-	Professional string
-	StartTime    time.Time
+	ID             uuid.UUID
+	PatientID      uuid.UUID
+	ProfessionalID uuid.UUID
+	PatientName    string
+	PatientPhone   string
+	Professional   string
+	StartTime      time.Time
+	EndTime        time.Time
+}
+
+// SlotSuggester interface for suggesting reschedule slots
+type SlotSuggester interface {
+	SuggestSmartSlots(ctx context.Context, clinicID, professionalID uuid.UUID, date time.Time, days int, durationMinutes int) ([]*aptModel.SmartSlotSuggestion, error)
+}
+
+// AppointmentCreator interface for creating appointments from reschedule
+type AppointmentCreator interface {
+	CreateFromReschedule(ctx context.Context, clinicID uuid.UUID, patientPhone string, slot *aptModel.SmartSlotSuggestion, originalApt *AppointmentInfo) (*AppointmentInfo, error)
+}
+
+// rescheduleCache stores pending reschedule options with expiration
+type rescheduleCache struct {
+	mu      sync.RWMutex
+	entries map[string]*rescheduleCacheEntry
+}
+
+type rescheduleCacheEntry struct {
+	slots       []*aptModel.SmartSlotSuggestion
+	originalApt *AppointmentInfo
+	clinicID    uuid.UUID
+	expiresAt   time.Time
+}
+
+func newRescheduleCache() *rescheduleCache {
+	return &rescheduleCache{
+		entries: make(map[string]*rescheduleCacheEntry),
+	}
+}
+
+func (c *rescheduleCache) set(phone string, slots []*aptModel.SmartSlotSuggestion, apt *AppointmentInfo, clinicID uuid.UUID, ttl time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.entries[phone] = &rescheduleCacheEntry{
+		slots:       slots,
+		originalApt: apt,
+		clinicID:    clinicID,
+		expiresAt:   time.Now().Add(ttl),
+	}
+}
+
+func (c *rescheduleCache) get(phone string) (*rescheduleCacheEntry, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	entry, ok := c.entries[phone]
+	if !ok {
+		return nil, false
+	}
+	if time.Now().After(entry.expiresAt) {
+		return nil, false
+	}
+	return entry, true
+}
+
+func (c *rescheduleCache) delete(phone string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.entries, phone)
 }
 
 // AppointmentFinder interface for finding appointments by phone
@@ -139,6 +214,7 @@ func NewWhatsAppService(
 		client:             client,
 		messageRepo:        messageRepo,
 		appointmentUpdater: appointmentUpdater,
+		rescheduleCache:    newRescheduleCache(),
 	}
 }
 
@@ -161,6 +237,16 @@ func (s *whatsAppService) SetAppointmentUpdater(updater AppointmentStatusUpdater
 func (s *whatsAppService) SetClassifier(c classifier.MessageClassifier, confidenceThreshold float64) {
 	s.classifier = c
 	s.confidenceThreshold = confidenceThreshold
+}
+
+// SetSlotSuggester sets the slot suggester for reschedule options
+func (s *whatsAppService) SetSlotSuggester(suggester SlotSuggester) {
+	s.slotSuggester = suggester
+}
+
+// SetAppointmentCreator sets the appointment creator for reschedule
+func (s *whatsAppService) SetAppointmentCreator(creator AppointmentCreator) {
+	s.appointmentCreator = creator
 }
 
 // CreateInstance creates a new WhatsApp instance for a clinic
@@ -195,6 +281,78 @@ func (s *whatsAppService) SendCancellationFeedback(ctx context.Context, instance
 	message := "❌ Entendido, seu agendamento foi cancelado.\n\nSe precisar reagendar, entre em contato conosco."
 	_, err := s.SendTextMessage(ctx, instance, phone, message)
 	return err
+}
+
+// SendRescheduleOptions sends reschedule options after cancellation
+func (s *whatsAppService) SendRescheduleOptions(ctx context.Context, instance, phone string, apt *AppointmentInfo, slots []*aptModel.SmartSlotSuggestion, clinicID uuid.UUID) error {
+	// Store slots in cache for later lookup
+	s.rescheduleCache.set(phone, slots, apt, clinicID, 30*time.Minute)
+
+	// Build message with options
+	message := fmt.Sprintf(
+		"❌ Seu agendamento com %s foi cancelado.\n\n"+
+			"Deseja reagendar? Escolha um novo horario:\n\n",
+		apt.Professional,
+	)
+
+	buttons := make([]model.MessageButton, 0, len(slots))
+	for i, slot := range slots {
+		dateStr := slot.StartTime.Format("02/01 15:04")
+		message += fmt.Sprintf("%d. %s (%s)\n", i+1, dateStr, slot.Label)
+		buttons = append(buttons, model.MessageButton{
+			ID:    fmt.Sprintf("rsch_%d", i),
+			Title: dateStr,
+		})
+	}
+
+	message += "\nOu responda NAO se nao quiser reagendar."
+
+	_, err := s.client.SendButtonMessage(ctx, instance, phone, message, buttons)
+	return err
+}
+
+// handleRescheduleResponse handles a reschedule button response
+func (s *whatsAppService) handleRescheduleResponse(ctx context.Context, msg *model.ParsedIncomingMessage) error {
+	// Extract slot index from button ID (rsch_0, rsch_1, etc.)
+	idxStr := strings.TrimPrefix(msg.ButtonID, "rsch_")
+	idx, err := strconv.Atoi(idxStr)
+	if err != nil {
+		s.SendTextMessage(ctx, msg.Instance, msg.Phone, "Opcao invalida. Por favor, entre em contato conosco.")
+		return err
+	}
+
+	// Get cached slots
+	entry, ok := s.rescheduleCache.get(msg.Phone)
+	if !ok {
+		s.SendTextMessage(ctx, msg.Instance, msg.Phone, "Desculpe, as opcoes expiraram. Por favor, entre em contato conosco para reagendar.")
+		return nil // Not an error, just expired options
+	}
+
+	if idx < 0 || idx >= len(entry.slots) {
+		s.SendTextMessage(ctx, msg.Instance, msg.Phone, "Opcao invalida. Por favor, entre em contato conosco.")
+		return nil
+	}
+
+	selectedSlot := entry.slots[idx]
+
+	// Create new appointment if creator is available
+	if s.appointmentCreator == nil {
+		s.SendTextMessage(ctx, msg.Instance, msg.Phone, "Reagendamento nao disponivel no momento. Por favor, entre em contato conosco.")
+		return nil
+	}
+
+	newApt, err := s.appointmentCreator.CreateFromReschedule(ctx, entry.clinicID, msg.Phone, selectedSlot, entry.originalApt)
+	if err != nil {
+		log.Printf("[WhatsApp] Failed to create reschedule appointment: %v", err)
+		s.SendTextMessage(ctx, msg.Instance, msg.Phone, "Nao foi possivel reagendar. Por favor, entre em contato conosco.")
+		return err
+	}
+
+	// Clear cache
+	s.rescheduleCache.delete(msg.Phone)
+
+	// Send confirmation
+	return s.SendConfirmationFeedback(ctx, msg.Instance, msg.Phone, newApt)
 }
 
 // SendConfirmationMessage sends an appointment confirmation message
@@ -294,6 +452,11 @@ func (s *whatsAppService) HandleIncomingMessage(ctx context.Context, clinicID uu
 	// Log incoming message
 	s.logMessage(ctx, clinicID, nil, msg.Phone, model.MessageDirectionInbound, msg.Content, model.MessageStatusDelivered, msg.MessageID)
 
+	// Check for reschedule button response first (rsch_0, rsch_1, etc.)
+	if msg.ButtonID != "" && strings.HasPrefix(msg.ButtonID, "rsch_") {
+		return s.handleRescheduleResponse(ctx, msg)
+	}
+
 	// Classify intent
 	intent := s.ClassifyMessage(msg.Content)
 
@@ -346,7 +509,30 @@ func (s *whatsAppService) HandleIncomingMessage(ctx context.Context, clinicID uu
 			apt, err := s.appointmentFinder.GetPendingByPhone(ctx, clinicID, msg.Phone)
 			if err == nil && apt != nil {
 				if err := s.appointmentUpdater.CancelByPatient(ctx, apt.ID, clinicID, "Cancelado via WhatsApp"); err == nil {
-					// Send feedback message
+					// Try to offer reschedule options
+					if s.slotSuggester != nil {
+						durationMinutes := int(apt.EndTime.Sub(apt.StartTime).Minutes())
+						if durationMinutes <= 0 {
+							durationMinutes = 50 // Default duration
+						}
+
+						slots, err := s.slotSuggester.SuggestSmartSlots(
+							ctx, clinicID, apt.ProfessionalID,
+							time.Now(), 14, // Next 14 days
+							durationMinutes,
+						)
+
+						if err == nil && len(slots) >= 3 {
+							// Limit to 3 options (WhatsApp button limit)
+							if len(slots) > 3 {
+								slots = slots[:3]
+							}
+							s.SendRescheduleOptions(ctx, msg.Instance, msg.Phone, apt, slots, clinicID)
+							return nil
+						}
+					}
+
+					// Fallback: simple cancellation message
 					s.SendCancellationFeedback(ctx, msg.Instance, msg.Phone)
 					return nil
 				}

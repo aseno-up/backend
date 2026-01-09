@@ -20,11 +20,12 @@ const (
 
 // JWTClaims represents the custom claims for JWT tokens
 type JWTClaims struct {
-	UserID   uuid.UUID           `json:"user_id"`
-	ClinicID uuid.UUID           `json:"clinic_id"`
-	Email    string              `json:"email"`
-	Role     user_model.UserRole `json:"role"`
-	Type     TokenType           `json:"type"`
+	UserID         uuid.UUID           `json:"user_id"`
+	ClinicID       uuid.UUID           `json:"clinic_id"`
+	Email          string              `json:"email"`
+	Role           user_model.UserRole `json:"role"`
+	ProfessionalID *uuid.UUID          `json:"professional_id,omitempty"`
+	Type           TokenType           `json:"type"`
 	jwt.RegisteredClaims
 }
 

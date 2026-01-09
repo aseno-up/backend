@@ -32,8 +32,10 @@ import (
 	calendar_model "github.com/aseno/backend/pkg/calendar/model"
 	calendar_repository "github.com/aseno/backend/pkg/calendar/repository"
 	calendar_service "github.com/aseno/backend/pkg/calendar/service"
+	clinic_handler "github.com/aseno/backend/pkg/clinic/handler"
 	clinic_model "github.com/aseno/backend/pkg/clinic/model"
 	clinic_repository "github.com/aseno/backend/pkg/clinic/repository"
+	clinic_service "github.com/aseno/backend/pkg/clinic/service"
 	dashboard_handler "github.com/aseno/backend/pkg/dashboard/handler"
 	dashboard_repository "github.com/aseno/backend/pkg/dashboard/repository"
 	dashboard_service "github.com/aseno/backend/pkg/dashboard/service"
@@ -217,7 +219,9 @@ func main() {
 		// Wire up appointment status updater for WhatsApp confirmations/cancellations
 		whatsappService.SetAppointmentUpdater(&appointmentStatusAdapter{appointmentService: appointmentService})
 		whatsappService.SetAppointmentFinder(&appointmentFinderAdapter{appointmentRepo: appointmentRepo})
-		log.Println("WhatsApp appointment status updater connected")
+		whatsappService.SetSlotSuggester(appointmentService)
+		whatsappService.SetAppointmentCreator(&whatsappAppointmentCreatorAdapter{appointmentService: appointmentService})
+		log.Println("WhatsApp appointment status updater and reschedule connected")
 
 		// Initialize AI Classifier for message classification (if enabled)
 		if cfg.AIClassifierEnabled() {
@@ -407,6 +411,10 @@ func main() {
 	// Initialize Analytics handler
 	analyticsHdlr := analytics_handler.NewAnalyticsHandler(analyticsSvc)
 
+	// Initialize Onboarding service and handler
+	onboardingSvc := clinic_service.NewOnboardingService(db.GetDB(), clinicRepo)
+	onboardingHdlr := clinic_handler.NewOnboardingHandler(onboardingSvc)
+
 	// Initialize Waitlist handler
 	var waitlistHdlr waitlist_handler.WaitlistHandler
 	if waitlistSvc != nil {
@@ -430,6 +438,7 @@ func main() {
 		patientRecordHdlr,
 		dashboardHdlr,
 		analyticsHdlr,
+		onboardingHdlr,
 		waitlistHdlr,
 		authMiddleware,
 		tenantMiddleware,
@@ -498,6 +507,7 @@ func setupRouter(
 	patientRecordHandler patientrecord_handler.PatientRecordHandler,
 	dashboardHandler *dashboard_handler.DashboardHandler,
 	analyticsHandler analytics_handler.AnalyticsHandler,
+	onboardingHandler clinic_handler.OnboardingHandler,
 	waitlistHandler waitlist_handler.WaitlistHandler,
 	authMiddleware auth_middleware.AuthMiddleware,
 	tenantMiddleware auth_middleware.TenantMiddleware,
@@ -555,8 +565,13 @@ func setupRouter(
 			// Patient routes
 			patientHandler.RegisterRoutes(protected)
 
-			// Appointment routes
-			appointmentHandler.RegisterRoutes(protected)
+			// Appointment routes (with professional access control)
+			// Professional role can only see their own appointments
+			appointmentsProtected := protected.Group("")
+			appointmentsProtected.Use(authMiddleware.RequireProfessionalAccess())
+			{
+				appointmentHandler.RegisterRoutes(appointmentsProtected)
+			}
 
 			// WhatsApp routes (protected endpoints)
 			if whatsappHandler != nil {
@@ -579,19 +594,28 @@ func setupRouter(
 			// Patient Record routes (clinical records and session notes)
 			patientRecordHandler.RegisterRoutes(protected)
 
+			// Onboarding routes
+			onboardingHandler.RegisterRoutes(protected)
+
 			// Waitlist routes (lista de encaixe)
 			if waitlistHandler != nil {
 				waitlistHandler.RegisterRoutes(protected)
 			}
 
-			// Dashboard routes
-			dashboard := protected.Group("/dashboard")
+			// Financial routes (admin/owner only)
+			// Dashboard and Analytics require financial access
+			financialProtected := protected.Group("")
+			financialProtected.Use(authMiddleware.RequireFinancialAccess())
 			{
-				dashboard.GET("/metrics", dashboardHandler.GetMetrics)
-			}
+				// Dashboard routes
+				dashboard := financialProtected.Group("/dashboard")
+				{
+					dashboard.GET("/metrics", dashboardHandler.GetMetrics)
+				}
 
-			// Analytics routes (slot suggestions)
-			analyticsHandler.RegisterRoutes(protected)
+				// Analytics routes (slot suggestions and reports)
+				analyticsHandler.RegisterRoutes(financialProtected)
+			}
 
 			// Admin-only routes
 			adminProtected := protected.Group("")
@@ -776,21 +800,89 @@ func (a *appointmentFinderAdapter) GetPendingByPhone(ctx context.Context, clinic
 	if apt == nil {
 		return nil, nil
 	}
-	
+
 	profName := ""
 	if apt.Professional != nil {
 		profName = apt.Professional.Name
 	}
-	
+
 	patientName := ""
+	patientPhone := ""
 	if apt.Patient != nil {
 		patientName = apt.Patient.Name
+		if apt.Patient.WhatsApp != "" {
+			patientPhone = apt.Patient.WhatsApp
+		} else {
+			patientPhone = apt.Patient.Phone
+		}
 	}
 
 	return &whatsapp_service.AppointmentInfo{
-		ID:           apt.ID,
-		PatientName:  patientName,
-		Professional: profName,
-		StartTime:    apt.StartTime,
+		ID:             apt.ID,
+		PatientID:      apt.PatientID,
+		ProfessionalID: apt.ProfessionalID,
+		PatientName:    patientName,
+		PatientPhone:   patientPhone,
+		Professional:   profName,
+		StartTime:      apt.StartTime,
+		EndTime:        apt.EndTime,
+	}, nil
+}
+
+// whatsappAppointmentCreatorAdapter adapts appointment_service to whatsapp_service.AppointmentCreator
+type whatsappAppointmentCreatorAdapter struct {
+	appointmentService appointment_service.AppointmentService
+}
+
+func (a *whatsappAppointmentCreatorAdapter) CreateFromReschedule(ctx context.Context, clinicID uuid.UUID, patientPhone string, slot *appointment_model.SmartSlotSuggestion, originalApt *whatsapp_service.AppointmentInfo) (*whatsapp_service.AppointmentInfo, error) {
+	// Calculate duration from slot
+	durationMinutes := int(slot.EndTime.Sub(slot.StartTime).Minutes())
+	if durationMinutes <= 0 {
+		durationMinutes = 50 // Default duration
+	}
+
+	// Create new appointment
+	req := &appointment_model.CreateAppointmentRequest{
+		PatientID:       originalApt.PatientID,
+		ProfessionalID:  originalApt.ProfessionalID,
+		StartTime:       slot.StartTime,
+		DurationMinutes: durationMinutes,
+		Title:           "Reagendamento",
+		Notes:           "Reagendado via WhatsApp",
+	}
+
+	aptResp, err := a.appointmentService.Create(ctx, clinicID, req)
+	if err != nil {
+		return nil, err
+	}
+
+	// Confirm the appointment immediately since patient chose this slot
+	_, err = a.appointmentService.Confirm(ctx, aptResp.ID, clinicID, &appointment_model.ConfirmAppointmentRequest{
+		PatientNotes: "Confirmado automaticamente no reagendamento",
+	})
+	if err != nil {
+		// Log but don't fail - appointment was created
+		log.Printf("[Reschedule] Failed to auto-confirm appointment: %v", err)
+	}
+
+	// Get names from nested structs
+	patientName := ""
+	if aptResp.Patient != nil {
+		patientName = aptResp.Patient.Name
+	}
+	professionalName := ""
+	if aptResp.Professional != nil {
+		professionalName = aptResp.Professional.Name
+	}
+
+	return &whatsapp_service.AppointmentInfo{
+		ID:             aptResp.ID,
+		PatientID:      aptResp.PatientID,
+		ProfessionalID: aptResp.ProfessionalID,
+		PatientName:    patientName,
+		PatientPhone:   patientPhone,
+		Professional:   professionalName,
+		StartTime:      aptResp.StartTime,
+		EndTime:        aptResp.EndTime,
 	}, nil
 }

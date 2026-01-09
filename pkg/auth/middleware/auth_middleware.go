@@ -13,10 +13,12 @@ import (
 
 // Context keys for storing auth data
 const (
-	ContextKeyUserID   = "user_id"
-	ContextKeyClinicID = "clinic_id"
-	ContextKeyUserRole = "user_role"
-	ContextKeyEmail    = "email"
+	ContextKeyUserID                = "user_id"
+	ContextKeyClinicID              = "clinic_id"
+	ContextKeyUserRole              = "user_role"
+	ContextKeyEmail                 = "email"
+	ContextKeyProfessionalID        = "professional_id"
+	ContextKeyForceProfessionalFilter = "force_professional_filter"
 )
 
 // AuthMiddleware defines the interface for authentication middleware
@@ -25,6 +27,8 @@ type AuthMiddleware interface {
 	RequireRole(roles ...user_model.UserRole) gin.HandlerFunc
 	RequireAdmin() gin.HandlerFunc
 	RequireOwner() gin.HandlerFunc
+	RequireProfessionalAccess() gin.HandlerFunc
+	RequireFinancialAccess() gin.HandlerFunc
 }
 
 // authMiddleware implements AuthMiddleware
@@ -81,6 +85,9 @@ func (m *authMiddleware) Authenticate() gin.HandlerFunc {
 		c.Set(ContextKeyClinicID, claims.ClinicID)
 		c.Set(ContextKeyUserRole, claims.Role)
 		c.Set(ContextKeyEmail, claims.Email)
+		if claims.ProfessionalID != nil {
+			c.Set(ContextKeyProfessionalID, *claims.ProfessionalID)
+		}
 
 		c.Next()
 	}
@@ -163,6 +170,65 @@ func (m *authMiddleware) OptionalAuth() gin.HandlerFunc {
 		c.Set(ContextKeyClinicID, claims.ClinicID)
 		c.Set(ContextKeyUserRole, claims.Role)
 		c.Set(ContextKeyEmail, claims.Email)
+		if claims.ProfessionalID != nil {
+			c.Set(ContextKeyProfessionalID, *claims.ProfessionalID)
+		}
+
+		c.Next()
+	}
+}
+
+// RequireProfessionalAccess ensures professionals can only access their own data
+// For professional role: forces filtering by their professional_id
+// For other roles: allows access to all data
+func (m *authMiddleware) RequireProfessionalAccess() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		userRole, exists := c.Get(ContextKeyUserRole)
+		if !exists {
+			c.JSON(http.StatusUnauthorized, errors.ToResponse(errors.ErrUnauthorizedInstance))
+			c.Abort()
+			return
+		}
+
+		role := userRole.(user_model.UserRole)
+
+		// If user is a professional, force filtering by their professional_id
+		if role == user_model.UserRoleProfessional {
+			professionalID, exists := c.Get(ContextKeyProfessionalID)
+			if !exists {
+				c.JSON(http.StatusForbidden, errors.ToResponse(
+					errors.ErrForbiddenInstance.WithMessage("User is not linked to a professional account")))
+				c.Abort()
+				return
+			}
+
+			// Set the forced filter so handlers can use it
+			c.Set(ContextKeyForceProfessionalFilter, professionalID)
+		}
+
+		c.Next()
+	}
+}
+
+// RequireFinancialAccess ensures only admin and owner can access financial data
+func (m *authMiddleware) RequireFinancialAccess() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		userRole, exists := c.Get(ContextKeyUserRole)
+		if !exists {
+			c.JSON(http.StatusUnauthorized, errors.ToResponse(errors.ErrUnauthorizedInstance))
+			c.Abort()
+			return
+		}
+
+		role := userRole.(user_model.UserRole)
+
+		// Only owner and admin can access financial data
+		if role != user_model.UserRoleOwner && role != user_model.UserRoleAdmin {
+			c.JSON(http.StatusForbidden, errors.ToResponse(
+				errors.ErrForbiddenInstance.WithMessage("Financial data requires admin access")))
+			c.Abort()
+			return
+		}
 
 		c.Next()
 	}

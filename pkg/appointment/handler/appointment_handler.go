@@ -11,6 +11,7 @@ import (
 	"github.com/aseno/backend/internal/errors"
 	"github.com/aseno/backend/pkg/appointment/model"
 	"github.com/aseno/backend/pkg/appointment/service"
+	"github.com/aseno/backend/pkg/auth/middleware"
 )
 
 // AppointmentHandler defines the interface for appointment handlers
@@ -108,7 +109,12 @@ func (h *appointmentHandler) List(c *gin.Context) {
 	filter.Page, _ = strconv.Atoi(c.DefaultQuery("page", "1"))
 	filter.PerPage, _ = strconv.Atoi(c.DefaultQuery("per_page", "20"))
 
-	if professionalID := c.Query("professional_id"); professionalID != "" {
+	// Check if professional access is forced (professional role can only see their own appointments)
+	if forcedProfID, exists := c.Get(middleware.ContextKeyForceProfessionalFilter); exists {
+		id := forcedProfID.(uuid.UUID)
+		filter.ProfessionalID = &id
+	} else if professionalID := c.Query("professional_id"); professionalID != "" {
+		// Allow filtering by professional_id for admin/receptionist
 		if id, err := uuid.Parse(professionalID); err == nil {
 			filter.ProfessionalID = &id
 		}
@@ -159,7 +165,11 @@ func (h *appointmentHandler) GetByDay(c *gin.Context) {
 	}
 
 	var professionalID *uuid.UUID
-	if profID := c.Query("professional_id"); profID != "" {
+	// Check if professional access is forced (professional role can only see their own appointments)
+	if forcedProfID, exists := c.Get(middleware.ContextKeyForceProfessionalFilter); exists {
+		id := forcedProfID.(uuid.UUID)
+		professionalID = &id
+	} else if profID := c.Query("professional_id"); profID != "" {
 		if id, err := uuid.Parse(profID); err == nil {
 			professionalID = &id
 		}
@@ -187,7 +197,11 @@ func (h *appointmentHandler) GetByWeek(c *gin.Context) {
 	}
 
 	var professionalID *uuid.UUID
-	if profID := c.Query("professional_id"); profID != "" {
+	// Check if professional access is forced (professional role can only see their own appointments)
+	if forcedProfID, exists := c.Get(middleware.ContextKeyForceProfessionalFilter); exists {
+		id := forcedProfID.(uuid.UUID)
+		professionalID = &id
+	} else if profID := c.Query("professional_id"); profID != "" {
 		if id, err := uuid.Parse(profID); err == nil {
 			professionalID = &id
 		}

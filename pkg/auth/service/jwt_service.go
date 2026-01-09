@@ -64,11 +64,12 @@ func (s *jwtService) GenerateAccessToken(user *user_model.User) (string, time.Ti
 	expiresAt := time.Now().Add(s.accessTokenTTL)
 
 	claims := &model.JWTClaims{
-		UserID:   user.ID,
-		ClinicID: user.ClinicID,
-		Email:    user.Email,
-		Role:     user.Role,
-		Type:     model.TokenTypeAccess,
+		UserID:         user.ID,
+		ClinicID:       user.ClinicID,
+		Email:          user.Email,
+		Role:           user.Role,
+		ProfessionalID: user.ProfessionalID,
+		Type:           model.TokenTypeAccess,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(expiresAt),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
@@ -93,11 +94,12 @@ func (s *jwtService) GenerateRefreshToken(user *user_model.User) (string, error)
 	expiresAt := time.Now().Add(s.refreshTokenTTL)
 
 	claims := &model.JWTClaims{
-		UserID:   user.ID,
-		ClinicID: user.ClinicID,
-		Email:    user.Email,
-		Role:     user.Role,
-		Type:     model.TokenTypeRefresh,
+		UserID:         user.ID,
+		ClinicID:       user.ClinicID,
+		Email:          user.Email,
+		Role:           user.Role,
+		ProfessionalID: user.ProfessionalID,
+		Type:           model.TokenTypeRefresh,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(expiresAt),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
