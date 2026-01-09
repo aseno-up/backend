@@ -15,6 +15,11 @@ type DashboardRepository interface {
 	GetTopAbsentees(ctx context.Context, clinicID uuid.UUID, start, end time.Time, limit int) ([]model.PatientAbsentee, error)
 	GetFutureSessionsCount(ctx context.Context, clinicID uuid.UUID) (int64, error)
 	GetProfessionals(ctx context.Context, clinicID uuid.UUID) ([]ProfessionalHours, error)
+	// Time pattern analysis
+	GetNoShowsByTimePeriod(ctx context.Context, clinicID uuid.UUID, start, end time.Time) ([]model.TimePatternStats, error)
+	GetNoShowsByDayOfWeek(ctx context.Context, clinicID uuid.UUID, start, end time.Time) ([]model.TimePatternStats, error)
+	GetPatientTimePatterns(ctx context.Context, clinicID uuid.UUID, start, end time.Time, minAppointments int) ([]model.PatientTimePattern, error)
+	GetProfessionalDayPatterns(ctx context.Context, clinicID uuid.UUID, start, end time.Time, minAppointments int) ([]model.ProfessionalDayPattern, error)
 }
 
 type dashboardRepository struct {
@@ -108,4 +113,127 @@ func (r *dashboardRepository) GetFutureSessionsCount(ctx context.Context, clinic
 		Where("clinic_id = ? AND start_time > ?", clinicID, time.Now()).
 		Count(&count).Error
 	return count, err
+}
+
+// GetNoShowsByTimePeriod returns no-show statistics grouped by time period (morning/afternoon/evening)
+func (r *dashboardRepository) GetNoShowsByTimePeriod(ctx context.Context, clinicID uuid.UUID, start, end time.Time) ([]model.TimePatternStats, error) {
+	var results []model.TimePatternStats
+
+	query := `
+		SELECT
+			CASE
+				WHEN EXTRACT(HOUR FROM start_time) < 12 THEN 'morning'
+				WHEN EXTRACT(HOUR FROM start_time) < 18 THEN 'afternoon'
+				ELSE 'evening'
+			END as period,
+			COUNT(CASE WHEN status = 'no_show' THEN 1 END) as no_show_count,
+			COUNT(*) as total_count,
+			ROUND(COUNT(CASE WHEN status = 'no_show' THEN 1 END)::numeric / NULLIF(COUNT(*), 0) * 100, 1) as no_show_rate
+		FROM appointments
+		WHERE clinic_id = ?
+			AND start_time BETWEEN ? AND ?
+			AND status IN ('completed', 'no_show')
+		GROUP BY period
+		ORDER BY no_show_rate DESC
+	`
+
+	err := r.db.WithContext(ctx).Raw(query, clinicID, start, end).Scan(&results).Error
+	return results, err
+}
+
+// GetNoShowsByDayOfWeek returns no-show statistics grouped by day of week
+func (r *dashboardRepository) GetNoShowsByDayOfWeek(ctx context.Context, clinicID uuid.UUID, start, end time.Time) ([]model.TimePatternStats, error) {
+	var results []model.TimePatternStats
+
+	query := `
+		SELECT
+			CASE EXTRACT(DOW FROM start_time)
+				WHEN 0 THEN 'Domingo'
+				WHEN 1 THEN 'Segunda'
+				WHEN 2 THEN 'Terca'
+				WHEN 3 THEN 'Quarta'
+				WHEN 4 THEN 'Quinta'
+				WHEN 5 THEN 'Sexta'
+				WHEN 6 THEN 'Sabado'
+			END as period,
+			COUNT(CASE WHEN status = 'no_show' THEN 1 END) as no_show_count,
+			COUNT(*) as total_count,
+			ROUND(COUNT(CASE WHEN status = 'no_show' THEN 1 END)::numeric / NULLIF(COUNT(*), 0) * 100, 1) as no_show_rate
+		FROM appointments
+		WHERE clinic_id = ?
+			AND start_time BETWEEN ? AND ?
+			AND status IN ('completed', 'no_show')
+		GROUP BY EXTRACT(DOW FROM start_time)
+		HAVING COUNT(*) >= 3
+		ORDER BY no_show_rate DESC
+	`
+
+	err := r.db.WithContext(ctx).Raw(query, clinicID, start, end).Scan(&results).Error
+	return results, err
+}
+
+// GetPatientTimePatterns returns patients with high no-show rates in specific time periods
+func (r *dashboardRepository) GetPatientTimePatterns(ctx context.Context, clinicID uuid.UUID, start, end time.Time, minAppointments int) ([]model.PatientTimePattern, error) {
+	var results []model.PatientTimePattern
+
+	query := `
+		SELECT
+			a.patient_id::text as patient_id,
+			p.name as patient_name,
+			CASE
+				WHEN EXTRACT(HOUR FROM a.start_time) < 12 THEN 'morning'
+				WHEN EXTRACT(HOUR FROM a.start_time) < 18 THEN 'afternoon'
+				ELSE 'evening'
+			END as period,
+			COUNT(CASE WHEN a.status = 'no_show' THEN 1 END) as no_show_count,
+			COUNT(*) as total_count,
+			ROUND(COUNT(CASE WHEN a.status = 'no_show' THEN 1 END)::numeric / NULLIF(COUNT(*), 0) * 100, 1) as no_show_rate
+		FROM appointments a
+		JOIN patients p ON a.patient_id = p.id
+		WHERE a.clinic_id = ?
+			AND a.start_time BETWEEN ? AND ?
+			AND a.status IN ('completed', 'no_show')
+		GROUP BY a.patient_id, p.name, period
+		HAVING COUNT(*) >= ? AND COUNT(CASE WHEN a.status = 'no_show' THEN 1 END) >= 2
+		ORDER BY no_show_rate DESC, no_show_count DESC
+		LIMIT 10
+	`
+
+	err := r.db.WithContext(ctx).Raw(query, clinicID, start, end, minAppointments).Scan(&results).Error
+	return results, err
+}
+
+// GetProfessionalDayPatterns returns professionals with high no-show rates on specific days
+func (r *dashboardRepository) GetProfessionalDayPatterns(ctx context.Context, clinicID uuid.UUID, start, end time.Time, minAppointments int) ([]model.ProfessionalDayPattern, error) {
+	var results []model.ProfessionalDayPattern
+
+	query := `
+		SELECT
+			a.professional_id::text as professional_id,
+			pr.name as professional_name,
+			CASE EXTRACT(DOW FROM a.start_time)
+				WHEN 0 THEN 'Domingo'
+				WHEN 1 THEN 'Segunda'
+				WHEN 2 THEN 'Terca'
+				WHEN 3 THEN 'Quarta'
+				WHEN 4 THEN 'Quinta'
+				WHEN 5 THEN 'Sexta'
+				WHEN 6 THEN 'Sabado'
+			END as day_of_week,
+			COUNT(CASE WHEN a.status = 'no_show' THEN 1 END) as no_show_count,
+			COUNT(*) as total_count,
+			ROUND(COUNT(CASE WHEN a.status = 'no_show' THEN 1 END)::numeric / NULLIF(COUNT(*), 0) * 100, 1) as no_show_rate
+		FROM appointments a
+		JOIN professionals pr ON a.professional_id = pr.id
+		WHERE a.clinic_id = ?
+			AND a.start_time BETWEEN ? AND ?
+			AND a.status IN ('completed', 'no_show')
+		GROUP BY a.professional_id, pr.name, EXTRACT(DOW FROM a.start_time)
+		HAVING COUNT(*) >= ? AND COUNT(CASE WHEN a.status = 'no_show' THEN 1 END) >= 2
+		ORDER BY no_show_rate DESC, no_show_count DESC
+		LIMIT 10
+	`
+
+	err := r.db.WithContext(ctx).Raw(query, clinicID, start, end, minAppointments).Scan(&results).Error
+	return results, err
 }
