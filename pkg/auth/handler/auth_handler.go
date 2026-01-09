@@ -23,6 +23,8 @@ type AuthHandler interface {
 	ChangePassword(c *gin.Context)
 	RequestPasswordReset(c *gin.Context)
 	ResetPassword(c *gin.Context)
+	VerifyEmail(c *gin.Context)
+	ResendVerificationEmail(c *gin.Context)
 }
 
 // authHandler implements AuthHandler
@@ -48,6 +50,8 @@ func (h *authHandler) RegisterRoutes(router gin.IRouter) {
 		auth.POST("/refresh", h.RefreshToken)
 		auth.POST("/forgot-password", h.RequestPasswordReset)
 		auth.POST("/reset-password", h.ResetPassword)
+		auth.POST("/verify-email", h.VerifyEmail)
+		auth.POST("/resend-verification", h.ResendVerificationEmail)
 	}
 }
 
@@ -324,4 +328,54 @@ func (h *authHandler) ResetPassword(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "Password successfully reset."})
+}
+
+// VerifyEmail handles email verification
+// @Summary Verify email with token
+// @Tags Auth
+// @Accept json
+// @Produce json
+// @Param request body model.VerifyEmailRequest true "Verification token"
+// @Success 200 {object} map[string]string
+// @Failure 400 {object} errors.AppError
+// @Router /auth/verify-email [post]
+func (h *authHandler) VerifyEmail(c *gin.Context) {
+	var req model.VerifyEmailRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, errors.ToResponse(errors.ErrValidationInstance.WithError(err)))
+		return
+	}
+
+	if err := h.authService.VerifyEmail(c.Request.Context(), req.Token); err != nil {
+		statusCode := errors.GetStatusCode(err)
+		c.JSON(statusCode, errors.ToResponse(err))
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Email verified successfully."})
+}
+
+// ResendVerificationEmail handles resending verification email
+// @Summary Resend verification email
+// @Tags Auth
+// @Accept json
+// @Produce json
+// @Param request body model.ResendVerificationRequest true "Email"
+// @Success 200 {object} map[string]string
+// @Failure 400 {object} errors.AppError
+// @Router /auth/resend-verification [post]
+func (h *authHandler) ResendVerificationEmail(c *gin.Context) {
+	var req model.ResendVerificationRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, errors.ToResponse(errors.ErrValidationInstance.WithError(err)))
+		return
+	}
+
+	if err := h.authService.ResendVerificationEmail(c.Request.Context(), req.Email); err != nil {
+		statusCode := errors.GetStatusCode(err)
+		c.JSON(statusCode, errors.ToResponse(err))
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "If an account exists with this email and is not verified, a verification email has been sent."})
 }

@@ -33,6 +33,10 @@ type AuthService interface {
 	ChangePassword(ctx context.Context, userID uuid.UUID, req *model.ChangePasswordRequest) error
 	RequestPasswordReset(ctx context.Context, req *model.RequestPasswordResetRequest) error
 	ResetPassword(ctx context.Context, req *model.ResetPasswordRequest) error
+	// Email verification
+	SendVerificationEmail(ctx context.Context, userID uuid.UUID) error
+	VerifyEmail(ctx context.Context, token string) error
+	ResendVerificationEmail(ctx context.Context, email string) error
 }
 
 // GoogleAuthClient defines the interface for Google authentication
@@ -53,12 +57,13 @@ type GoogleUserInfo struct {
 
 // authService implements AuthService
 type authService struct {
-	userRepo          user_repository.UserRepository
-	clinicRepo        clinic_repository.ClinicRepository
-	passwordResetRepo auth_repository.PasswordResetRepository
-	jwtService        JWTService
-	googleClient      GoogleAuthClient
-	emailService      email_service.EmailService
+	userRepo              user_repository.UserRepository
+	clinicRepo            clinic_repository.ClinicRepository
+	passwordResetRepo     auth_repository.PasswordResetRepository
+	emailVerificationRepo auth_repository.EmailVerificationRepository
+	jwtService            JWTService
+	googleClient          GoogleAuthClient
+	emailService          email_service.EmailService
 }
 
 // NewAuthService creates a new auth service
@@ -66,15 +71,17 @@ func NewAuthService(
 	userRepo user_repository.UserRepository,
 	clinicRepo clinic_repository.ClinicRepository,
 	passwordResetRepo auth_repository.PasswordResetRepository,
+	emailVerificationRepo auth_repository.EmailVerificationRepository,
 	jwtService JWTService,
 	emailService email_service.EmailService,
 ) AuthService {
 	return &authService{
-		userRepo:          userRepo,
-		clinicRepo:        clinicRepo,
-		passwordResetRepo: passwordResetRepo,
-		jwtService:        jwtService,
-		emailService:      emailService,
+		userRepo:              userRepo,
+		clinicRepo:           clinicRepo,
+		passwordResetRepo:     passwordResetRepo,
+		emailVerificationRepo: emailVerificationRepo,
+		jwtService:            jwtService,
+		emailService:          emailService,
 	}
 }
 
@@ -83,17 +90,19 @@ func NewAuthServiceWithGoogle(
 	userRepo user_repository.UserRepository,
 	clinicRepo clinic_repository.ClinicRepository,
 	passwordResetRepo auth_repository.PasswordResetRepository,
+	emailVerificationRepo auth_repository.EmailVerificationRepository,
 	jwtService JWTService,
 	googleClient GoogleAuthClient,
 	emailService email_service.EmailService,
 ) AuthService {
 	return &authService{
-		userRepo:          userRepo,
-		clinicRepo:        clinicRepo,
-		passwordResetRepo: passwordResetRepo,
-		jwtService:        jwtService,
-		googleClient:      googleClient,
-		emailService:      emailService,
+		userRepo:              userRepo,
+		clinicRepo:           clinicRepo,
+		passwordResetRepo:     passwordResetRepo,
+		emailVerificationRepo: emailVerificationRepo,
+		jwtService:            jwtService,
+		googleClient:          googleClient,
+		emailService:          emailService,
 	}
 }
 
@@ -179,6 +188,14 @@ func (s *authService) Register(ctx context.Context, req *model.RegisterRequest) 
 	if err := s.userRepo.UpdateLastLogin(ctx, user.ID); err != nil {
 		// Non-critical error, just log it
 	}
+
+	// Send verification email (non-blocking, errors are logged but not returned)
+	go func() {
+		if err := s.SendVerificationEmail(context.Background(), user.ID); err != nil {
+			// Log error but don't fail registration
+			fmt.Printf("[AUTH] Failed to send verification email to %s: %v\n", user.Email, err)
+		}
+	}()
 
 	return &model.AuthResponse{
 		User:         user.ToResponse(),
@@ -573,4 +590,114 @@ func (s *authService) generateSlug(name string) string {
 func generateShortID() string {
 	id := uuid.New().String()
 	return id[:8]
+}
+
+// SendVerificationEmail sends an email verification link to the user
+func (s *authService) SendVerificationEmail(ctx context.Context, userID uuid.UUID) error {
+	user, err := s.userRepo.GetByID(ctx, userID)
+	if err != nil {
+		return err
+	}
+
+	// Don't send if already verified
+	if user.EmailVerified {
+		return nil
+	}
+
+	// Generate secure random token
+	token, err := model.GenerateVerificationToken()
+	if err != nil {
+		return errors.ErrInternalInstance.WithError(err)
+	}
+
+	// Create verification record
+	verification := &model.EmailVerification{
+		UserID:    userID,
+		Token:     token,
+		ExpiresAt: time.Now().Add(model.VerificationTokenExpiry),
+	}
+
+	if err := s.emailVerificationRepo.Create(ctx, verification); err != nil {
+		return err
+	}
+
+	// Send email
+	frontendURL := os.Getenv("FRONTEND_URL")
+	if frontendURL == "" {
+		frontendURL = "http://localhost:3000"
+	}
+	verificationLink := fmt.Sprintf("%s/verify-email?token=%s", frontendURL, token)
+
+	return s.emailService.SendEmailVerification(ctx, &email_service.EmailVerificationData{
+		RecipientEmail:   user.Email,
+		RecipientName:    user.Name,
+		VerificationLink: verificationLink,
+	})
+}
+
+// VerifyEmail verifies the user's email using the token
+func (s *authService) VerifyEmail(ctx context.Context, token string) error {
+	// Find verification record by token
+	verification, err := s.emailVerificationRepo.GetByToken(ctx, token)
+	if err != nil {
+		if errors.IsNotFound(err) {
+			return errors.ErrInvalidInstance.WithMessage("Invalid or expired verification token")
+		}
+		return err
+	}
+
+	// Check if already used
+	if verification.IsUsed() {
+		return errors.ErrInvalidInstance.WithMessage("Verification token has already been used")
+	}
+
+	// Check if expired
+	if verification.IsExpired() {
+		return errors.ErrInvalidInstance.WithMessage("Verification token has expired")
+	}
+
+	// Get user
+	user, err := s.userRepo.GetByID(ctx, verification.UserID)
+	if err != nil {
+		return err
+	}
+
+	// Mark email as verified
+	user.EmailVerified = true
+	if err := s.userRepo.Update(ctx, user); err != nil {
+		return err
+	}
+
+	// Mark token as used
+	return s.emailVerificationRepo.MarkAsUsed(ctx, verification.ID)
+}
+
+// ResendVerificationEmail resends the verification email to a user
+func (s *authService) ResendVerificationEmail(ctx context.Context, email string) error {
+	// Find user by email
+	user, err := s.userRepo.GetByEmail(ctx, email)
+	if err != nil {
+		if errors.IsNotFound(err) {
+			// Security: Do not reveal if user exists
+			return nil
+		}
+		return err
+	}
+
+	// Don't resend if already verified
+	if user.EmailVerified {
+		return nil
+	}
+
+	// Check rate limiting - get latest verification
+	latest, err := s.emailVerificationRepo.GetLatestByUserID(ctx, user.ID)
+	if err == nil && latest != nil {
+		// If last token was created less than 1 minute ago, don't resend
+		if time.Since(latest.CreatedAt) < time.Minute {
+			return errors.ErrInvalidInstance.WithMessage("Please wait before requesting another verification email")
+		}
+	}
+
+	// Send new verification email
+	return s.SendVerificationEmail(ctx, user.ID)
 }

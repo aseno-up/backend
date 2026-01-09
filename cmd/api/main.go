@@ -83,6 +83,10 @@ import (
 	analytics_handler "github.com/aseno/backend/pkg/analytics/handler"
 	analytics_repository "github.com/aseno/backend/pkg/analytics/repository"
 	analytics_service "github.com/aseno/backend/pkg/analytics/service"
+	notification_handler "github.com/aseno/backend/pkg/notification/handler"
+	notification_model "github.com/aseno/backend/pkg/notification/model"
+	notification_repository "github.com/aseno/backend/pkg/notification/repository"
+	notification_service "github.com/aseno/backend/pkg/notification/service"
 )
 
 func main() {
@@ -130,8 +134,10 @@ func main() {
 	patientRecordRepo := patientrecord_repository.NewPatientRecordRepository(db.GetDB())
 	dashboardRepo := dashboard_repository.NewDashboardRepository(db.GetDB())
 	passwordResetRepo := auth_repository.NewPasswordResetRepository(db.GetDB())
+	emailVerificationRepo := auth_repository.NewEmailVerificationRepository(db.GetDB())
 	waitlistRepo := waitlist_repository.NewWaitlistRepository(db.GetDB())
 	analyticsRepo := analytics_repository.NewAnalyticsRepository(db.GetDB())
+	notificationRepo := notification_repository.NewNotificationRepository(db.GetDB())
 
 	// Initialize WhatsApp client (Evolution API)
 	var whatsappClient whatsapp_service.WhatsAppClient
@@ -203,9 +209,9 @@ func main() {
 	// Initialize auth service with or without Google OAuth
 	var authService auth_service.AuthService
 	if googleAuthClient != nil {
-		authService = auth_service.NewAuthServiceWithGoogle(userRepo, clinicRepo, passwordResetRepo, jwtService, &googleAuthAdapter{client: googleAuthClient}, emailSvc)
+		authService = auth_service.NewAuthServiceWithGoogle(userRepo, clinicRepo, passwordResetRepo, emailVerificationRepo, jwtService, &googleAuthAdapter{client: googleAuthClient}, emailSvc)
 	} else {
-		authService = auth_service.NewAuthService(userRepo, clinicRepo, passwordResetRepo, jwtService, emailSvc)
+		authService = auth_service.NewAuthService(userRepo, clinicRepo, passwordResetRepo, emailVerificationRepo, jwtService, emailSvc)
 	}
 	professionalService := professional_service.NewProfessionalService(professionalRepo, clinicRepo)
 	patientService := patient_service.NewPatientService(patientRepo, clinicRepo)
@@ -292,6 +298,9 @@ func main() {
 
 	// Initialize Analytics service
 	analyticsSvc := analytics_service.NewAnalyticsService(analyticsRepo, clinicRepo)
+
+	// Initialize Notification service
+	notificationSvc := notification_service.NewNotificationService(notificationRepo)
 
 	// Initialize Waitlist service (if WhatsApp and queue are available)
 	var waitlistSvc waitlist_service.WaitlistService
@@ -411,6 +420,9 @@ func main() {
 	// Initialize Analytics handler
 	analyticsHdlr := analytics_handler.NewAnalyticsHandler(analyticsSvc)
 
+	// Initialize Notification handler
+	notificationHdlr := notification_handler.NewNotificationHandler(notificationSvc)
+
 	// Initialize Onboarding service and handler
 	onboardingSvc := clinic_service.NewOnboardingService(db.GetDB(), clinicRepo)
 	onboardingHdlr := clinic_handler.NewOnboardingHandler(onboardingSvc)
@@ -439,6 +451,7 @@ func main() {
 		dashboardHdlr,
 		analyticsHdlr,
 		onboardingHdlr,
+		notificationHdlr,
 		waitlistHdlr,
 		authMiddleware,
 		tenantMiddleware,
@@ -508,6 +521,7 @@ func setupRouter(
 	dashboardHandler *dashboard_handler.DashboardHandler,
 	analyticsHandler analytics_handler.AnalyticsHandler,
 	onboardingHandler clinic_handler.OnboardingHandler,
+	notificationHandler notification_handler.NotificationHandler,
 	waitlistHandler waitlist_handler.WaitlistHandler,
 	authMiddleware auth_middleware.AuthMiddleware,
 	tenantMiddleware auth_middleware.TenantMiddleware,
@@ -596,6 +610,9 @@ func setupRouter(
 
 			// Onboarding routes
 			onboardingHandler.RegisterRoutes(protected)
+
+			// Notification routes
+			notificationHandler.RegisterRoutes(protected)
 
 			// Waitlist routes (lista de encaixe)
 			if waitlistHandler != nil {
@@ -699,6 +716,8 @@ func runMigrations(db *database.Database) error {
 		&patientrecord_model.PatientRecord{},
 		&patientrecord_model.SessionNote{},
 		&auth_model.PasswordReset{},
+		&auth_model.EmailVerification{},
+		&notification_model.Notification{},
 		&waitlist_model.WaitlistEntry{},
 	}
 

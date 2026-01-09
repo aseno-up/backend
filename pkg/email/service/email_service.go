@@ -15,6 +15,7 @@ type EmailService interface {
 	SendInvite(ctx context.Context, data *InviteEmailData) error
 	SendWelcome(ctx context.Context, data *WelcomeEmailData) error
 	SendPasswordReset(ctx context.Context, data *ResetPasswordEmailData) error
+	SendEmailVerification(ctx context.Context, data *EmailVerificationData) error
 }
 
 // InviteEmailData contains data for invite emails
@@ -40,6 +41,13 @@ type ResetPasswordEmailData struct {
 	RecipientEmail string
 	RecipientName  string
 	ResetLink      string
+}
+
+// EmailVerificationData contains data for email verification emails
+type EmailVerificationData struct {
+	RecipientEmail   string
+	RecipientName    string
+	VerificationLink string
 }
 
 // SMTPConfig holds SMTP configuration
@@ -93,6 +101,18 @@ func (s *smtpEmailService) SendPasswordReset(ctx context.Context, data *ResetPas
 	body, err := s.renderPasswordResetTemplate(data)
 	if err != nil {
 		return fmt.Errorf("failed to render password reset template: %w", err)
+	}
+
+	return s.sendEmail(data.RecipientEmail, subject, body)
+}
+
+// SendEmailVerification sends an email verification email
+func (s *smtpEmailService) SendEmailVerification(ctx context.Context, data *EmailVerificationData) error {
+	subject := "Verifique seu email — Aseno"
+
+	body, err := s.renderEmailVerificationTemplate(data)
+	if err != nil {
+		return fmt.Errorf("failed to render email verification template: %w", err)
 	}
 
 	return s.sendEmail(data.RecipientEmail, subject, body)
@@ -313,6 +333,56 @@ func (s *smtpEmailService) renderPasswordResetTemplate(data *ResetPasswordEmailD
 	return buf.String(), nil
 }
 
+func (s *smtpEmailService) renderEmailVerificationTemplate(data *EmailVerificationData) (string, error) {
+	tmpl := `
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <style>
+        body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+        .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+        .header { background: #4F46E5; color: white; padding: 20px; text-align: center; border-radius: 8px 8px 0 0; }
+        .content { background: #f9fafb; padding: 30px; border-radius: 0 0 8px 8px; }
+        .button { display: inline-block; background: #4F46E5; color: white; padding: 12px 30px; text-decoration: none; border-radius: 6px; margin: 20px 0; }
+        .footer { text-align: center; color: #666; font-size: 12px; margin-top: 20px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Verifique seu Email</h1>
+        </div>
+        <div class="content">
+            <p>Ola {{.RecipientName}},</p>
+            <p>Obrigado por se cadastrar! Para completar seu registro, por favor verifique seu endereco de email.</p>
+            <p>Clique no botao abaixo para verificar:</p>
+            <p style="text-align: center;">
+                <a href="{{.VerificationLink}}" class="button">Verificar Email</a>
+            </p>
+            <p><small>Este link expira em 24 horas.</small></p>
+            <p><small>Se voce nao criou uma conta, ignore este email.</small></p>
+        </div>
+        <div class="footer">
+            <p>Este email foi enviado automaticamente. Por favor, nao responda.</p>
+        </div>
+    </div>
+</body>
+</html>
+`
+	t, err := template.New("email_verification").Parse(tmpl)
+	if err != nil {
+		return "", err
+	}
+
+	var buf bytes.Buffer
+	if err := t.Execute(&buf, data); err != nil {
+		return "", err
+	}
+
+	return buf.String(), nil
+}
+
 // NoOpEmailService is a no-operation email service for development
 type noOpEmailService struct{}
 
@@ -336,5 +406,11 @@ func (s *noOpEmailService) SendWelcome(ctx context.Context, data *WelcomeEmailDa
 func (s *noOpEmailService) SendPasswordReset(ctx context.Context, data *ResetPasswordEmailData) error {
 	fmt.Printf("[EMAIL] Would send password reset to %s (link: %s)\n",
 		data.RecipientEmail, data.ResetLink)
+	return nil
+}
+
+func (s *noOpEmailService) SendEmailVerification(ctx context.Context, data *EmailVerificationData) error {
+	fmt.Printf("[EMAIL] Would send email verification to %s (%s) (link: %s)\n",
+		data.RecipientEmail, data.RecipientName, data.VerificationLink)
 	return nil
 }
