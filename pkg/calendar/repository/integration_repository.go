@@ -44,9 +44,22 @@ func (r *integrationRepository) GetByClinicID(ctx context.Context, clinicID uuid
 	return &integration, nil
 }
 
-// Update updates a calendar integration
+// GetByClinicIDIncludingDeleted retrieves a calendar integration including soft-deleted ones
+func (r *integrationRepository) GetByClinicIDIncludingDeleted(ctx context.Context, clinicID uuid.UUID) (*model.CalendarIntegration, error) {
+	var integration model.CalendarIntegration
+	result := r.db.WithContext(ctx).Unscoped().Where("clinic_id = ?", clinicID).First(&integration)
+	if result.Error != nil {
+		if result.Error == gorm.ErrRecordNotFound {
+			return nil, errors.ErrCalendarNotConfiguredInstance
+		}
+		return nil, errors.ErrInternalInstance.WithError(result.Error)
+	}
+	return &integration, nil
+}
+
+// Update updates a calendar integration (including reactivating soft-deleted ones)
 func (r *integrationRepository) Update(ctx context.Context, integration *model.CalendarIntegration) error {
-	result := r.db.WithContext(ctx).Save(integration)
+	result := r.db.WithContext(ctx).Unscoped().Save(integration)
 	if result.Error != nil {
 		return errors.ErrInternalInstance.WithError(result.Error)
 	}

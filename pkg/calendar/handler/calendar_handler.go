@@ -2,6 +2,7 @@ package handler
 
 import (
 	"net/http"
+	"os"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -90,20 +91,23 @@ func (h *calendarHandler) Callback(c *gin.Context) {
 		return
 	}
 
-	integration, err := h.service.HandleCallback(c.Request.Context(), clinicID, code)
+	_, err = h.service.HandleCallback(c.Request.Context(), clinicID, code)
 	if err != nil {
-		statusCode := errors.GetStatusCode(err)
-		c.JSON(statusCode, errors.ToResponse(err))
+		// Redirect to frontend with error
+		frontendURL := os.Getenv("FRONTEND_URL")
+		if frontendURL == "" {
+			frontendURL = "http://localhost:3000"
+		}
+		c.Redirect(http.StatusTemporaryRedirect, frontendURL+"/configuracoes?calendar=error")
 		return
 	}
 
-	// Redirect back to the frontend calendar settings page
-	// In production, this would redirect to a frontend URL
-	c.JSON(http.StatusOK, gin.H{
-		"status":  "connected",
-		"email":   integration.Email,
-		"message": "Google Calendar connected successfully",
-	})
+	// Redirect back to the frontend settings page with success
+	frontendURL := os.Getenv("FRONTEND_URL")
+	if frontendURL == "" {
+		frontendURL = "http://localhost:3000"
+	}
+	c.Redirect(http.StatusTemporaryRedirect, frontendURL+"/configuracoes?calendar=connected")
 }
 
 // GetIntegration returns the current calendar integration

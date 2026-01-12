@@ -31,6 +31,7 @@ type GoogleCalendarClient interface {
 type IntegrationRepository interface {
 	Create(ctx context.Context, integration *model.CalendarIntegration) error
 	GetByClinicID(ctx context.Context, clinicID uuid.UUID) (*model.CalendarIntegration, error)
+	GetByClinicIDIncludingDeleted(ctx context.Context, clinicID uuid.UUID) (*model.CalendarIntegration, error)
 	Update(ctx context.Context, integration *model.CalendarIntegration) error
 	Delete(ctx context.Context, clinicID uuid.UUID) error
 	UpdateTokens(ctx context.Context, clinicID uuid.UUID, accessToken, refreshToken string, expiry time.Time) error
@@ -143,15 +144,16 @@ func (s *calendarService) HandleCallback(ctx context.Context, clinicID uuid.UUID
 		return nil, errors.ErrCalendarConnectionInstance.WithError(err)
 	}
 
-	// Check if integration already exists
-	existing, _ := s.integrationRepo.GetByClinicID(ctx, clinicID)
+	// Check if integration already exists (including soft-deleted ones)
+	existing, _ := s.integrationRepo.GetByClinicIDIncludingDeleted(ctx, clinicID)
 	if existing != nil {
-		// Update existing integration
+		// Update existing integration (reactivate if soft-deleted)
 		existing.AccessToken = tokens.AccessToken
 		existing.RefreshToken = tokens.RefreshToken
 		existing.TokenExpiry = tokens.Expiry
 		existing.Email = email
 		existing.SyncEnabled = true
+		existing.DeletedAt.Valid = false // Reactivate if soft-deleted
 
 		if err := s.integrationRepo.Update(ctx, existing); err != nil {
 			return nil, err
