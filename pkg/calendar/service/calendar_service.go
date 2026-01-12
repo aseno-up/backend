@@ -104,13 +104,14 @@ func NewCalendarService(
 
 // GetAuthURL returns the Google OAuth authorization URL
 func (s *calendarService) GetAuthURL(ctx context.Context, clinicID uuid.UUID) (string, error) {
-	// Check plan limit
+	// Check plan limit (trial users have full access)
 	clinic, err := s.clinicRepo.GetByID(ctx, clinicID)
 	if err != nil {
 		return "", err
 	}
 
-	if clinic.Plan == clinic_model.PlanTypeBasic {
+	// Allow access for trial users or non-basic plans
+	if clinic.Plan == clinic_model.PlanTypeBasic && clinic.SubscriptionStatus != clinic_model.SubscriptionStatusTrial {
 		return "", errors.ErrValidationInstance.WithMessage("Integração com Google Calendar disponível apenas nos planos Profissional e Avançado.")
 	}
 
@@ -119,13 +120,14 @@ func (s *calendarService) GetAuthURL(ctx context.Context, clinicID uuid.UUID) (s
 
 // HandleCallback handles the OAuth callback and saves the integration
 func (s *calendarService) HandleCallback(ctx context.Context, clinicID uuid.UUID, code string) (*model.CalendarIntegration, error) {
-	// Check plan limit
+	// Check plan limit (trial users have full access)
 	clinic, err := s.clinicRepo.GetByID(ctx, clinicID)
 	if err != nil {
 		return nil, err
 	}
 
-	if clinic.Plan == clinic_model.PlanTypeBasic {
+	// Allow access for trial users or non-basic plans
+	if clinic.Plan == clinic_model.PlanTypeBasic && clinic.SubscriptionStatus != clinic_model.SubscriptionStatusTrial {
 		return nil, errors.ErrValidationInstance.WithMessage("Integração com Google Calendar disponível apenas nos planos Profissional e Avançado.")
 	}
 

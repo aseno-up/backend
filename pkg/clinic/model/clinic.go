@@ -61,6 +61,9 @@ type ClinicSettings struct {
 	ReminderHoursBefore       int    `json:"reminder_hours_before"`
 	AllowOnlineBooking        bool   `json:"allow_online_booking"`
 	RequireConfirmation       bool   `json:"require_confirmation"`
+	// Notification settings
+	WhatsAppRemindersEnabled bool `json:"whatsapp_reminders_enabled"`
+	EmailRemindersEnabled    bool `json:"email_reminders_enabled"`
 }
 
 // TableName returns the table name for GORM
@@ -135,15 +138,26 @@ type CreateClinicRequest struct {
 	Document string `json:"document"`
 }
 
+// UpdateClinicSettingsRequest represents settings that can be updated (using pointers for optional booleans)
+type UpdateClinicSettingsRequest struct {
+	Timezone                  string `json:"timezone,omitempty"`
+	DefaultAppointmentMinutes int    `json:"default_appointment_minutes,omitempty"`
+	ReminderHoursBefore       int    `json:"reminder_hours_before,omitempty"`
+	AllowOnlineBooking        *bool  `json:"allow_online_booking,omitempty"`
+	RequireConfirmation       *bool  `json:"require_confirmation,omitempty"`
+	WhatsAppRemindersEnabled  *bool  `json:"whatsapp_reminders_enabled,omitempty"`
+	EmailRemindersEnabled     *bool  `json:"email_reminders_enabled,omitempty"`
+}
+
 // UpdateClinicRequest represents the request to update a clinic
 type UpdateClinicRequest struct {
-	Name         string          `json:"name" binding:"omitempty,min=2,max=100"`
-	Phone        string          `json:"phone"`
-	Address      string          `json:"address"`
-	City         string          `json:"city"`
-	State        string          `json:"state"`
-	ZipCode      string          `json:"zip_code"`
-	LogoURL      string          `json:"logo_url"`
-	PrimaryColor string          `json:"primary_color"`
-	Settings     *ClinicSettings `json:"settings"`
+	Name         string                       `json:"name" binding:"omitempty,min=2,max=100"`
+	Phone        string                       `json:"phone"`
+	Address      string                       `json:"address"`
+	City         string                       `json:"city"`
+	State        string                       `json:"state"`
+	ZipCode      string                       `json:"zip_code"`
+	LogoURL      string                       `json:"logo_url"`
+	PrimaryColor string                       `json:"primary_color"`
+	Settings     *UpdateClinicSettingsRequest `json:"settings"`
 }

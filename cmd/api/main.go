@@ -427,6 +427,10 @@ func main() {
 	onboardingSvc := clinic_service.NewOnboardingService(db.GetDB(), clinicRepo)
 	onboardingHdlr := clinic_handler.NewOnboardingHandler(onboardingSvc)
 
+	// Initialize Clinic service and handler
+	clinicSvc := clinic_service.NewClinicService(clinicRepo)
+	clinicHdlr := clinic_handler.NewClinicHandler(clinicSvc)
+
 	// Initialize Waitlist handler
 	var waitlistHdlr waitlist_handler.WaitlistHandler
 	if waitlistSvc != nil {
@@ -453,6 +457,7 @@ func main() {
 		onboardingHdlr,
 		notificationHdlr,
 		waitlistHdlr,
+		clinicHdlr,
 		authMiddleware,
 		tenantMiddleware,
 	)
@@ -523,6 +528,7 @@ func setupRouter(
 	onboardingHandler clinic_handler.OnboardingHandler,
 	notificationHandler notification_handler.NotificationHandler,
 	waitlistHandler waitlist_handler.WaitlistHandler,
+	clinicHandler clinic_handler.ClinicHandler,
 	authMiddleware auth_middleware.AuthMiddleware,
 	tenantMiddleware auth_middleware.TenantMiddleware,
 ) *gin.Engine {
@@ -642,6 +648,8 @@ func setupRouter(
 				inviteHandler.RegisterProtectedRoutes(adminProtected)
 				// User management routes
 				userHandler.RegisterRoutes(adminProtected)
+				// Clinic management routes (admin/owner can update clinic info)
+				clinicHandler.RegisterRoutes(adminProtected)
 			}
 		}
 

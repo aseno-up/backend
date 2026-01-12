@@ -318,6 +318,7 @@ func (r *appointmentRepository) GetPendingReminders(ctx context.Context, reminde
 			AND c.whats_app_connected = true
 			AND c.whats_app_instance IS NOT NULL
 			AND c.whats_app_instance != ''
+			AND COALESCE((c.settings->>'whatsapp_reminders_enabled')::boolean, false) = true
 		ORDER BY a.start_time ASC
 		LIMIT 100
 	`
