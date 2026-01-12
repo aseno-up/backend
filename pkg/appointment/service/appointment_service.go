@@ -12,6 +12,7 @@ import (
 	"github.com/aseno/backend/internal/errors"
 	"github.com/aseno/backend/pkg/appointment/model"
 	"github.com/aseno/backend/pkg/appointment/repository"
+	calendar_service "github.com/aseno/backend/pkg/calendar/service"
 	profModel "github.com/aseno/backend/pkg/professional/model"
 	waitlist_model "github.com/aseno/backend/pkg/waitlist/model"
 )
@@ -53,6 +54,9 @@ type AppointmentService interface {
 	// SetPatientRiskCalculator sets the patient risk calculator
 	SetPatientRiskCalculator(calculator PatientRiskCalculator)
 
+	// SetCalendarService sets the calendar service for Google Calendar sync
+	SetCalendarService(service calendar_service.CalendarService)
+
 	// SuggestSmartSlots suggests best time slots based on historical data
 	SuggestSmartSlots(ctx context.Context, clinicID, professionalID uuid.UUID, date time.Time, days int, durationMinutes int) ([]*model.SmartSlotSuggestion, error)
 }
@@ -68,6 +72,7 @@ type appointmentService struct {
 	profRepo          ProfessionalInfoProvider
 	waitlistService   WaitlistService
 	riskCalculator    PatientRiskCalculator
+	calendarService   calendar_service.CalendarService
 }
 
 // NewAppointmentService creates a new appointment service
@@ -118,6 +123,85 @@ func (s *appointmentService) SetWaitlistProcessor(service WaitlistService) {
 // SetPatientRiskCalculator sets the patient risk calculator
 func (s *appointmentService) SetPatientRiskCalculator(calculator PatientRiskCalculator) {
 	s.riskCalculator = calculator
+}
+
+// SetCalendarService sets the calendar service for Google Calendar sync
+func (s *appointmentService) SetCalendarService(service calendar_service.CalendarService) {
+	s.calendarService = service
+}
+
+// toCalendarData converts an appointment to calendar sync data
+func (s *appointmentService) toCalendarData(apt *model.Appointment) *calendar_service.AppointmentData {
+	data := &calendar_service.AppointmentData{
+		ID:        apt.ID,
+		Title:     apt.Title,
+		StartTime: apt.StartTime,
+		EndTime:   apt.EndTime,
+		Notes:     apt.Notes,
+	}
+
+	if data.Title == "" {
+		if apt.Patient != nil {
+			data.Title = fmt.Sprintf("Consulta - %s", apt.Patient.Name)
+		} else {
+			data.Title = "Consulta"
+		}
+	}
+
+	if apt.Patient != nil {
+		data.PatientName = apt.Patient.Name
+		data.PatientEmail = apt.Patient.Email
+	}
+
+	if apt.Professional != nil {
+		data.ProfessionalName = apt.Professional.Name
+	}
+
+	return data
+}
+
+// syncToGoogleCalendar syncs an appointment to Google Calendar in background
+func (s *appointmentService) syncToGoogleCalendar(clinicID uuid.UUID, apt *model.Appointment) {
+	if s.calendarService == nil {
+		return
+	}
+
+	go func() {
+		bgCtx := context.Background()
+		aptData := s.toCalendarData(apt)
+		if err := s.calendarService.SyncAppointmentToGoogle(bgCtx, clinicID, aptData); err != nil {
+			log.Printf("[Calendar Sync] Error syncing appointment %s: %v", apt.ID, err)
+		}
+	}()
+}
+
+// updateGoogleCalendar updates an appointment in Google Calendar in background
+func (s *appointmentService) updateGoogleCalendar(clinicID uuid.UUID, apt *model.Appointment) {
+	if s.calendarService == nil {
+		return
+	}
+
+	go func() {
+		bgCtx := context.Background()
+		aptData := s.toCalendarData(apt)
+		if err := s.calendarService.UpdateAppointmentInGoogle(bgCtx, clinicID, aptData); err != nil {
+			log.Printf("[Calendar Sync] Error updating appointment %s in Google: %v", apt.ID, err)
+		}
+	}()
+}
+
+// deleteFromGoogleCalendar removes an appointment from Google Calendar in background
+func (s *appointmentService) deleteFromGoogleCalendar(clinicID uuid.UUID, appointmentID uuid.UUID) {
+	if s.calendarService == nil {
+		return
+	}
+
+	go func() {
+		bgCtx := context.Background()
+		if err := s.calendarService.DeleteAppointmentFromGoogle(bgCtx, clinicID, appointmentID); err != nil {
+			log.Printf("[Calendar Sync] Error removing appointment %s from Google: %v", appointmentID, err)
+		}
+	}()
 }
 
 // SuggestSmartSlots suggests best time slots based on historical data
@@ -328,10 +412,10 @@ func (s *appointmentService) Create(ctx context.Context, clinicID uuid.UUID, req
 		// Let's do it async to not block the response, but log errors.
 		go func() {
 			bgCtx := context.Background()
-			
+
 			// Default preferences: same professional, any day, business hours
 			days := []string{"monday", "tuesday", "wednesday", "thursday", "friday"}
-			
+
 			wlReq := &waitlist_model.CreateWaitlistRequest{
 				PatientID:             req.PatientID,
 				ProfessionalID:        &req.ProfessionalID,
@@ -341,15 +425,23 @@ func (s *appointmentService) Create(ctx context.Context, clinicID uuid.UUID, req
 				PreferredTimeEnd:      "19:00",
 				Notes:                 "Solicitação de antecipação criada automaticamente",
 			}
-			
+
 			if _, err := s.waitlistService.Create(bgCtx, clinicID, wlReq); err != nil {
 				log.Printf("[Appointment] Error creating anticipation waitlist entry: %v", err)
 			}
 		}()
 	}
 
-	// Reload with relations
-	return s.GetByID(ctx, appointment.ID, clinicID)
+	// Reload with relations for response and calendar sync
+	fullAppointment, err := s.repo.GetByID(ctx, appointment.ID, clinicID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Sync to Google Calendar (async)
+	s.syncToGoogleCalendar(clinicID, fullAppointment)
+
+	return fullAppointment.ToResponse(), nil
 }
 
 // GetByID retrieves an appointment by ID
@@ -503,6 +595,9 @@ func (s *appointmentService) Update(ctx context.Context, id, clinicID uuid.UUID,
 		return nil, err
 	}
 
+	// Update in Google Calendar (async)
+	s.updateGoogleCalendar(clinicID, appointment)
+
 	return s.GetByID(ctx, id, clinicID)
 }
 
@@ -564,6 +659,9 @@ func (s *appointmentService) Cancel(ctx context.Context, id, clinicID uuid.UUID,
 			}
 		}()
 	}
+
+	// Delete from Google Calendar (async)
+	s.deleteFromGoogleCalendar(clinicID, id)
 
 	return s.GetByID(ctx, id, clinicID)
 }

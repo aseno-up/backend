@@ -66,6 +66,7 @@ type Appointment struct {
 type PatientInfo struct {
 	ID       uuid.UUID `json:"id" gorm:"type:uuid;primary_key"`
 	Name     string    `json:"name"`
+	Email    string    `json:"email"`
 	Phone    string    `json:"phone"`
 	WhatsApp string    `json:"whatsapp" gorm:"column:whatsapp"`
 }

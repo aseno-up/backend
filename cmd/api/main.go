@@ -272,6 +272,9 @@ func main() {
 	var calendarService calendar_service.CalendarService
 	if googleCalendarClient != nil {
 		calendarService = calendar_service.NewCalendarService(googleCalendarClient, calendarIntegrationRepo, calendarSyncRepo, clinicRepo)
+		// Wire calendar service into appointment service for Google Calendar sync
+		appointmentService.SetCalendarService(calendarService)
+		log.Println("Google Calendar sync enabled for appointments")
 	}
 
 	// Initialize Session Plan service
