@@ -87,6 +87,11 @@ import (
 	notification_model "github.com/aseno/backend/pkg/notification/model"
 	notification_repository "github.com/aseno/backend/pkg/notification/repository"
 	notification_service "github.com/aseno/backend/pkg/notification/service"
+	public_handler "github.com/aseno/backend/pkg/public/handler"
+	settings_handler "github.com/aseno/backend/pkg/settings/handler"
+	settings_model "github.com/aseno/backend/pkg/settings/model"
+	settings_repository "github.com/aseno/backend/pkg/settings/repository"
+	settings_service "github.com/aseno/backend/pkg/settings/service"
 )
 
 func main() {
@@ -138,6 +143,15 @@ func main() {
 	waitlistRepo := waitlist_repository.NewWaitlistRepository(db.GetDB())
 	analyticsRepo := analytics_repository.NewAnalyticsRepository(db.GetDB())
 	notificationRepo := notification_repository.NewNotificationRepository(db.GetDB())
+	settingsRepo := settings_repository.NewSettingsRepository(db.GetDB())
+
+	// Seed default settings (if not exist)
+	if err := settingsRepo.SeedDefaults(context.Background()); err != nil {
+		log.Printf("Warning: Failed to seed default settings: %v", err)
+	}
+
+	// Initialize Settings service (used by professional service and public config)
+	settingsSvc := settings_service.NewSettingsService(settingsRepo)
 
 	// Initialize WhatsApp client (Evolution API)
 	var whatsappClient whatsapp_service.WhatsAppClient
@@ -213,7 +227,7 @@ func main() {
 	} else {
 		authService = auth_service.NewAuthService(userRepo, clinicRepo, passwordResetRepo, emailVerificationRepo, jwtService, emailSvc)
 	}
-	professionalService := professional_service.NewProfessionalService(professionalRepo, clinicRepo)
+	professionalService := professional_service.NewProfessionalService(professionalRepo, clinicRepo, settingsSvc)
 	patientService := patient_service.NewPatientService(patientRepo, clinicRepo)
 	appointmentService := appointment_service.NewAppointmentService(appointmentRepo, professionalRepo)
 
@@ -440,6 +454,12 @@ func main() {
 		waitlistHdlr = waitlist_handler.NewWaitlistHandler(waitlistSvc)
 	}
 
+	// Initialize Settings handler (admin only - dev clinics)
+	settingsHdlr := settings_handler.NewSettingsHandler(settingsSvc)
+
+	// Initialize Public handler (no auth required - landing page config)
+	publicHdlr := public_handler.NewPublicHandler(settingsSvc)
+
 	// Setup router
 	router := setupRouter(
 		cfg,
@@ -461,6 +481,8 @@ func main() {
 		notificationHdlr,
 		waitlistHdlr,
 		clinicHdlr,
+		settingsHdlr,
+		publicHdlr,
 		authMiddleware,
 		tenantMiddleware,
 	)
@@ -532,6 +554,8 @@ func setupRouter(
 	notificationHandler notification_handler.NotificationHandler,
 	waitlistHandler waitlist_handler.WaitlistHandler,
 	clinicHandler clinic_handler.ClinicHandler,
+	settingsHandler settings_handler.SettingsHandler,
+	publicHandler public_handler.PublicHandler,
 	authMiddleware auth_middleware.AuthMiddleware,
 	tenantMiddleware auth_middleware.TenantMiddleware,
 ) *gin.Engine {
@@ -562,6 +586,9 @@ func setupRouter(
 
 		// Public invite routes (no auth required)
 		inviteHandler.RegisterPublicRoutes(v1)
+
+		// Public config routes (no auth required - landing page)
+		publicHandler.RegisterRoutes(v1)
 
 		// Protected routes (auth required)
 		protected := v1.Group("")
@@ -654,6 +681,9 @@ func setupRouter(
 				// Clinic management routes (admin/owner can update clinic info)
 				clinicHandler.RegisterRoutes(adminProtected)
 			}
+
+			// Settings routes (dev clinics only - has its own middleware)
+			settingsHandler.RegisterRoutes(protected, authMiddleware.Authenticate())
 		}
 
 		// WhatsApp webhook (public, validated by secret)
@@ -730,6 +760,7 @@ func runMigrations(db *database.Database) error {
 		&auth_model.EmailVerification{},
 		&notification_model.Notification{},
 		&waitlist_model.WaitlistEntry{},
+		&settings_model.SystemSetting{},
 	}
 
 	if err := db.AutoMigrate(models...); err != nil {

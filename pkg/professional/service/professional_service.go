@@ -2,15 +2,16 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"math"
 
 	"github.com/google/uuid"
 
 	"github.com/aseno/backend/internal/errors"
-	clinic_model "github.com/aseno/backend/pkg/clinic/model"
 	clinic_repository "github.com/aseno/backend/pkg/clinic/repository"
 	"github.com/aseno/backend/pkg/professional/model"
 	"github.com/aseno/backend/pkg/professional/repository"
+	settings_service "github.com/aseno/backend/pkg/settings/service"
 )
 
 // ProfessionalService defines the interface for professional business logic
@@ -26,13 +27,15 @@ type ProfessionalService interface {
 type professionalService struct {
 	repo       repository.ProfessionalRepository
 	clinicRepo clinic_repository.ClinicRepository
+	settings   settings_service.SettingsService
 }
 
 // NewProfessionalService creates a new professional service
-func NewProfessionalService(repo repository.ProfessionalRepository, clinicRepo clinic_repository.ClinicRepository) ProfessionalService {
+func NewProfessionalService(repo repository.ProfessionalRepository, clinicRepo clinic_repository.ClinicRepository, settings settings_service.SettingsService) ProfessionalService {
 	return &professionalService{
 		repo:       repo,
 		clinicRepo: clinicRepo,
+		settings:   settings,
 	}
 }
 
@@ -50,20 +53,18 @@ func (s *professionalService) Create(ctx context.Context, clinicID uuid.UUID, re
 		return nil, err
 	}
 
-	var limit int
-	switch clinic.Plan {
-	case clinic_model.PlanTypeBasic:
-		limit = 2
-	case clinic_model.PlanTypeProfessional:
-		limit = 10
-	case clinic_model.PlanTypeAdvanced:
-		limit = 1000 // Unlimited practically
-	default:
-		limit = 2 // Default to basic
-	}
+	// Get limit from settings service
+	limit := s.settings.GetPlanLimit(ctx, string(clinic.Plan))
 
-	if int(count) >= limit {
-		return nil, errors.ErrValidationInstance.WithMessage("Limite de profissionais do seu plano atingido. Faça upgrade para adicionar mais.")
+	// Check if limit is exceeded (-1 means unlimited)
+	if !s.settings.IsUnlimited(limit) && int(count) >= limit {
+		// MVP: just block, no excess billing
+		if !s.settings.IsExcessBillingEnabled(ctx) {
+			return nil, errors.ErrValidationInstance.WithMessage(
+				fmt.Sprintf("Limite de %d profissionais do plano %s atingido. Faça upgrade para adicionar mais.",
+					limit, clinic.Plan))
+		}
+		// Future: allow excess with billing (not implemented yet)
 	}
 
 	// 2. Create professional

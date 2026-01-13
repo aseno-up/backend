@@ -26,11 +26,20 @@ const (
 	PlanTypeAdvanced     PlanType = "advanced"
 )
 
+// ClinicType represents the type of clinic account
+type ClinicType string
+
+const (
+	ClinicTypeStandard ClinicType = "standard"
+	ClinicTypeDev      ClinicType = "dev"
+)
+
 // Clinic represents a clinic/tenant in the system
 type Clinic struct {
 	ID                 uuid.UUID          `json:"id" gorm:"type:uuid;primary_key;default:gen_random_uuid()"`
 	Name               string             `json:"name" gorm:"not null"`
 	Slug               string             `json:"slug" gorm:"uniqueIndex;not null"`
+	Type               ClinicType         `json:"type" gorm:"default:'standard'"`
 	Email              string             `json:"email" gorm:"uniqueIndex;not null"`
 	Phone              string             `json:"phone"`
 	Document           string             `json:"document"` // CNPJ or CPF
@@ -76,6 +85,7 @@ type ClinicResponse struct {
 	ID                 uuid.UUID          `json:"id"`
 	Name               string             `json:"name"`
 	Slug               string             `json:"slug"`
+	Type               ClinicType         `json:"type"`
 	Email              string             `json:"email"`
 	Phone              string             `json:"phone"`
 	Address            string             `json:"address"`
@@ -98,6 +108,7 @@ func (c *Clinic) ToResponse() *ClinicResponse {
 		ID:                 c.ID,
 		Name:               c.Name,
 		Slug:               c.Slug,
+		Type:               c.Type,
 		Email:              c.Email,
 		Phone:              c.Phone,
 		Address:            c.Address,
