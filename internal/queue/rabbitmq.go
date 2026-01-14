@@ -16,6 +16,7 @@ type RabbitMQConfig struct {
 	URL           string
 	QueueName     string
 	DLQName       string
+	DelayQueueName string // Queue for delayed retries
 	PrefetchCount int
 }
 
@@ -34,6 +35,9 @@ type rabbitMQ struct {
 func NewRabbitMQ(config RabbitMQConfig) Queue {
 	if config.PrefetchCount == 0 {
 		config.PrefetchCount = 1
+	}
+	if config.DelayQueueName == "" {
+		config.DelayQueueName = config.QueueName + "_delay"
 	}
 	return &rabbitMQ{
 		config:      config,
@@ -81,6 +85,13 @@ func (r *rabbitMQ) Connect(ctx context.Context) error {
 		return fmt.Errorf("failed to declare DLQ: %w", err)
 	}
 
+	// Declare delay queue with DLX back to main queue
+	if err := r.declareDelayQueue(); err != nil {
+		channel.Close()
+		conn.Close()
+		return fmt.Errorf("failed to declare delay queue: %w", err)
+	}
+
 	r.connected = true
 
 	// Start connection monitoring
@@ -100,6 +111,23 @@ func (r *rabbitMQ) declareQueue(name string) error {
 		false, // noWait
 		amqp.Table{
 			"x-message-ttl": int32(86400000), // 24h TTL for messages
+		},
+	)
+	return err
+}
+
+// declareDelayQueue declares a delay queue that routes expired messages to main queue
+func (r *rabbitMQ) declareDelayQueue() error {
+	_, err := r.channel.QueueDeclare(
+		r.config.DelayQueueName,
+		true,  // durable
+		false, // autoDelete
+		false, // exclusive
+		false, // noWait
+		amqp.Table{
+			"x-dead-letter-exchange":    "",                   // Default exchange
+			"x-dead-letter-routing-key": r.config.QueueName,   // Route to main queue
+			"x-message-ttl":             int32(600000),        // Max 10 min default TTL (per-message TTL takes precedence)
 		},
 	)
 	return err
@@ -196,14 +224,65 @@ func (r *rabbitMQ) Publish(ctx context.Context, job *MessageJob) error {
 	)
 }
 
+// PublishWithDelay publishes a message with a delay before processing
+// The message is sent to a delay queue with per-message TTL, then routed back to main queue
+func (r *rabbitMQ) PublishWithDelay(ctx context.Context, job *MessageJob, delay time.Duration) error {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	if !r.connected {
+		return fmt.Errorf("not connected to RabbitMQ")
+	}
+
+	// Cap delay at 10 minutes (queue max TTL)
+	if delay > 10*time.Minute {
+		delay = 10 * time.Minute
+	}
+
+	body, err := job.ToJSON()
+	if err != nil {
+		return fmt.Errorf("failed to serialize job: %w", err)
+	}
+
+	// Per-message TTL in milliseconds
+	ttlMs := fmt.Sprintf("%d", delay.Milliseconds())
+
+	return r.channel.PublishWithContext(
+		ctx,
+		"",                       // exchange
+		r.config.DelayQueueName,  // routing key (delay queue)
+		false,                    // mandatory
+		false,                    // immediate
+		amqp.Publishing{
+			DeliveryMode: amqp.Persistent,
+			ContentType:  "application/json",
+			Body:         body,
+			Timestamp:    time.Now(),
+			MessageId:    job.ID,
+			Expiration:   ttlMs, // Per-message TTL
+		},
+	)
+}
+
 // Consume starts consuming messages from the queue
 func (r *rabbitMQ) Consume(ctx context.Context, handler func(job *MessageJob) error) error {
+	return r.ConsumeWithRetry(ctx, handler, nil)
+}
+
+// ConsumeWithRetry starts consuming messages with configurable retry strategy
+// If retryStrategy is nil, uses default exponential backoff
+func (r *rabbitMQ) ConsumeWithRetry(ctx context.Context, handler func(job *MessageJob) error, retryStrategy RetryStrategy) error {
 	r.mu.RLock()
 	if !r.connected {
 		r.mu.RUnlock()
 		return fmt.Errorf("not connected to RabbitMQ")
 	}
 	r.mu.RUnlock()
+
+	// Use default strategy if none provided
+	if retryStrategy == nil {
+		retryStrategy = DefaultRetryStrategy()
+	}
 
 	msgs, err := r.channel.Consume(
 		r.config.QueueName,
@@ -228,7 +307,7 @@ func (r *rabbitMQ) Consume(ctx context.Context, handler func(job *MessageJob) er
 			if !ok {
 				// Channel closed, wait for reconnection
 				<-r.reconnectCh
-				return r.Consume(ctx, handler)
+				return r.ConsumeWithRetry(ctx, handler, retryStrategy)
 			}
 
 			job, err := FromJSON(msg.Body)
@@ -239,26 +318,47 @@ func (r *rabbitMQ) Consume(ctx context.Context, handler func(job *MessageJob) er
 			}
 
 			if err := handler(job); err != nil {
-				log.Printf("Failed to process message %s: %v", job.ID, err)
-
-				// Increment attempts and check if should retry
-				job.Attempts++
-				if job.Attempts < job.MaxAttempts {
-					// Requeue for retry
-					msg.Nack(false, true)
-				} else {
-					// Move to dead letter queue
-					if dlqErr := r.PublishToDeadLetter(ctx, job, err.Error()); dlqErr != nil {
-						log.Printf("Failed to publish to DLQ: %v", dlqErr)
-					}
-					msg.Ack(false)
-				}
+				r.handleFailedMessage(ctx, job, err, retryStrategy, &msg)
 				continue
 			}
 
 			msg.Ack(false)
 		}
 	}
+}
+
+// handleFailedMessage handles a failed message with exponential backoff retry
+func (r *rabbitMQ) handleFailedMessage(ctx context.Context, job *MessageJob, err error, strategy RetryStrategy, msg *amqp.Delivery) {
+	// Calculate delay for next retry based on current attempt
+	delay := strategy.NextDelay(job.Attempts)
+	nextRetryAt := time.Now().Add(delay)
+
+	// Update job with failure info
+	job.MarkFailed(err.Error(), nextRetryAt)
+
+	log.Printf("Message %s failed (attempt %d/%d): %v. Next retry in %v",
+		job.ID, job.Attempts, job.MaxAttempts, err, delay)
+
+	// Check if we should retry
+	if job.ShouldRetry() {
+		// Publish to delay queue with exponential backoff
+		if pubErr := r.PublishWithDelay(ctx, job, delay); pubErr != nil {
+			log.Printf("Failed to publish retry for %s: %v", job.ID, pubErr)
+			// If we can't publish retry, move to DLQ
+			if dlqErr := r.PublishToDeadLetter(ctx, job, fmt.Sprintf("retry publish failed: %v (original: %v)", pubErr, err)); dlqErr != nil {
+				log.Printf("Failed to publish to DLQ: %v", dlqErr)
+			}
+		}
+	} else {
+		// Max attempts reached, move to dead letter queue
+		log.Printf("Message %s exceeded max attempts (%d), moving to DLQ", job.ID, job.MaxAttempts)
+		if dlqErr := r.PublishToDeadLetter(ctx, job, err.Error()); dlqErr != nil {
+			log.Printf("Failed to publish to DLQ: %v", dlqErr)
+		}
+	}
+
+	// Acknowledge the original message (we've handled it by republishing or DLQ)
+	msg.Ack(false)
 }
 
 // PublishToDeadLetter moves a failed message to dead letter queue

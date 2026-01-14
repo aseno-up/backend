@@ -20,8 +20,9 @@ type MessageSenderWorker struct {
 	stopCh          chan struct{}
 
 	// Stats
-	messagesSent   int64
-	messagesFailed int64
+	messagesSent    int64
+	messagesFailed  int64
+	messagesRetried int64
 }
 
 // NewMessageSenderWorker creates a new message sender worker
@@ -70,7 +71,14 @@ func (w *MessageSenderWorker) processMessage(job *queue.MessageJob) error {
 	// Apply rate limiting
 	time.Sleep(time.Duration(w.config.MessageRateLimitSeconds) * time.Second)
 
-	log.Printf("Sending %s message to %s (appointment: %s)", job.MessageType, job.Phone, job.AppointmentID)
+	// Log retry info if this is a retry attempt
+	if job.Attempts > 0 {
+		atomic.AddInt64(&w.messagesRetried, 1)
+		log.Printf("Retrying %s message to %s (attempt %d/%d, last error: %s)",
+			job.MessageType, job.Phone, job.Attempts+1, job.MaxAttempts, job.LastError)
+	} else {
+		log.Printf("Sending %s message to %s (appointment: %s)", job.MessageType, job.Phone, job.AppointmentID)
+	}
 
 	// Send the message via WhatsApp
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -79,12 +87,16 @@ func (w *MessageSenderWorker) processMessage(job *queue.MessageJob) error {
 	_, err := w.whatsappService.SendTextMessage(ctx, job.Instance, job.Phone, job.Message)
 	if err != nil {
 		atomic.AddInt64(&w.messagesFailed, 1)
-		log.Printf("Failed to send message to %s: %v (attempt %d/%d)", job.Phone, err, job.Attempts+1, job.MaxAttempts)
+		// Return error to trigger retry with exponential backoff
 		return fmt.Errorf("failed to send message: %w", err)
 	}
 
 	atomic.AddInt64(&w.messagesSent, 1)
-	log.Printf("Successfully sent %s message to %s", job.MessageType, job.Phone)
+	if job.Attempts > 0 {
+		log.Printf("Successfully sent %s message to %s after %d retries", job.MessageType, job.Phone, job.Attempts)
+	} else {
+		log.Printf("Successfully sent %s message to %s", job.MessageType, job.Phone)
+	}
 
 	return nil
 }
@@ -92,13 +104,15 @@ func (w *MessageSenderWorker) processMessage(job *queue.MessageJob) error {
 // GetStats returns current statistics
 func (w *MessageSenderWorker) GetStats() MessageSenderStats {
 	return MessageSenderStats{
-		MessagesSent:   atomic.LoadInt64(&w.messagesSent),
-		MessagesFailed: atomic.LoadInt64(&w.messagesFailed),
+		MessagesSent:    atomic.LoadInt64(&w.messagesSent),
+		MessagesFailed:  atomic.LoadInt64(&w.messagesFailed),
+		MessagesRetried: atomic.LoadInt64(&w.messagesRetried),
 	}
 }
 
 // MessageSenderStats holds statistics about message sending
 type MessageSenderStats struct {
-	MessagesSent   int64 `json:"messages_sent"`
-	MessagesFailed int64 `json:"messages_failed"`
+	MessagesSent    int64 `json:"messages_sent"`
+	MessagesFailed  int64 `json:"messages_failed"`
+	MessagesRetried int64 `json:"messages_retried"`
 }
