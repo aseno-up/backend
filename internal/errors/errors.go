@@ -188,6 +188,22 @@ func IsConflict(err error) bool {
 	return false
 }
 
+// IsValidation checks if error is a validation error
+func IsValidation(err error) bool {
+	if appErr, ok := err.(*AppError); ok {
+		return appErr.Type == ErrValidation
+	}
+	return false
+}
+
+// IsSlotUnavailable checks if error is a slot unavailable error
+func IsSlotUnavailable(err error) bool {
+	if appErr, ok := err.(*AppError); ok {
+		return appErr.Type == ErrSlotUnavailable
+	}
+	return false
+}
+
 // GetStatusCode returns the HTTP status code for an error
 func GetStatusCode(err error) int {
 	if appErr, ok := err.(*AppError); ok {

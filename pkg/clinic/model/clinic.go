@@ -99,6 +99,7 @@ type ClinicResponse struct {
 	WhatsAppConnected  bool               `json:"whatsapp_connected"`
 	GoogleConnected    bool               `json:"google_connected"`
 	Settings           ClinicSettings     `json:"settings"`
+	BookingURL         string             `json:"booking_url,omitempty"`
 	CreatedAt          time.Time          `json:"created_at"`
 }
 

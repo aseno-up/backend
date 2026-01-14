@@ -17,8 +17,10 @@ type JWTService interface {
 	GenerateTokenPair(user *user_model.User) (*model.TokenPair, error)
 	GenerateAccessToken(user *user_model.User) (string, time.Time, error)
 	GenerateRefreshToken(user *user_model.User) (string, error)
+	GenerateSSEToken(userID, clinicID uuid.UUID) (string, error)
 	ValidateAccessToken(tokenString string) (*model.JWTClaims, error)
 	ValidateRefreshToken(tokenString string) (*model.JWTClaims, error)
+	ValidateSSEToken(tokenString string) (*model.JWTClaims, error)
 }
 
 // jwtService implements JWTService
@@ -166,6 +168,47 @@ func (s *jwtService) parseToken(tokenString string) (*model.JWTClaims, error) {
 	claims, ok := token.Claims.(*model.JWTClaims)
 	if !ok || !token.Valid {
 		return nil, errors.ErrTokenInvalidInstance
+	}
+
+	return claims, nil
+}
+
+// GenerateSSEToken generates a short-lived token for SSE connections (30 seconds)
+func (s *jwtService) GenerateSSEToken(userID, clinicID uuid.UUID) (string, error) {
+	expiresAt := time.Now().Add(30 * time.Second)
+
+	claims := &model.JWTClaims{
+		UserID:   userID,
+		ClinicID: clinicID,
+		Type:     model.TokenTypeSSE,
+		RegisteredClaims: jwt.RegisteredClaims{
+			ExpiresAt: jwt.NewNumericDate(expiresAt),
+			IssuedAt:  jwt.NewNumericDate(time.Now()),
+			NotBefore: jwt.NewNumericDate(time.Now()),
+			Issuer:    s.issuer,
+			Subject:   userID.String(),
+			ID:        uuid.New().String(),
+		},
+	}
+
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	tokenString, err := token.SignedString([]byte(s.secret))
+	if err != nil {
+		return "", errors.ErrInternalInstance.WithError(err)
+	}
+
+	return tokenString, nil
+}
+
+// ValidateSSEToken validates an SSE token and returns the claims
+func (s *jwtService) ValidateSSEToken(tokenString string) (*model.JWTClaims, error) {
+	claims, err := s.parseToken(tokenString)
+	if err != nil {
+		return nil, err
+	}
+
+	if claims.Type != model.TokenTypeSSE {
+		return nil, errors.ErrTokenInvalidInstance.WithMessage("Invalid token type")
 	}
 
 	return claims, nil

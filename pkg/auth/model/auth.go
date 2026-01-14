@@ -16,6 +16,7 @@ type TokenType string
 const (
 	TokenTypeAccess  TokenType = "access"
 	TokenTypeRefresh TokenType = "refresh"
+	TokenTypeSSE     TokenType = "sse"
 )
 
 // JWTClaims represents the custom claims for JWT tokens

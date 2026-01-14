@@ -1,6 +1,9 @@
 package model
 
 import (
+	"database/sql/driver"
+	"encoding/json"
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
@@ -47,6 +50,34 @@ func (n *Notification) IsRead() bool {
 
 // JSON is a custom type for JSONB columns
 type JSON map[string]interface{}
+
+// Value implements driver.Valuer for JSON
+func (j JSON) Value() (driver.Value, error) {
+	if j == nil {
+		return nil, nil
+	}
+	return json.Marshal(j)
+}
+
+// Scan implements sql.Scanner for JSON
+func (j *JSON) Scan(value interface{}) error {
+	if value == nil {
+		*j = nil
+		return nil
+	}
+
+	var data []byte
+	switch v := value.(type) {
+	case []byte:
+		data = v
+	case string:
+		data = []byte(v)
+	default:
+		return errors.New("invalid type for JSON")
+	}
+
+	return json.Unmarshal(data, j)
+}
 
 // NotificationResponse is the API response for a notification
 type NotificationResponse struct {

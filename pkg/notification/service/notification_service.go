@@ -11,6 +11,11 @@ import (
 	"github.com/aseno/backend/pkg/notification/repository"
 )
 
+// Broadcaster defines interface for broadcasting notifications in real-time
+type Broadcaster interface {
+	Broadcast(clinicID uuid.UUID, userID *uuid.UUID, notification *model.NotificationResponse)
+}
+
 // NotificationService defines the interface for notification operations
 type NotificationService interface {
 	// User-facing operations
@@ -28,15 +33,24 @@ type NotificationService interface {
 	NotifyWhatsAppDisconnected(ctx context.Context, clinicID uuid.UUID) error
 	NotifyTrialEnding(ctx context.Context, clinicID uuid.UUID, daysLeft int) error
 	NotifyNewPatient(ctx context.Context, clinicID uuid.UUID, patientName string) error
+
+	// Broadcaster management
+	SetBroadcaster(b Broadcaster)
 }
 
 type notificationService struct {
-	repo repository.NotificationRepository
+	repo        repository.NotificationRepository
+	broadcaster Broadcaster
 }
 
 // NewNotificationService creates a new notification service
 func NewNotificationService(repo repository.NotificationRepository) NotificationService {
 	return &notificationService{repo: repo}
+}
+
+// SetBroadcaster sets the broadcaster for real-time notifications
+func (s *notificationService) SetBroadcaster(b Broadcaster) {
+	s.broadcaster = b
 }
 
 // List returns notifications for a user
@@ -73,9 +87,18 @@ func (s *notificationService) Delete(ctx context.Context, id, clinicID uuid.UUID
 	return s.repo.Delete(ctx, id, clinicID)
 }
 
-// Create creates a new notification
+// Create creates a new notification and broadcasts it via SSE
 func (s *notificationService) Create(ctx context.Context, notification *model.Notification) error {
-	return s.repo.Create(ctx, notification)
+	if err := s.repo.Create(ctx, notification); err != nil {
+		return err
+	}
+
+	// Broadcast to connected clients
+	if s.broadcaster != nil {
+		s.broadcaster.Broadcast(notification.ClinicID, notification.UserID, notification.ToResponse())
+	}
+
+	return nil
 }
 
 // NotifyAppointmentConfirmed creates a notification for a confirmed appointment
@@ -91,7 +114,7 @@ func (s *notificationService) NotifyAppointmentConfirmed(ctx context.Context, cl
 			"start_time":        startTime,
 		},
 	}
-	return s.repo.Create(ctx, notification)
+	return s.Create(ctx, notification)
 }
 
 // NotifyAppointmentCancelled creates a notification for a cancelled appointment
@@ -113,7 +136,7 @@ func (s *notificationService) NotifyAppointmentCancelled(ctx context.Context, cl
 			"reason":            reason,
 		},
 	}
-	return s.repo.Create(ctx, notification)
+	return s.Create(ctx, notification)
 }
 
 // NotifyWhatsAppConnected creates a notification for WhatsApp connection
@@ -124,7 +147,7 @@ func (s *notificationService) NotifyWhatsAppConnected(ctx context.Context, clini
 		Title:    "WhatsApp Conectado",
 		Message:  "Seu WhatsApp foi conectado com sucesso. Os lembretes automaticos estao ativos.",
 	}
-	return s.repo.Create(ctx, notification)
+	return s.Create(ctx, notification)
 }
 
 // NotifyWhatsAppDisconnected creates a notification for WhatsApp disconnection
@@ -135,7 +158,7 @@ func (s *notificationService) NotifyWhatsAppDisconnected(ctx context.Context, cl
 		Title:    "WhatsApp Desconectado",
 		Message:  "Seu WhatsApp foi desconectado. Reconecte para continuar enviando lembretes automaticos.",
 	}
-	return s.repo.Create(ctx, notification)
+	return s.Create(ctx, notification)
 }
 
 // NotifyTrialEnding creates a notification for trial ending
@@ -163,7 +186,7 @@ func (s *notificationService) NotifyTrialEnding(ctx context.Context, clinicID uu
 			"days_left": daysLeft,
 		},
 	}
-	return s.repo.Create(ctx, notification)
+	return s.Create(ctx, notification)
 }
 
 // NotifyNewPatient creates a notification for a new patient
@@ -177,5 +200,5 @@ func (s *notificationService) NotifyNewPatient(ctx context.Context, clinicID uui
 			"patient_name": patientName,
 		},
 	}
-	return s.repo.Create(ctx, notification)
+	return s.Create(ctx, notification)
 }

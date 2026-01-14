@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 
@@ -18,14 +20,21 @@ type ClinicService interface {
 
 // clinicService implements ClinicService
 type clinicService struct {
-	repo repository.ClinicRepository
+	repo        repository.ClinicRepository
+	frontendURL string
 }
 
 // NewClinicService creates a new clinic service
-func NewClinicService(repo repository.ClinicRepository) ClinicService {
+func NewClinicService(repo repository.ClinicRepository, frontendURL string) ClinicService {
 	return &clinicService{
-		repo: repo,
+		repo:        repo,
+		frontendURL: strings.TrimSuffix(frontendURL, "/"),
 	}
+}
+
+// buildBookingURL constructs the public booking URL for a clinic
+func (s *clinicService) buildBookingURL(slug string) string {
+	return fmt.Sprintf("%s/agendar/%s", s.frontendURL, slug)
 }
 
 // GetByID retrieves a clinic by ID
@@ -34,7 +43,9 @@ func (s *clinicService) GetByID(ctx context.Context, id uuid.UUID) (*model.Clini
 	if err != nil {
 		return nil, err
 	}
-	return clinic.ToResponse(), nil
+	resp := clinic.ToResponse()
+	resp.BookingURL = s.buildBookingURL(clinic.Slug)
+	return resp, nil
 }
 
 // Update updates a clinic's information
@@ -101,5 +112,7 @@ func (s *clinicService) Update(ctx context.Context, id uuid.UUID, req *model.Upd
 		return nil, errors.ErrInternalInstance.WithError(err)
 	}
 
-	return clinic.ToResponse(), nil
+	resp := clinic.ToResponse()
+	resp.BookingURL = s.buildBookingURL(clinic.Slug)
+	return resp, nil
 }

@@ -72,6 +72,24 @@ docker-down:
 	@echo "Stopping Docker services..."
 	docker-compose down
 
+# Start everything (database + app) - recommended for development
+up:
+	@echo "Starting Docker services..."
+	@docker-compose up -d postgres redis
+	@echo "Waiting for PostgreSQL to be ready..."
+	@until docker-compose exec -T postgres pg_isready -U aseno -d aseno_db > /dev/null 2>&1; do \
+		echo "Waiting for database..."; \
+		sleep 2; \
+	done
+	@echo "Database is ready!"
+	@echo "Starting application..."
+	$(GORUN) ./cmd/api/main.go
+
+# Stop everything
+down:
+	@echo "Stopping all services..."
+	docker-compose down
+
 # Start pgAdmin (Database UI)
 pgadmin:
 	@echo "Starting pgAdmin on http://localhost:5050..."
@@ -107,6 +125,8 @@ migration:
 # Show help
 help:
 	@echo "Available commands:"
+	@echo "  make up             - Start database + application (recommended)"
+	@echo "  make down           - Stop all services"
 	@echo "  make build          - Build the binary"
 	@echo "  make run            - Build and run the application"
 	@echo "  make dev            - Run in development mode"

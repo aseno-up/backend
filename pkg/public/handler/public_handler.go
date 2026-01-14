@@ -98,7 +98,6 @@ func (h *publicHandler) GetConfig(c *gin.Context) {
 					"Profissionais ilimitados",
 					"Tudo do Profissional",
 					"API de integração",
-					"Gerente de conta dedicado",
 					"Treinamento da equipe",
 					"Importação de dados",
 					"SLA de 99.9%",

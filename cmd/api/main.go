@@ -89,6 +89,8 @@ import (
 	notification_service "github.com/aseno/backend/pkg/notification/service"
 	public_handler "github.com/aseno/backend/pkg/public/handler"
 	settings_handler "github.com/aseno/backend/pkg/settings/handler"
+	booking_handler "github.com/aseno/backend/pkg/booking/handler"
+	booking_service "github.com/aseno/backend/pkg/booking/service"
 	settings_model "github.com/aseno/backend/pkg/settings/model"
 	settings_repository "github.com/aseno/backend/pkg/settings/repository"
 	settings_service "github.com/aseno/backend/pkg/settings/service"
@@ -440,12 +442,18 @@ func main() {
 	// Initialize Notification handler
 	notificationHdlr := notification_handler.NewNotificationHandler(notificationSvc)
 
+	// Connect SSE broadcaster to notification service
+	notificationSvc.SetBroadcaster(notificationHdlr.GetHub())
+
+	// Connect JWT service to notification handler for SSE token generation
+	notificationHdlr.SetJWTService(jwtService)
+
 	// Initialize Onboarding service and handler
 	onboardingSvc := clinic_service.NewOnboardingService(db.GetDB(), clinicRepo)
 	onboardingHdlr := clinic_handler.NewOnboardingHandler(onboardingSvc)
 
 	// Initialize Clinic service and handler
-	clinicSvc := clinic_service.NewClinicService(clinicRepo)
+	clinicSvc := clinic_service.NewClinicService(clinicRepo, cfg.GetFrontendURL())
 	clinicHdlr := clinic_handler.NewClinicHandler(clinicSvc)
 
 	// Initialize Waitlist handler
@@ -459,6 +467,16 @@ func main() {
 
 	// Initialize Public handler (no auth required - landing page config)
 	publicHdlr := public_handler.NewPublicHandler(settingsSvc)
+
+	// Initialize Booking service and handler (public online booking)
+	bookingSvc := booking_service.NewBookingService(
+		clinicRepo,
+		professionalRepo,
+		appointmentRepo,
+		patientRepo,
+		notificationSvc,
+	)
+	bookingHdlr := booking_handler.NewBookingHandler(bookingSvc)
 
 	// Setup router
 	router := setupRouter(
@@ -483,6 +501,7 @@ func main() {
 		clinicHdlr,
 		settingsHdlr,
 		publicHdlr,
+		bookingHdlr,
 		authMiddleware,
 		tenantMiddleware,
 	)
@@ -556,6 +575,7 @@ func setupRouter(
 	clinicHandler clinic_handler.ClinicHandler,
 	settingsHandler settings_handler.SettingsHandler,
 	publicHandler public_handler.PublicHandler,
+	bookingHandler booking_handler.BookingHandler,
 	authMiddleware auth_middleware.AuthMiddleware,
 	tenantMiddleware auth_middleware.TenantMiddleware,
 ) *gin.Engine {
@@ -589,6 +609,12 @@ func setupRouter(
 
 		// Public config routes (no auth required - landing page)
 		publicHandler.RegisterRoutes(v1)
+
+		// Public booking routes (no auth required - online booking)
+		bookingHandler.RegisterRoutes(v1)
+
+		// Public SSE stream route (uses token in query param for auth)
+		notificationHandler.RegisterPublicRoutes(v1)
 
 		// Protected routes (auth required)
 		protected := v1.Group("")
