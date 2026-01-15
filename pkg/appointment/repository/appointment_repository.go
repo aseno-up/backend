@@ -31,6 +31,11 @@ type AppointmentRepository interface {
 	// WhatsApp response handling
 	GetPendingByPhone(ctx context.Context, clinicID uuid.UUID, phone string) (*model.Appointment, error)
 
+	// Confirmation timeout methods
+	GetExpiredConfirmations(ctx context.Context, limit int) ([]*model.AppointmentWithClinic, error)
+	MarkConfirmationExpired(ctx context.Context, id uuid.UUID) error
+	SetConfirmationExpiresAt(ctx context.Context, id uuid.UUID, expiresAt time.Time) error
+
 	// Smart Scheduling
 	GetSlotPerformanceStats(ctx context.Context, clinicID, professionalID uuid.UUID) ([]*model.SlotPerformanceStats, error)
 }
@@ -302,6 +307,7 @@ func (r *appointmentRepository) GetPendingReminders(ctx context.Context, reminde
 		return nil, errors.ErrValidationInstance.WithMessage("invalid reminder type")
 	}
 
+	// Include no_response status so reminders continue after timeout
 	query := `
 		SELECT
 			a.*,
@@ -311,7 +317,7 @@ func (r *appointmentRepository) GetPendingReminders(ctx context.Context, reminde
 		FROM appointments a
 		INNER JOIN clinics c ON a.clinic_id = c.id
 		WHERE a.deleted_at IS NULL
-			AND a.status = 'pending'
+			AND a.status IN ('pending', 'no_response')
 			AND a.start_time >= ?
 			AND a.start_time < ?
 			AND a.` + reminderField + ` IS NULL
@@ -377,13 +383,14 @@ func (r *appointmentRepository) GetPendingByPhone(ctx context.Context, clinicID 
 	// Clean phone - remove non-digits for comparison
 	// The query will handle flexible matching
 
+	// Include no_response so patient can still confirm after timeout
 	query := `
 		SELECT a.*
 		FROM appointments a
 		INNER JOIN patients p ON a.patient_id = p.id AND p.deleted_at IS NULL
 		WHERE a.clinic_id = ?
 			AND a.deleted_at IS NULL
-			AND a.status IN ('pending', 'confirmed')
+			AND a.status IN ('pending', 'confirmed', 'no_response')
 			AND a.start_time > NOW()
 			AND (
 				REGEXP_REPLACE(p.phone, '[^0-9]', '', 'g') LIKE '%' || REGEXP_REPLACE(?, '[^0-9]', '', 'g') || '%'
@@ -420,4 +427,72 @@ func (r *appointmentRepository) GetPendingByPhone(ctx context.Context, clinicID 
 		First(&appointment.Professional)
 
 	return &appointment, nil
+}
+
+// GetExpiredConfirmations retrieves appointments where confirmation has expired
+// These are appointments with status=pending and confirmation_expires_at < now
+func (r *appointmentRepository) GetExpiredConfirmations(ctx context.Context, limit int) ([]*model.AppointmentWithClinic, error) {
+	var results []*model.AppointmentWithClinic
+
+	query := `
+		SELECT
+			a.*,
+			c.name as clinic_name,
+			c.whats_app_instance as whatsapp_instance,
+			c.whats_app_connected as whatsapp_connected
+		FROM appointments a
+		INNER JOIN clinics c ON a.clinic_id = c.id
+		WHERE a.deleted_at IS NULL
+			AND a.status = 'pending'
+			AND a.confirmation_expires_at IS NOT NULL
+			AND a.confirmation_expires_at < NOW()
+			AND a.start_time > NOW()
+		ORDER BY a.confirmation_expires_at ASC
+		LIMIT ?
+	`
+
+	if err := r.db.WithContext(ctx).Raw(query, limit).Scan(&results).Error; err != nil {
+		return nil, errors.ErrInternalInstance.WithError(err)
+	}
+
+	// Load patient and professional info for each appointment
+	for i := range results {
+		r.db.WithContext(ctx).
+			Model(&model.PatientInfo{}).
+			Where("id = ?", results[i].PatientID).
+			First(&results[i].Patient)
+
+		r.db.WithContext(ctx).
+			Model(&model.ProfessionalInfo{}).
+			Where("id = ?", results[i].ProfessionalID).
+			First(&results[i].Professional)
+	}
+
+	return results, nil
+}
+
+// MarkConfirmationExpired marks an appointment as no_response due to confirmation timeout
+func (r *appointmentRepository) MarkConfirmationExpired(ctx context.Context, id uuid.UUID) error {
+	result := r.db.WithContext(ctx).
+		Model(&model.Appointment{}).
+		Where("id = ?", id).
+		Update("status", model.AppointmentStatusNoResponse)
+
+	if result.Error != nil {
+		return errors.ErrInternalInstance.WithError(result.Error)
+	}
+	return nil
+}
+
+// SetConfirmationExpiresAt sets the confirmation timeout for an appointment
+func (r *appointmentRepository) SetConfirmationExpiresAt(ctx context.Context, id uuid.UUID, expiresAt time.Time) error {
+	result := r.db.WithContext(ctx).
+		Model(&model.Appointment{}).
+		Where("id = ?", id).
+		Update("confirmation_expires_at", expiresAt)
+
+	if result.Error != nil {
+		return errors.ErrInternalInstance.WithError(result.Error)
+	}
+	return nil
 }

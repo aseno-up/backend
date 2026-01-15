@@ -368,7 +368,13 @@ func main() {
 				messageSenderWorker = worker.NewMessageSenderWorker(workerCfg, messageQueue, whatsappService)
 				go messageSenderWorker.Start()
 
-				log.Println("Reminder and Message Sender workers started")
+				// Initialize and start Timeout Worker (marks no_response when patient doesn't confirm)
+				if workerCfg.TimeoutWorkerEnabled {
+					timeoutWorker := worker.NewTimeoutWorker(workerCfg, appointmentRepo)
+					go timeoutWorker.Start()
+				}
+
+				log.Println("Reminder, Message Sender, and Timeout workers started")
 			}
 
 			// Initialize Waitlist service (requires WhatsApp and queue)

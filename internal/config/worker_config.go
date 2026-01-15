@@ -21,6 +21,11 @@ type WorkerConfig struct {
 	Reminder2hEnabled  bool
 	Reminder2hBefore   time.Duration
 
+	// Timeout Worker - marks appointments as no_response if patient doesn't confirm
+	TimeoutWorkerEnabled        bool
+	TimeoutWorkerInterval       time.Duration
+	ConfirmationTimeoutDuration time.Duration
+
 	// Message Sender
 	MessageRateLimitSeconds int
 	MessageRetryMax         int
@@ -46,6 +51,11 @@ func NewWorkerConfig() *WorkerConfig {
 		Reminder24hBefore:  getEnvAsDurationW("REMINDER_24H_BEFORE", 24*time.Hour),
 		Reminder2hEnabled:  getEnvAsBoolW("REMINDER_2H_ENABLED", true),
 		Reminder2hBefore:   getEnvAsDurationW("REMINDER_2H_BEFORE", 2*time.Hour),
+
+		// Timeout Worker
+		TimeoutWorkerEnabled:        getEnvAsBoolW("TIMEOUT_WORKER_ENABLED", true),
+		TimeoutWorkerInterval:       getEnvAsDurationW("TIMEOUT_WORKER_INTERVAL", 5*time.Minute),
+		ConfirmationTimeoutDuration: getEnvAsDurationW("CONFIRMATION_TIMEOUT_DURATION", 16*time.Hour),
 
 		// Message Sender
 		MessageRateLimitSeconds: getEnvAsIntW("MESSAGE_RATE_LIMIT_SECONDS", 1),

@@ -10,11 +10,12 @@ import (
 type AppointmentStatus string
 
 const (
-	AppointmentStatusPending    AppointmentStatus = "pending"    // Awaiting confirmation
-	AppointmentStatusConfirmed  AppointmentStatus = "confirmed"  // Confirmed by patient
-	AppointmentStatusCanceled   AppointmentStatus = "canceled"   // Canceled
-	AppointmentStatusNoShow     AppointmentStatus = "no_show"    // Patient didn't show up
-	AppointmentStatusCompleted  AppointmentStatus = "completed"  // Appointment finished
+	AppointmentStatusPending    AppointmentStatus = "pending"     // Awaiting confirmation
+	AppointmentStatusConfirmed  AppointmentStatus = "confirmed"   // Confirmed by patient
+	AppointmentStatusCanceled   AppointmentStatus = "canceled"    // Canceled
+	AppointmentStatusNoShow     AppointmentStatus = "no_show"     // Patient didn't show up
+	AppointmentStatusNoResponse AppointmentStatus = "no_response" // Patient didn't respond to confirmation
+	AppointmentStatusCompleted  AppointmentStatus = "completed"   // Appointment finished
 	AppointmentStatusRescheduled AppointmentStatus = "rescheduled" // Rescheduled to another time
 )
 
@@ -49,6 +50,8 @@ type Appointment struct {
 	Reminder48hSentAt *time.Time `json:"reminder_48h_sent_at,omitempty"`
 	Reminder24hSentAt *time.Time `json:"reminder_24h_sent_at,omitempty"`
 	Reminder2hSentAt  *time.Time `json:"reminder_2h_sent_at,omitempty"`
+	// Confirmation timeout - when this expires without response, status changes to no_response
+	ConfirmationExpiresAt *time.Time `json:"confirmation_expires_at,omitempty" gorm:"index"`
 
 	// Legacy field (deprecated, use specific reminder fields)
 	ReminderSentAt  *time.Time        `json:"reminder_sent_at,omitempty"`

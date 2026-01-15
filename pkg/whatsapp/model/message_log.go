@@ -13,15 +13,16 @@ import (
 type MessageLogEvent string
 
 const (
-	MessageLogEventCreated   MessageLogEvent = "created"   // Message created in system
-	MessageLogEventQueued    MessageLogEvent = "queued"    // Queued for sending
-	MessageLogEventSent      MessageLogEvent = "sent"      // Provider confirmed sent
-	MessageLogEventDelivered MessageLogEvent = "delivered" // Delivered to phone
-	MessageLogEventRead      MessageLogEvent = "read"      // Read by patient
-	MessageLogEventReplied   MessageLogEvent = "replied"   // Patient replied
-	MessageLogEventFailed    MessageLogEvent = "failed"    // Failed to send
-	MessageLogEventRetried   MessageLogEvent = "retried"   // Retry attempt
-	MessageLogEventProcessed MessageLogEvent = "processed" // System processed response
+	MessageLogEventCreated             MessageLogEvent = "created"              // Message created in system
+	MessageLogEventQueued              MessageLogEvent = "queued"               // Queued for sending
+	MessageLogEventSent                MessageLogEvent = "sent"                 // Provider confirmed sent
+	MessageLogEventDelivered           MessageLogEvent = "delivered"            // Delivered to phone
+	MessageLogEventRead                MessageLogEvent = "read"                 // Read by patient
+	MessageLogEventReplied             MessageLogEvent = "replied"              // Patient replied
+	MessageLogEventFailed              MessageLogEvent = "failed"               // Failed to send
+	MessageLogEventRetried             MessageLogEvent = "retried"              // Retry attempt
+	MessageLogEventProcessed           MessageLogEvent = "processed"            // System processed response
+	MessageLogEventConfirmationTimeout MessageLogEvent = "confirmation_timeout" // Patient didn't respond in time
 )
 
 // MessageLogChannel represents the message channel

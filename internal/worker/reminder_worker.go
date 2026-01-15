@@ -165,6 +165,15 @@ func (w *ReminderWorker) processThreshold(ctx context.Context, threshold config.
 			log.Printf("Failed to mark reminder sent for appointment %s: %v", apt.ID, err)
 		}
 
+		// Set confirmation timeout on first reminder (48h)
+		// This starts the countdown for no_response status
+		if threshold.Type == "reminder_48h" && apt.ConfirmationExpiresAt == nil {
+			expiresAt := time.Now().Add(w.config.ConfirmationTimeoutDuration)
+			if err := w.appointmentRepo.SetConfirmationExpiresAt(ctx, apt.ID, expiresAt); err != nil {
+				log.Printf("Failed to set confirmation timeout for appointment %s: %v", apt.ID, err)
+			}
+		}
+
 		enqueued++
 	}
 
@@ -305,4 +314,5 @@ func (w *ReminderWorker) GetStats(ctx context.Context) ([]ReminderStats, error) 
 var _ interface {
 	GetPendingReminders(ctx context.Context, reminderType string, windowStart, windowEnd time.Time) ([]*appointment_model.AppointmentWithClinic, error)
 	MarkReminderSent(ctx context.Context, id uuid.UUID, reminderType string) error
+	SetConfirmationExpiresAt(ctx context.Context, id uuid.UUID, expiresAt time.Time) error
 } = (appointment_repository.AppointmentRepository)(nil)
