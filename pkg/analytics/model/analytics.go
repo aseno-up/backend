@@ -87,14 +87,16 @@ func GetRecommendation(rate float64) string {
 
 // ReportMetrics represents the "Relatórios que DOEM" metrics
 type ReportMetrics struct {
-	Period               string           `json:"period"`
-	NoShows              int              `json:"no_shows"`
-	HoursLost            float64          `json:"hours_lost"`
-	CompletedSessions    int              `json:"completed_sessions"`
-	EstimatedLostRevenue float64          `json:"estimated_lost_revenue"`
-	TotalRevenue         float64          `json:"total_revenue"`
-	AttendanceRate       float64          `json:"attendance_rate"`
-	MonthlyBreakdown     []MonthlyMetrics `json:"monthly_breakdown"`
+	Period               string               `json:"period"`
+	NoShows              int                  `json:"no_shows"`
+	HoursLost            float64              `json:"hours_lost"`
+	CompletedSessions    int                  `json:"completed_sessions"`
+	EstimatedLostRevenue float64              `json:"estimated_lost_revenue"`
+	TotalRevenue         float64              `json:"total_revenue"`
+	AttendanceRate       float64              `json:"attendance_rate"`
+	MonthlyBreakdown     []MonthlyMetrics     `json:"monthly_breakdown"`
+	WhatsAppMetrics      *WhatsAppMetrics     `json:"whatsapp_metrics,omitempty"`
+	AppointmentsSummary  *AppointmentsSummary `json:"appointments_summary,omitempty"`
 }
 
 // MonthlyMetrics represents monthly breakdown of metrics
@@ -110,7 +112,27 @@ type MonthlyMetrics struct {
 
 // ReportFilter represents filter parameters for report queries
 type ReportFilter struct {
-	Period string `form:"period"` // "1m", "3m", "6m", "1y"
+	Period         string     `form:"period"`          // "1m", "3m", "6m", "1y"
+	ProfessionalID *uuid.UUID `form:"professional_id"` // Optional filter by professional
+}
+
+// WhatsAppMetrics represents WhatsApp message statistics
+type WhatsAppMetrics struct {
+	MessagesSent        int `json:"messages_sent"`
+	Delivered           int `json:"delivered"`
+	Replied             int `json:"replied"`
+	Failed              int `json:"failed"`
+	ConfirmationTimeout int `json:"confirmation_timeout"`
+}
+
+// AppointmentsSummary represents appointments summary by status
+type AppointmentsSummary struct {
+	Total      int `json:"total"`
+	Confirmed  int `json:"confirmed"`
+	Canceled   int `json:"canceled"`
+	NoResponse int `json:"no_response"`
+	NoShow     int `json:"no_show"`
+	Completed  int `json:"completed"`
 }
 
 // MonthNames maps month numbers to Portuguese names

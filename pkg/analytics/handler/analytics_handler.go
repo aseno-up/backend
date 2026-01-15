@@ -144,6 +144,16 @@ func (h *analyticsHandler) GetReportMetrics(c *gin.Context) {
 		Period: c.DefaultQuery("period", "3m"),
 	}
 
+	// Parse optional professional_id
+	if professionalIDStr := c.Query("professional_id"); professionalIDStr != "" {
+		professionalID, err := uuid.Parse(professionalIDStr)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, errors.ToResponse(errors.ErrValidationInstance.WithMessage("Invalid professional_id")))
+			return
+		}
+		filter.ProfessionalID = &professionalID
+	}
+
 	metrics, err := h.service.GetReportMetrics(c.Request.Context(), clinicID.(uuid.UUID), filter)
 	if err != nil {
 		statusCode := errors.GetStatusCode(err)

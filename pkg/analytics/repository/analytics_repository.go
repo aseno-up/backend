@@ -17,7 +17,9 @@ type AnalyticsRepository interface {
 	GetStatsByHour(ctx context.Context, clinicID uuid.UUID, professionalID *uuid.UUID, start, end time.Time) ([]model.TimeSlotStats, error)
 	GetStatsByDayAndHour(ctx context.Context, clinicID uuid.UUID, professionalID *uuid.UUID, start, end time.Time) ([]model.TimeSlotStats, error)
 	GetOverallStats(ctx context.Context, clinicID uuid.UUID, professionalID *uuid.UUID, start, end time.Time) (*model.AnalyticsSummary, error)
-	GetReportMetrics(ctx context.Context, clinicID uuid.UUID, start, end time.Time) ([]model.MonthlyMetrics, error)
+	GetReportMetrics(ctx context.Context, clinicID uuid.UUID, professionalID *uuid.UUID, start, end time.Time) ([]model.MonthlyMetrics, error)
+	GetWhatsAppMetrics(ctx context.Context, clinicID uuid.UUID, professionalID *uuid.UUID, start, end time.Time) (*model.WhatsAppMetrics, error)
+	GetAppointmentsSummary(ctx context.Context, clinicID uuid.UUID, professionalID *uuid.UUID, start, end time.Time) (*model.AppointmentsSummary, error)
 }
 
 // analyticsRepository implements AnalyticsRepository
@@ -179,10 +181,10 @@ func (r *analyticsRepository) GetOverallStats(ctx context.Context, clinicID uuid
 }
 
 // GetReportMetrics retrieves monthly metrics for "Relatórios que DOEM"
-func (r *analyticsRepository) GetReportMetrics(ctx context.Context, clinicID uuid.UUID, start, end time.Time) ([]model.MonthlyMetrics, error) {
+func (r *analyticsRepository) GetReportMetrics(ctx context.Context, clinicID uuid.UUID, professionalID *uuid.UUID, start, end time.Time) ([]model.MonthlyMetrics, error) {
 	var metrics []model.MonthlyMetrics
 
-	query := `
+	baseQuery := `
 		SELECT
 			EXTRACT(YEAR FROM start_time)::int as year,
 			EXTRACT(MONTH FROM start_time)::int as month,
@@ -195,11 +197,17 @@ func (r *analyticsRepository) GetReportMetrics(ctx context.Context, clinicID uui
 			AND start_time BETWEEN ? AND ?
 			AND status IN ('no_show', 'completed')
 			AND deleted_at IS NULL
-		GROUP BY year, month
-		ORDER BY year DESC, month DESC
 	`
 
-	err := r.db.WithContext(ctx).Raw(query, clinicID, start, end).Scan(&metrics).Error
+	var err error
+	if professionalID != nil {
+		query := baseQuery + " AND professional_id = ? GROUP BY year, month ORDER BY year DESC, month DESC"
+		err = r.db.WithContext(ctx).Raw(query, clinicID, start, end, *professionalID).Scan(&metrics).Error
+	} else {
+		query := baseQuery + " GROUP BY year, month ORDER BY year DESC, month DESC"
+		err = r.db.WithContext(ctx).Raw(query, clinicID, start, end).Scan(&metrics).Error
+	}
+
 	if err != nil {
 		return nil, errors.ErrInternalInstance.WithError(err)
 	}
@@ -210,4 +218,75 @@ func (r *analyticsRepository) GetReportMetrics(ctx context.Context, clinicID uui
 	}
 
 	return metrics, nil
+}
+
+// GetWhatsAppMetrics retrieves WhatsApp message statistics
+func (r *analyticsRepository) GetWhatsAppMetrics(ctx context.Context, clinicID uuid.UUID, professionalID *uuid.UUID, start, end time.Time) (*model.WhatsAppMetrics, error) {
+	var metrics model.WhatsAppMetrics
+
+	baseQuery := `
+		SELECT
+			COUNT(CASE WHEN event = 'sent' THEN 1 END) as messages_sent,
+			COUNT(CASE WHEN event = 'delivered' THEN 1 END) as delivered,
+			COUNT(CASE WHEN event = 'replied' THEN 1 END) as replied,
+			COUNT(CASE WHEN event = 'failed' THEN 1 END) as failed,
+			COUNT(CASE WHEN event = 'confirmation_timeout' THEN 1 END) as confirmation_timeout
+		FROM message_logs
+		WHERE clinic_id = ?
+			AND created_at BETWEEN ? AND ?
+	`
+
+	var err error
+	if professionalID != nil {
+		// Join with appointments to filter by professional
+		query := `
+			SELECT
+				COUNT(CASE WHEN ml.event = 'sent' THEN 1 END) as messages_sent,
+				COUNT(CASE WHEN ml.event = 'delivered' THEN 1 END) as delivered,
+				COUNT(CASE WHEN ml.event = 'replied' THEN 1 END) as replied,
+				COUNT(CASE WHEN ml.event = 'failed' THEN 1 END) as failed,
+				COUNT(CASE WHEN ml.event = 'confirmation_timeout' THEN 1 END) as confirmation_timeout
+			FROM message_logs ml
+			LEFT JOIN appointments a ON ml.appointment_id = a.id
+			WHERE ml.clinic_id = ?
+				AND ml.created_at BETWEEN ? AND ?
+				AND (a.professional_id = ? OR ml.appointment_id IS NULL)
+		`
+		err = r.db.WithContext(ctx).Raw(query, clinicID, start, end, *professionalID).Scan(&metrics).Error
+	} else {
+		err = r.db.WithContext(ctx).Raw(baseQuery, clinicID, start, end).Scan(&metrics).Error
+	}
+
+	if err != nil {
+		return nil, errors.ErrInternalInstance.WithError(err)
+	}
+
+	return &metrics, nil
+}
+
+// GetAppointmentsSummary retrieves appointments summary by status
+func (r *analyticsRepository) GetAppointmentsSummary(ctx context.Context, clinicID uuid.UUID, professionalID *uuid.UUID, start, end time.Time) (*model.AppointmentsSummary, error) {
+	var summary model.AppointmentsSummary
+
+	query := r.db.WithContext(ctx).Table("appointments").
+		Select(`
+			COUNT(*) as total,
+			COUNT(CASE WHEN status = 'confirmed' THEN 1 END) as confirmed,
+			COUNT(CASE WHEN status = 'canceled' THEN 1 END) as canceled,
+			COUNT(CASE WHEN status = 'no_response' THEN 1 END) as no_response,
+			COUNT(CASE WHEN status = 'no_show' THEN 1 END) as no_show,
+			COUNT(CASE WHEN status = 'completed' THEN 1 END) as completed
+		`).
+		Where("clinic_id = ? AND start_time BETWEEN ? AND ? AND deleted_at IS NULL", clinicID, start, end)
+
+	if professionalID != nil {
+		query = query.Where("professional_id = ?", *professionalID)
+	}
+
+	err := query.Scan(&summary).Error
+	if err != nil {
+		return nil, errors.ErrInternalInstance.WithError(err)
+	}
+
+	return &summary, nil
 }

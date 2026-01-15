@@ -284,7 +284,19 @@ func (s *analyticsService) GetReportMetrics(ctx context.Context, clinicID uuid.U
 	start, end := s.getReportPeriodRange(filter.Period)
 
 	// Get monthly breakdown from repository
-	monthlyMetrics, err := s.repo.GetReportMetrics(ctx, clinicID, start, end)
+	monthlyMetrics, err := s.repo.GetReportMetrics(ctx, clinicID, filter.ProfessionalID, start, end)
+	if err != nil {
+		return nil, err
+	}
+
+	// Get WhatsApp metrics
+	whatsAppMetrics, err := s.repo.GetWhatsAppMetrics(ctx, clinicID, filter.ProfessionalID, start, end)
+	if err != nil {
+		return nil, err
+	}
+
+	// Get appointments summary
+	appointmentsSummary, err := s.repo.GetAppointmentsSummary(ctx, clinicID, filter.ProfessionalID, start, end)
 	if err != nil {
 		return nil, err
 	}
@@ -317,6 +329,8 @@ func (s *analyticsService) GetReportMetrics(ctx context.Context, clinicID uuid.U
 		EstimatedLostRevenue: totalLostRevenue,
 		AttendanceRate:       attendanceRate,
 		MonthlyBreakdown:     monthlyMetrics,
+		WhatsAppMetrics:      whatsAppMetrics,
+		AppointmentsSummary:  appointmentsSummary,
 	}, nil
 }
 
