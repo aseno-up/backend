@@ -252,6 +252,15 @@ func main() {
 		whatsappService.SetAppointmentCreator(&whatsappAppointmentCreatorAdapter{appointmentService: appointmentService})
 		log.Println("WhatsApp appointment status updater and reschedule connected")
 
+		// Wire up scheduling flow adapters for new appointment booking via WhatsApp
+		schedulingIntentRepo := whatsapp_repository.NewSchedulingIntentRepository(db.GetDB())
+		whatsappService.SetSchedulingIntentRepo(schedulingIntentRepo)
+		whatsappService.SetPatientFinderCreator(&patientFinderCreatorAdapter{patientRepo: patientRepo})
+		whatsappService.SetProfessionalLister(&professionalListerAdapter{professionalRepo: professionalRepo})
+		whatsappService.SetSlotFinder(&slotFinderAdapter{appointmentService: appointmentService, professionalRepo: professionalRepo})
+		whatsappService.SetNewAppointmentCreator(&newAppointmentCreatorAdapter{appointmentService: appointmentService})
+		log.Println("WhatsApp scheduling flow adapters connected")
+
 		// Initialize AI Classifier for message classification (if enabled)
 		if cfg.AIClassifierEnabled() {
 			var apiKey string
@@ -787,6 +796,7 @@ func runMigrations(db *database.Database) error {
 		&appointment_model.Appointment{},
 		&whatsapp_model.Message{},
 		&whatsapp_model.MessageLog{},
+		&whatsapp_model.SchedulingIntent{},
 		&payment_model.Customer{},
 		&payment_model.Subscription{},
 		&payment_model.Payment{},
@@ -982,6 +992,182 @@ func (a *whatsappAppointmentCreatorAdapter) CreateFromReschedule(ctx context.Con
 		ProfessionalID: aptResp.ProfessionalID,
 		PatientName:    patientName,
 		PatientPhone:   patientPhone,
+		Professional:   professionalName,
+		StartTime:      aptResp.StartTime,
+		EndTime:        aptResp.EndTime,
+	}, nil
+}
+
+// Adapters for WhatsApp scheduling flow
+
+// patientFinderCreatorAdapter adapts patient_repository to whatsapp_service.PatientFinderCreator
+type patientFinderCreatorAdapter struct {
+	patientRepo patient_repository.PatientRepository
+}
+
+func (a *patientFinderCreatorAdapter) FindOrCreateByPhone(ctx context.Context, clinicID uuid.UUID, phone, name string) (*whatsapp_service.PatientInfo, error) {
+	// Try to find existing patient by phone
+	patient, err := a.patientRepo.GetByPhone(ctx, phone, clinicID)
+	if err == nil && patient != nil {
+		return &whatsapp_service.PatientInfo{
+			ID:    patient.ID,
+			Name:  patient.Name,
+			Phone: patient.Phone,
+		}, nil
+	}
+
+	// Create new patient
+	newPatient := &patient_model.Patient{
+		ClinicID: clinicID,
+		Name:     name,
+		Phone:    phone,
+		WhatsApp: phone,
+		IsActive: true,
+	}
+	if err := a.patientRepo.Create(ctx, newPatient); err != nil {
+		return nil, err
+	}
+
+	return &whatsapp_service.PatientInfo{
+		ID:    newPatient.ID,
+		Name:  newPatient.Name,
+		Phone: newPatient.Phone,
+	}, nil
+}
+
+// professionalListerAdapter adapts professional_repository to whatsapp_service.ProfessionalLister
+type professionalListerAdapter struct {
+	professionalRepo professional_repository.ProfessionalRepository
+}
+
+func (a *professionalListerAdapter) ListAvailable(ctx context.Context, clinicID uuid.UUID, specialty string) ([]*whatsapp_service.ProfessionalInfo, error) {
+	professionals, _, err := a.professionalRepo.GetByClinicID(ctx, clinicID, true, 100, 0)
+	if err != nil {
+		return nil, err
+	}
+
+	var result []*whatsapp_service.ProfessionalInfo
+	for _, p := range professionals {
+		result = append(result, &whatsapp_service.ProfessionalInfo{
+			ID:          p.ID,
+			Name:        p.Name,
+			Specialty:   "", // Could be extracted from professional if available
+			IsAvailable: true,
+		})
+	}
+	return result, nil
+}
+
+// slotFinderAdapter adapts appointment_service to whatsapp_service.SlotFinder
+type slotFinderAdapter struct {
+	appointmentService appointment_service.AppointmentService
+	professionalRepo   professional_repository.ProfessionalRepository
+}
+
+func (a *slotFinderAdapter) GetAvailableSlots(ctx context.Context, clinicID uuid.UUID, professionalID uuid.UUID, date time.Time, durationMinutes int) ([]*whatsapp_service.AvailableSlot, error) {
+	slots, err := a.appointmentService.SuggestSmartSlots(ctx, clinicID, professionalID, date, 14, durationMinutes)
+	if err != nil {
+		return nil, err
+	}
+
+	// Get professional name
+	profName := ""
+	prof, err := a.professionalRepo.GetByID(ctx, professionalID, clinicID)
+	if err == nil && prof != nil {
+		profName = prof.Name
+	}
+
+	var result []*whatsapp_service.AvailableSlot
+	for _, s := range slots {
+		result = append(result, &whatsapp_service.AvailableSlot{
+			ProfessionalID:   professionalID,
+			ProfessionalName: profName,
+			StartTime:        s.StartTime,
+			EndTime:          s.EndTime,
+		})
+	}
+	return result, nil
+}
+
+func (a *slotFinderAdapter) GetAvailableSlotsMultipleProfessionals(ctx context.Context, clinicID uuid.UUID, professionalIDs []uuid.UUID, date time.Time, days int, durationMinutes int, limit int) ([]*whatsapp_service.AvailableSlot, error) {
+	var result []*whatsapp_service.AvailableSlot
+
+	// Iterate through professionals to find slots
+	for _, profID := range professionalIDs {
+		if len(result) >= limit {
+			break
+		}
+
+		slots, err := a.appointmentService.SuggestSmartSlots(ctx, clinicID, profID, date, days, durationMinutes)
+		if err != nil {
+			continue
+		}
+
+		// Get professional name
+		profName := ""
+		prof, err := a.professionalRepo.GetByID(ctx, profID, clinicID)
+		if err == nil && prof != nil {
+			profName = prof.Name
+		}
+
+		for _, s := range slots {
+			if len(result) >= limit {
+				break
+			}
+			result = append(result, &whatsapp_service.AvailableSlot{
+				ProfessionalID:   profID,
+				ProfessionalName: profName,
+				StartTime:        s.StartTime,
+				EndTime:          s.EndTime,
+			})
+		}
+	}
+
+	return result, nil
+}
+
+// newAppointmentCreatorAdapter adapts appointment_service to whatsapp_service.NewAppointmentCreator
+type newAppointmentCreatorAdapter struct {
+	appointmentService appointment_service.AppointmentService
+}
+
+func (a *newAppointmentCreatorAdapter) CreateFromSchedulingIntent(ctx context.Context, clinicID, patientID, professionalID uuid.UUID, startTime time.Time, durationMinutes int) (*whatsapp_service.AppointmentInfo, error) {
+	req := &appointment_model.CreateAppointmentRequest{
+		PatientID:       patientID,
+		ProfessionalID:  professionalID,
+		StartTime:       startTime,
+		DurationMinutes: durationMinutes,
+		Title:           "Agendamento via WhatsApp",
+		Notes:           "Agendado automaticamente via WhatsApp",
+	}
+
+	aptResp, err := a.appointmentService.Create(ctx, clinicID, req)
+	if err != nil {
+		return nil, err
+	}
+
+	// Auto-confirm since patient explicitly chose this slot
+	_, err = a.appointmentService.Confirm(ctx, aptResp.ID, clinicID, &appointment_model.ConfirmAppointmentRequest{
+		PatientNotes: "Confirmado automaticamente no agendamento via WhatsApp",
+	})
+	if err != nil {
+		log.Printf("[Schedule] Failed to auto-confirm appointment: %v", err)
+	}
+
+	patientName := ""
+	if aptResp.Patient != nil {
+		patientName = aptResp.Patient.Name
+	}
+	professionalName := ""
+	if aptResp.Professional != nil {
+		professionalName = aptResp.Professional.Name
+	}
+
+	return &whatsapp_service.AppointmentInfo{
+		ID:             aptResp.ID,
+		PatientID:      aptResp.PatientID,
+		ProfessionalID: aptResp.ProfessionalID,
+		PatientName:    patientName,
 		Professional:   professionalName,
 		StartTime:      aptResp.StartTime,
 		EndTime:        aptResp.EndTime,

@@ -61,6 +61,17 @@ type MessageLogRepository interface {
 	GetByClinicID(ctx context.Context, clinicID uuid.UUID, limit int) ([]*model.MessageLog, error)
 }
 
+// SchedulingIntentRepository defines the interface for scheduling intent persistence
+type SchedulingIntentRepository interface {
+	Create(ctx context.Context, intent *model.SchedulingIntent) error
+	GetByID(ctx context.Context, id uuid.UUID) (*model.SchedulingIntent, error)
+	GetPendingByPhone(ctx context.Context, clinicID uuid.UUID, phone string) (*model.SchedulingIntent, error)
+	Update(ctx context.Context, intent *model.SchedulingIntent) error
+	UpdateStatus(ctx context.Context, id uuid.UUID, status model.SchedulingIntentStatus) error
+	GetExpired(ctx context.Context) ([]*model.SchedulingIntent, error)
+	ExpireOld(ctx context.Context) error
+}
+
 // WhatsAppService defines the interface for WhatsApp business logic
 type WhatsAppService interface {
 	// CreateInstance creates a new WhatsApp instance for a clinic
@@ -113,21 +124,42 @@ type WhatsAppService interface {
 
 	// SetAppointmentCreator sets the appointment creator for reschedule
 	SetAppointmentCreator(creator AppointmentCreator)
+
+	// SetSchedulingIntentRepo sets the scheduling intent repository for new scheduling flow
+	SetSchedulingIntentRepo(repo SchedulingIntentRepository)
+
+	// SetPatientFinderCreator sets the patient finder/creator for scheduling
+	SetPatientFinderCreator(finder PatientFinderCreator)
+
+	// SetProfessionalLister sets the professional lister for scheduling
+	SetProfessionalLister(lister ProfessionalLister)
+
+	// SetSlotFinder sets the slot finder for scheduling
+	SetSlotFinder(finder SlotFinder)
+
+	// SetNewAppointmentCreator sets the new appointment creator for scheduling
+	SetNewAppointmentCreator(creator NewAppointmentCreator)
 }
 
 // whatsAppService implements WhatsAppService
 type whatsAppService struct {
-	client              WhatsAppClient
-	messageRepo         MessageRepository
-	messageLogService   MessageLogService
-	appointmentUpdater  AppointmentStatusUpdater
-	appointmentFinder   AppointmentFinder
-	waitlistHandler     WaitlistResponseHandler
-	slotSuggester       SlotSuggester
-	appointmentCreator  AppointmentCreator
-	rescheduleCache     *rescheduleCache
-	classifier          classifier.MessageClassifier
-	confidenceThreshold float64
+	client                   WhatsAppClient
+	messageRepo              MessageRepository
+	messageLogService        MessageLogService
+	appointmentUpdater       AppointmentStatusUpdater
+	appointmentFinder        AppointmentFinder
+	waitlistHandler          WaitlistResponseHandler
+	slotSuggester            SlotSuggester
+	appointmentCreator       AppointmentCreator
+	rescheduleCache          *rescheduleCache
+	classifier               classifier.MessageClassifier
+	confidenceThreshold      float64
+	// New scheduling dependencies
+	schedulingIntentRepo     SchedulingIntentRepository
+	patientFinderCreator     PatientFinderCreator
+	professionalLister       ProfessionalLister
+	slotFinder               SlotFinder
+	newAppointmentCreator    NewAppointmentCreator
 }
 
 // AppointmentStatusUpdater interface for updating appointment status
@@ -156,6 +188,50 @@ type SlotSuggester interface {
 // AppointmentCreator interface for creating appointments from reschedule
 type AppointmentCreator interface {
 	CreateFromReschedule(ctx context.Context, clinicID uuid.UUID, patientPhone string, slot *aptModel.SmartSlotSuggestion, originalApt *AppointmentInfo) (*AppointmentInfo, error)
+}
+
+// PatientInfo represents patient info for scheduling
+type PatientInfo struct {
+	ID    uuid.UUID
+	Name  string
+	Phone string
+}
+
+// PatientFinderCreator interface for finding or creating patients
+type PatientFinderCreator interface {
+	FindOrCreateByPhone(ctx context.Context, clinicID uuid.UUID, phone, name string) (*PatientInfo, error)
+}
+
+// ProfessionalInfo represents professional info for scheduling
+type ProfessionalInfo struct {
+	ID          uuid.UUID
+	Name        string
+	Specialty   string
+	IsAvailable bool
+}
+
+// ProfessionalLister interface for listing professionals
+type ProfessionalLister interface {
+	ListAvailable(ctx context.Context, clinicID uuid.UUID, specialty string) ([]*ProfessionalInfo, error)
+}
+
+// AvailableSlot represents an available time slot for scheduling
+type AvailableSlot struct {
+	ProfessionalID   uuid.UUID
+	ProfessionalName string
+	StartTime        time.Time
+	EndTime          time.Time
+}
+
+// SlotFinder interface for finding available slots
+type SlotFinder interface {
+	GetAvailableSlots(ctx context.Context, clinicID uuid.UUID, professionalID uuid.UUID, date time.Time, durationMinutes int) ([]*AvailableSlot, error)
+	GetAvailableSlotsMultipleProfessionals(ctx context.Context, clinicID uuid.UUID, professionalIDs []uuid.UUID, date time.Time, days int, durationMinutes int, limit int) ([]*AvailableSlot, error)
+}
+
+// NewAppointmentCreator interface for creating new appointments (not reschedule)
+type NewAppointmentCreator interface {
+	CreateFromSchedulingIntent(ctx context.Context, clinicID, patientID, professionalID uuid.UUID, startTime time.Time, durationMinutes int) (*AppointmentInfo, error)
 }
 
 // rescheduleCache stores pending reschedule options with expiration
@@ -265,6 +341,31 @@ func (s *whatsAppService) SetSlotSuggester(suggester SlotSuggester) {
 // SetAppointmentCreator sets the appointment creator for reschedule
 func (s *whatsAppService) SetAppointmentCreator(creator AppointmentCreator) {
 	s.appointmentCreator = creator
+}
+
+// SetSchedulingIntentRepo sets the scheduling intent repository for new scheduling flow
+func (s *whatsAppService) SetSchedulingIntentRepo(repo SchedulingIntentRepository) {
+	s.schedulingIntentRepo = repo
+}
+
+// SetPatientFinderCreator sets the patient finder/creator for scheduling
+func (s *whatsAppService) SetPatientFinderCreator(finder PatientFinderCreator) {
+	s.patientFinderCreator = finder
+}
+
+// SetProfessionalLister sets the professional lister for scheduling
+func (s *whatsAppService) SetProfessionalLister(lister ProfessionalLister) {
+	s.professionalLister = lister
+}
+
+// SetSlotFinder sets the slot finder for scheduling
+func (s *whatsAppService) SetSlotFinder(finder SlotFinder) {
+	s.slotFinder = finder
+}
+
+// SetNewAppointmentCreator sets the new appointment creator for scheduling
+func (s *whatsAppService) SetNewAppointmentCreator(creator NewAppointmentCreator) {
+	s.newAppointmentCreator = creator
 }
 
 // CreateInstance creates a new WhatsApp instance for a clinic
@@ -562,7 +663,18 @@ func (s *whatsAppService) HandleIncomingMessage(ctx context.Context, clinicID uu
 		// Could send a message asking to contact the clinic
 		break
 
+	case model.MessageIntentSchedule:
+		// Handle new scheduling request
+		return s.handleScheduleIntent(ctx, clinicID, msg)
+
 	case model.MessageIntentQuestion, model.MessageIntentUnknown:
+		// Check if this is a slot selection for a pending scheduling intent
+		if s.schedulingIntentRepo != nil {
+			pendingIntent, err := s.schedulingIntentRepo.GetPendingByPhone(ctx, clinicID, msg.Phone)
+			if err == nil && pendingIntent != nil {
+				return s.handleSlotSelection(ctx, clinicID, msg, pendingIntent)
+			}
+		}
 		// Unknown or question intents - no automatic action
 		break
 	}
@@ -601,6 +713,15 @@ func (s *whatsAppService) ClassifyMessage(content string) model.MessageIntent {
 func (s *whatsAppService) classifyWithRegex(content string) model.MessageIntent {
 	content = strings.ToLower(strings.TrimSpace(content))
 
+	// Schedule patterns (check first - patient wants to book NEW appointment)
+	schedulePatterns := []string{
+		"quero marcar", "quero agendar", "gostaria de marcar", "gostaria de agendar",
+		"fazer uma consulta", "fazer consulta", "agendar consulta", "marcar consulta",
+		"agendar avaliacao", "marcar avaliacao", "fazer avaliacao",
+		"primeira consulta", "primeira vez", "novo paciente",
+		"preciso de uma consulta", "preciso marcar", "preciso agendar",
+	}
+
 	// Confirm patterns
 	confirmPatterns := []string{
 		"^1$", "confirmo", "confirmado", "confirmar", "sim", "ok", "vou", "estarei", "irei",
@@ -616,6 +737,12 @@ func (s *whatsAppService) classifyWithRegex(content string) model.MessageIntent 
 	// Reschedule patterns
 	reschedulePatterns := []string{
 		"remarcar", "reagendar", "mudar", "trocar", "outro dia", "outra data", "outro horario",
+	}
+
+	for _, pattern := range schedulePatterns {
+		if strings.Contains(content, pattern) {
+			return model.MessageIntentSchedule
+		}
 	}
 
 	for _, pattern := range confirmPatterns {
@@ -735,4 +862,236 @@ func formatPhoneNumber(phone string) string {
 	}
 
 	return phone + "@s.whatsapp.net"
+}
+
+// handleScheduleIntent handles a new scheduling request from a patient
+func (s *whatsAppService) handleScheduleIntent(ctx context.Context, clinicID uuid.UUID, msg *model.ParsedIncomingMessage) error {
+	log.Printf("[Schedule] Handling schedule intent for phone=%s clinic=%s", msg.Phone, clinicID)
+
+	// Check if we have all required dependencies
+	if s.schedulingIntentRepo == nil || s.patientFinderCreator == nil || s.slotFinder == nil {
+		log.Printf("[Schedule] Missing dependencies for scheduling, skipping")
+		return nil
+	}
+
+	// Check if there's already a pending intent for this phone
+	existingIntent, _ := s.schedulingIntentRepo.GetPendingByPhone(ctx, clinicID, msg.Phone)
+	if existingIntent != nil {
+		log.Printf("[Schedule] Found existing pending intent, resending options")
+		return s.SendSchedulingOptions(ctx, msg.Instance, msg.Phone, existingIntent)
+	}
+
+	// Find or create patient
+	patientName := msg.SenderName
+	if patientName == "" {
+		patientName = "Paciente"
+	}
+	patient, err := s.patientFinderCreator.FindOrCreateByPhone(ctx, clinicID, msg.Phone, patientName)
+	if err != nil {
+		log.Printf("[Schedule] Failed to find/create patient: %v", err)
+		return err
+	}
+
+	// Get available professionals
+	var professionalIDs []uuid.UUID
+	if s.professionalLister != nil {
+		professionals, err := s.professionalLister.ListAvailable(ctx, clinicID, "")
+		if err == nil && len(professionals) > 0 {
+			for _, p := range professionals {
+				professionalIDs = append(professionalIDs, p.ID)
+			}
+		}
+	}
+
+	if len(professionalIDs) == 0 {
+		log.Printf("[Schedule] No professionals available")
+		_, _ = s.SendTextMessage(ctx, msg.Instance, msg.Phone,
+			"Desculpe, no momento nao temos horarios disponiveis. Por favor, entre em contato com a clinica.")
+		return nil
+	}
+
+	// Get available slots (next 14 days, max 5 slots)
+	slots, err := s.slotFinder.GetAvailableSlotsMultipleProfessionals(
+		ctx, clinicID, professionalIDs,
+		time.Now(), 14, 50, 5, // 50 minutes default, 5 slots max
+	)
+	if err != nil || len(slots) == 0 {
+		log.Printf("[Schedule] No slots available: %v", err)
+		_, _ = s.SendTextMessage(ctx, msg.Instance, msg.Phone,
+			"Desculpe, no momento nao temos horarios disponiveis. Por favor, entre em contato com a clinica.")
+		return nil
+	}
+
+	// Convert to SlotOptions
+	var slotOptions model.SlotOptions
+	for i, slot := range slots {
+		slotOptions = append(slotOptions, model.SlotOption{
+			ProfessionalID:   slot.ProfessionalID,
+			ProfessionalName: slot.ProfessionalName,
+			StartTime:        slot.StartTime,
+			EndTime:          slot.EndTime,
+			ButtonID:         fmt.Sprintf("slot_%d", i),
+		})
+	}
+
+	// Create scheduling intent
+	intent := &model.SchedulingIntent{
+		ClinicID:       clinicID,
+		PatientID:      &patient.ID,
+		PatientPhone:   msg.Phone,
+		PatientName:    patientName,
+		IntentType:     "consulta", // Default, could be extracted from AI classification
+		SuggestedSlots: slotOptions,
+		Status:         model.SchedulingIntentStatusPending,
+		Confidence:     0.9, // Could use actual confidence from classifier
+		ExpiresAt:      time.Now().Add(24 * time.Hour),
+	}
+
+	if err := s.schedulingIntentRepo.Create(ctx, intent); err != nil {
+		log.Printf("[Schedule] Failed to create intent: %v", err)
+		return err
+	}
+
+	// Send scheduling options
+	return s.SendSchedulingOptions(ctx, msg.Instance, msg.Phone, intent)
+}
+
+// SendSchedulingOptions sends available time slots as WhatsApp buttons
+func (s *whatsAppService) SendSchedulingOptions(ctx context.Context, instance, phone string, intent *model.SchedulingIntent) error {
+	if len(intent.SuggestedSlots) == 0 {
+		return nil
+	}
+
+	// Build message
+	var sb strings.Builder
+	sb.WriteString("Perfeito! Encontrei alguns horarios disponiveis:\n\n")
+
+	for i, slot := range intent.SuggestedSlots {
+		weekday := translateWeekday(slot.StartTime.Weekday())
+		dateStr := slot.StartTime.Format("02/01")
+		timeStr := slot.StartTime.Format("15:04")
+		sb.WriteString(fmt.Sprintf("%d. %s %s as %s - %s\n",
+			i+1, weekday, dateStr, timeStr, slot.ProfessionalName))
+	}
+
+	sb.WriteString("\nQual horario prefere? Responda com o numero (1, 2, 3...)")
+
+	// Send as text message (buttons have a limit of 3, we might have more slots)
+	formattedPhone := formatPhoneNumber(phone)
+	_, err := s.client.SendTextMessage(ctx, instance, formattedPhone, sb.String())
+	if err != nil {
+		log.Printf("[Schedule] Failed to send scheduling options: %v", err)
+		return err
+	}
+
+	log.Printf("[Schedule] Sent %d slot options to %s", len(intent.SuggestedSlots), phone)
+	return nil
+}
+
+// handleSlotSelection handles when a patient selects a time slot
+func (s *whatsAppService) handleSlotSelection(ctx context.Context, clinicID uuid.UUID, msg *model.ParsedIncomingMessage, intent *model.SchedulingIntent) error {
+	content := strings.TrimSpace(msg.Content)
+
+	// Try to parse slot selection (1, 2, 3, etc.)
+	slotIndex := -1
+	if num, err := strconv.Atoi(content); err == nil && num >= 1 && num <= len(intent.SuggestedSlots) {
+		slotIndex = num - 1
+	}
+
+	// Also try to match by button ID
+	if slotIndex == -1 && msg.ButtonID != "" {
+		for i, slot := range intent.SuggestedSlots {
+			if slot.ButtonID == msg.ButtonID {
+				slotIndex = i
+				break
+			}
+		}
+	}
+
+	if slotIndex == -1 {
+		// Could not parse selection, might be a different message
+		log.Printf("[Schedule] Could not parse slot selection from: %q", content)
+		return nil
+	}
+
+	selectedSlot := intent.SuggestedSlots[slotIndex]
+	log.Printf("[Schedule] Patient selected slot %d: %s at %s",
+		slotIndex+1, selectedSlot.ProfessionalName, selectedSlot.StartTime)
+
+	// Check if we have all required dependencies
+	if s.newAppointmentCreator == nil {
+		log.Printf("[Schedule] Missing appointment creator, cannot create appointment")
+		return nil
+	}
+
+	// Create appointment
+	var patientID uuid.UUID
+	if intent.PatientID != nil {
+		patientID = *intent.PatientID
+	} else {
+		log.Printf("[Schedule] No patient ID in intent")
+		return nil
+	}
+
+	appointment, err := s.newAppointmentCreator.CreateFromSchedulingIntent(
+		ctx, clinicID, patientID, selectedSlot.ProfessionalID,
+		selectedSlot.StartTime, 50, // 50 minutes default
+	)
+	if err != nil {
+		log.Printf("[Schedule] Failed to create appointment: %v", err)
+		_, _ = s.SendTextMessage(ctx, msg.Instance, msg.Phone,
+			"Desculpe, ocorreu um erro ao agendar. Por favor, tente novamente.")
+		return err
+	}
+
+	// Update intent status
+	intent.Status = model.SchedulingIntentStatusScheduled
+	now := time.Now()
+	intent.SelectedSlot = &model.SelectedSlot{
+		SlotOption: selectedSlot,
+		SelectedAt: now,
+	}
+	intent.AppointmentID = &appointment.ID
+	if err := s.schedulingIntentRepo.Update(ctx, intent); err != nil {
+		log.Printf("[Schedule] Failed to update intent status: %v", err)
+	}
+
+	// Send confirmation
+	weekday := translateWeekday(selectedSlot.StartTime.Weekday())
+	dateStr := selectedSlot.StartTime.Format("02/01/2006")
+	timeStr := selectedSlot.StartTime.Format("15:04")
+
+	message := fmt.Sprintf(
+		"Consulta agendada com sucesso!\n\n"+
+			"%s Data: %s %s\n"+
+			"%s Horario: %s\n"+
+			"%s Profissional: %s\n\n"+
+			"Te aguardamos!",
+		"📅", weekday, dateStr,
+		"🕐", timeStr,
+		"👨‍⚕️", selectedSlot.ProfessionalName,
+	)
+
+	formattedPhone := formatPhoneNumber(msg.Phone)
+	_, err = s.client.SendTextMessage(ctx, msg.Instance, formattedPhone, message)
+	if err != nil {
+		log.Printf("[Schedule] Failed to send confirmation: %v", err)
+	}
+
+	log.Printf("[Schedule] Successfully scheduled appointment %s", appointment.ID)
+	return nil
+}
+
+// translateWeekday translates Go weekday to Portuguese
+func translateWeekday(weekday time.Weekday) string {
+	days := map[time.Weekday]string{
+		time.Sunday:    "Domingo",
+		time.Monday:    "Segunda",
+		time.Tuesday:   "Terca",
+		time.Wednesday: "Quarta",
+		time.Thursday:  "Quinta",
+		time.Friday:    "Sexta",
+		time.Saturday:  "Sabado",
+	}
+	return days[weekday]
 }

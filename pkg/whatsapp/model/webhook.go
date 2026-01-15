@@ -85,18 +85,27 @@ type ParsedIncomingMessage struct {
 type MessageIntent string
 
 const (
-	MessageIntentConfirm    MessageIntent = "confirm"
-	MessageIntentCancel     MessageIntent = "cancel"
-	MessageIntentReschedule MessageIntent = "reschedule"
-	MessageIntentQuestion   MessageIntent = "question"
-	MessageIntentUnknown    MessageIntent = "unknown"
+	MessageIntentSchedule   MessageIntent = "schedule"   // Patient wants to schedule a NEW appointment
+	MessageIntentConfirm    MessageIntent = "confirm"    // Patient confirms existing appointment
+	MessageIntentCancel     MessageIntent = "cancel"     // Patient wants to cancel appointment
+	MessageIntentReschedule MessageIntent = "reschedule" // Patient wants to reschedule appointment
+	MessageIntentQuestion   MessageIntent = "question"   // Patient is asking a question
+	MessageIntentUnknown    MessageIntent = "unknown"    // Cannot determine intent
 )
+
+// ScheduleIntentData contains extracted data for schedule intents
+type ScheduleIntentData struct {
+	Type      string `json:"tipo"`         // "avaliacao", "retorno", "consulta", "exame"
+	Specialty string `json:"especialidade"` // "fisioterapia", "psicologia", etc (optional)
+	Urgency   string `json:"urgencia"`      // "normal", "urgente"
+}
 
 // ClassifiedMessage represents a message with its classified intent
 type ClassifiedMessage struct {
 	ParsedIncomingMessage
-	Intent     MessageIntent `json:"intent"`
-	Confidence float64       `json:"confidence"`
+	Intent     MessageIntent       `json:"intent"`
+	Confidence float64             `json:"confidence"`
+	Data       *ScheduleIntentData `json:"data,omitempty"` // Only for schedule intents
 }
 
 // ConnectionStatus represents the WhatsApp connection status

@@ -195,6 +195,11 @@ func (g *geminiClassifier) tryClassify(ctx context.Context, content string, mode
 		Intent     string  `json:"intent"`
 		Confidence float64 `json:"confidence"`
 		Reasoning  string  `json:"reasoning"`
+		Data       *struct {
+			Type      string `json:"tipo"`
+			Specialty string `json:"especialidade"`
+			Urgency   string `json:"urgencia"`
+		} `json:"data,omitempty"`
 	}
 
 	if err := json.Unmarshal([]byte(text), &result); err != nil {
@@ -209,14 +214,26 @@ func (g *geminiClassifier) tryClassify(ctx context.Context, content string, mode
 
 	log.Printf("[Gemini Classifier] Success with model '%s' (latency: %v)", modelName, time.Since(start))
 
-	return &ClassificationResult{
+	// Build classification result
+	classResult := &ClassificationResult{
 		Intent:     intent,
 		Confidence: result.Confidence,
 		Reasoning:  result.Reasoning,
 		Provider:   "gemini",
 		Model:      modelName,
 		Latency:    time.Since(start),
-	}, nil
+	}
+
+	// Add schedule data if present
+	if result.Data != nil && intent == model.MessageIntentSchedule {
+		classResult.Data = &model.ScheduleIntentData{
+			Type:      result.Data.Type,
+			Specialty: result.Data.Specialty,
+			Urgency:   result.Data.Urgency,
+		}
+	}
+
+	return classResult, nil
 }
 
 // isRateLimitError checks if the error is a rate limit (429) or resource exhausted error
@@ -245,7 +262,8 @@ func cleanJSONResponse(text string) string {
 // isValidIntent checks if the intent is a valid MessageIntent
 func isValidIntent(intent model.MessageIntent) bool {
 	switch intent {
-	case model.MessageIntentConfirm,
+	case model.MessageIntentSchedule,
+		model.MessageIntentConfirm,
 		model.MessageIntentCancel,
 		model.MessageIntentReschedule,
 		model.MessageIntentQuestion,
