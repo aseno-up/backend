@@ -131,6 +131,7 @@ func main() {
 	patientRepo := patient_repository.NewPatientRepository(db.GetDB())
 	appointmentRepo := appointment_repository.NewAppointmentRepository(db.GetDB())
 	messageRepo := whatsapp_repository.NewMessageRepository(db.GetDB())
+	messageLogRepo := whatsapp_repository.NewMessageLogRepository(db.GetDB())
 	customerRepo := payment_repository.NewCustomerRepository(db.GetDB())
 	paymentRepo := payment_repository.NewPaymentRepository(db.GetDB())
 	subscriptionRepo := payment_repository.NewSubscriptionRepository(db.GetDB())
@@ -233,10 +234,16 @@ func main() {
 	patientService := patient_service.NewPatientService(patientRepo, clinicRepo)
 	appointmentService := appointment_service.NewAppointmentService(appointmentRepo, professionalRepo)
 
+	// Initialize message log service
+	messageLogService := whatsapp_service.NewMessageLogService(messageLogRepo)
+
 	// Initialize WhatsApp service (if client is configured)
 	var whatsappService whatsapp_service.WhatsAppService
 	if whatsappClient != nil {
 		whatsappService = whatsapp_service.NewWhatsAppService(whatsappClient, messageRepo, nil)
+
+		// Wire up message log service for tracking message lifecycle
+		whatsappService.SetMessageLogService(messageLogService)
 
 		// Wire up appointment status updater for WhatsApp confirmations/cancellations
 		whatsappService.SetAppointmentUpdater(&appointmentStatusAdapter{appointmentService: appointmentService})
@@ -773,6 +780,7 @@ func runMigrations(db *database.Database) error {
 		&patient_model.Patient{},
 		&appointment_model.Appointment{},
 		&whatsapp_model.Message{},
+		&whatsapp_model.MessageLog{},
 		&payment_model.Customer{},
 		&payment_model.Subscription{},
 		&payment_model.Payment{},

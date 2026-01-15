@@ -52,6 +52,15 @@ type MessageRepository interface {
 	GetPendingReminders(ctx context.Context, before time.Time) ([]*model.Message, error)
 }
 
+// MessageLogRepository defines the interface for message log persistence
+type MessageLogRepository interface {
+	Create(ctx context.Context, log *model.MessageLog) error
+	GetByMessageID(ctx context.Context, messageID uuid.UUID) ([]*model.MessageLog, error)
+	GetByAppointmentID(ctx context.Context, appointmentID uuid.UUID) ([]*model.MessageLog, error)
+	GetByPatientID(ctx context.Context, patientID uuid.UUID, limit int) ([]*model.MessageLog, error)
+	GetByClinicID(ctx context.Context, clinicID uuid.UUID, limit int) ([]*model.MessageLog, error)
+}
+
 // WhatsAppService defines the interface for WhatsApp business logic
 type WhatsAppService interface {
 	// CreateInstance creates a new WhatsApp instance for a clinic
@@ -90,6 +99,9 @@ type WhatsAppService interface {
 	// SetWaitlistHandler sets the waitlist handler for encaixe responses
 	SetWaitlistHandler(handler WaitlistResponseHandler)
 
+	// SetMessageLogService sets the message log service for tracking message lifecycle
+	SetMessageLogService(service MessageLogService)
+
 	// SetAppointmentUpdater sets the appointment status updater for WhatsApp responses
 	SetAppointmentUpdater(updater AppointmentStatusUpdater)
 
@@ -107,6 +119,7 @@ type WhatsAppService interface {
 type whatsAppService struct {
 	client              WhatsAppClient
 	messageRepo         MessageRepository
+	messageLogService   MessageLogService
 	appointmentUpdater  AppointmentStatusUpdater
 	appointmentFinder   AppointmentFinder
 	waitlistHandler     WaitlistResponseHandler
@@ -226,6 +239,11 @@ func (s *whatsAppService) SetAppointmentFinder(finder AppointmentFinder) {
 // SetWaitlistHandler sets the waitlist handler for encaixe responses
 func (s *whatsAppService) SetWaitlistHandler(handler WaitlistResponseHandler) {
 	s.waitlistHandler = handler
+}
+
+// SetMessageLogService sets the message log service for tracking message lifecycle
+func (s *whatsAppService) SetMessageLogService(service MessageLogService) {
+	s.messageLogService = service
 }
 
 // SetAppointmentUpdater sets the appointment status updater for WhatsApp responses
@@ -646,7 +664,7 @@ func (s *whatsAppService) DeleteInstance(ctx context.Context, instance string) e
 	return s.client.DeleteInstance(ctx, instance)
 }
 
-// logMessage logs a message to the database
+// logMessage logs a message to the database and creates lifecycle logs
 func (s *whatsAppService) logMessage(
 	ctx context.Context,
 	clinicID uuid.UUID,
@@ -675,7 +693,34 @@ func (s *whatsAppService) logMessage(
 		msg.SentAt = &now
 	}
 
-	_ = s.messageRepo.Create(ctx, msg)
+	if err := s.messageRepo.Create(ctx, msg); err != nil {
+		log.Printf("Failed to create message: %v", err)
+		return
+	}
+
+	// Create lifecycle logs if service is available
+	if s.messageLogService != nil {
+		payload := model.MessageLogPayload{
+			"content":     content,
+			"external_id": externalIDOrError,
+		}
+
+		// Log message created
+		if err := s.messageLogService.LogCreated(ctx, msg, payload); err != nil {
+			log.Printf("Failed to log message created: %v", err)
+		}
+
+		// Log sent or failed based on status
+		if status == model.MessageStatusFailed {
+			if err := s.messageLogService.LogFailed(ctx, msg, externalIDOrError, payload); err != nil {
+				log.Printf("Failed to log message failed: %v", err)
+			}
+		} else if status == model.MessageStatusSent {
+			if err := s.messageLogService.LogSent(ctx, msg, payload); err != nil {
+				log.Printf("Failed to log message sent: %v", err)
+			}
+		}
+	}
 }
 
 // formatPhoneNumber formats a phone number for WhatsApp
