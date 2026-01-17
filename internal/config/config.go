@@ -40,6 +40,7 @@ type Config struct {
 	wahaAPIKey            string
 
 	whatsappWebhookSecret string
+	whatsappWebhookURL    string
 
 	// Asaas Payment (private - sensitive)
 	asaasAPIURL       string
@@ -97,6 +98,7 @@ func NewConfig() *Config {
 		wahaAPIURL:            getEnv("WAHA_API_URL", ""),
 		wahaAPIKey:            getEnv("WAHA_API_KEY", ""),
 		whatsappWebhookSecret: getEnv("WHATSAPP_WEBHOOK_SECRET", ""),
+		whatsappWebhookURL:    getEnv("WHATSAPP_WEBHOOK_URL", ""),
 		asaasAPIURL:        getEnv("ASAAS_API_URL", "https://sandbox.asaas.com/api/v3"),
 		asaasAPIKey:        getEnv("ASAAS_API_KEY", ""),
 		asaasWebhookSecret: getEnv("ASAAS_WEBHOOK_SECRET", ""),
@@ -198,6 +200,10 @@ func (c *Config) GetWahaAPIKey() string {
 // GetWhatsAppWebhookSecret returns the WhatsApp webhook secret
 func (c *Config) GetWhatsAppWebhookSecret() string {
 	return c.whatsappWebhookSecret
+}
+
+func (c *Config) GetWhatsAppWebhookURL() string {
+	return c.whatsappWebhookURL
 }
 
 // GetAsaasAPIURL returns the Asaas API URL

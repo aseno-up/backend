@@ -72,10 +72,10 @@ docker-down:
 	@echo "Stopping Docker services..."
 	docker-compose down
 
-# Start everything (database + app + waha) - recommended for development
+# Start everything (database + rabbitmq + app + waha) - recommended for development
 up:
 	@echo "Starting Docker services..."
-	@docker-compose up -d postgres redis
+	@docker-compose up -d postgres redis rabbitmq
 	@docker-compose -f docker-compose.waha.yaml up -d
 	@echo "Waiting for PostgreSQL to be ready..."
 	@until docker-compose exec -T postgres pg_isready -U aseno -d aseno_db > /dev/null 2>&1; do \
@@ -83,6 +83,9 @@ up:
 		sleep 2; \
 	done
 	@echo "Database is ready!"
+	@echo "Waiting for RabbitMQ to be ready..."
+	@sleep 5
+	@echo "RabbitMQ is ready! Management UI: http://localhost:15672 (aseno/aseno_password)"
 	@echo "WAHA started on http://localhost:3002"
 	@echo "Starting application..."
 	$(GORUN) ./cmd/api/main.go
@@ -149,7 +152,7 @@ migration:
 # Show help
 help:
 	@echo "Available commands:"
-	@echo "  make up             - Start database + WAHA + application (recommended)"
+	@echo "  make up             - Start database + RabbitMQ + WAHA + application (recommended)"
 	@echo "  make down           - Stop all services (including WAHA)"
 	@echo "  make build          - Build the binary"
 	@echo "  make run            - Build and run the application"

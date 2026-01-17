@@ -57,7 +57,7 @@ type Clinic struct {
 	WhatsAppInstance   string             `json:"-"` // Evolution API instance name (hidden from JSON)
 	WhatsAppConnected  bool               `json:"whatsapp_connected" gorm:"default:false"`
 	GoogleConnected    bool               `json:"google_connected" gorm:"default:false"`
-	Settings           ClinicSettings     `json:"settings" gorm:"serializer:json"`
+	Settings           ClinicSettings     `json:"settings" gorm:"type:jsonb;serializer:json"`
 	CreatedAt          time.Time          `json:"created_at"`
 	UpdatedAt          time.Time          `json:"updated_at"`
 	DeletedAt          *time.Time         `json:"deleted_at,omitempty" gorm:"index"`

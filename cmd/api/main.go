@@ -173,8 +173,9 @@ func main() {
 	case "evolution":
 		if cfg.GetEvolutionAPIURL() != "" {
 			whatsappClient = whatsapp_evolution.NewEvolutionClient(whatsapp_evolution.Config{
-				BaseURL: cfg.GetEvolutionAPIURL(),
-				APIKey:  cfg.GetEvolutionAPIKey(),
+				BaseURL:    cfg.GetEvolutionAPIURL(),
+				APIKey:     cfg.GetEvolutionAPIKey(),
+				WebhookURL: cfg.GetWhatsAppWebhookURL(),
 			})
 			log.Println("WhatsApp (Evolution API) client initialized")
 		}
@@ -182,8 +183,9 @@ func main() {
 		// Default to Evolution for backwards compatibility
 		if cfg.GetEvolutionAPIURL() != "" {
 			whatsappClient = whatsapp_evolution.NewEvolutionClient(whatsapp_evolution.Config{
-				BaseURL: cfg.GetEvolutionAPIURL(),
-				APIKey:  cfg.GetEvolutionAPIKey(),
+				BaseURL:    cfg.GetEvolutionAPIURL(),
+				APIKey:     cfg.GetEvolutionAPIKey(),
+				WebhookURL: cfg.GetWhatsAppWebhookURL(),
 			})
 			log.Println("WhatsApp (Evolution API) client initialized (default)")
 		}
@@ -391,53 +393,52 @@ func main() {
 			PrefetchCount: 1,
 		})
 
-		// Connect to RabbitMQ
+		// Connect to RabbitMQ - REQUIRED for application to start
 		if err := messageQueue.Connect(context.Background()); err != nil {
-			log.Printf("Warning: Failed to connect to RabbitMQ: %v", err)
-			log.Println("Reminder workers will be disabled")
-		} else {
-			log.Println("RabbitMQ connected successfully")
+			log.Fatalf("FATAL: Failed to connect to RabbitMQ: %v\nRabbitMQ is required for reminder and message workers. Please ensure RabbitMQ is running.", err)
+		}
 
-			// Initialize and start Reminder Worker (only if WhatsApp is configured)
-			if whatsappService != nil && workerCfg.ReminderWorkerEnabled {
-				reminderWorker = worker.NewReminderWorker(workerCfg, appointmentRepo, messageQueue)
-				go reminderWorker.Start()
+		log.Println("RabbitMQ connected successfully")
 
-				// Initialize and start Message Sender Worker
-				messageSenderWorker = worker.NewMessageSenderWorker(workerCfg, messageQueue, whatsappService)
-				go messageSenderWorker.Start()
+		// Initialize and start Reminder Worker (only if WhatsApp is configured)
+		if whatsappService != nil && workerCfg.ReminderWorkerEnabled {
+			reminderWorker = worker.NewReminderWorker(workerCfg, appointmentRepo, messageQueue)
+			go reminderWorker.Start()
 
-				// Initialize and start Timeout Worker (marks no_response when patient doesn't confirm)
-				if workerCfg.TimeoutWorkerEnabled {
-					timeoutWorker := worker.NewTimeoutWorker(workerCfg, appointmentRepo)
-					go timeoutWorker.Start()
-				}
+			// Initialize and start Message Sender Worker
+			messageSenderWorker = worker.NewMessageSenderWorker(workerCfg, messageQueue, whatsappService)
+			go messageSenderWorker.Start()
 
-				log.Println("Reminder, Message Sender, and Timeout workers started")
+			// Initialize and start Timeout Worker (marks no_response when patient doesn't confirm)
+			if workerCfg.TimeoutWorkerEnabled {
+				timeoutWorker := worker.NewTimeoutWorker(workerCfg, appointmentRepo)
+				go timeoutWorker.Start()
 			}
 
-			// Initialize Waitlist service (requires WhatsApp and queue)
-			if whatsappService != nil {
-				waitlistSvc = waitlist_service.NewWaitlistService(
-					waitlistRepo,
-					&clinicInfoAdapter{clinicRepo: clinicRepo},
-					&professionalInfoAdapter{professionalRepo: professionalRepo},
-					&appointmentCreatorAdapter{appointmentService: appointmentService},
-					messageQueue,
-					clinicRepo,
-				)
+			log.Println("Reminder, Message Sender, and Timeout workers started")
+		}
 
-				// Wire waitlist service into appointment service
-				appointmentService.SetWaitlistProcessor(waitlistSvc)
+		// Initialize Waitlist service (requires WhatsApp and queue)
+		if whatsappService != nil {
+			waitlistSvc = waitlist_service.NewWaitlistService(
+				waitlistRepo,
+				&clinicInfoAdapter{clinicRepo: clinicRepo},
+				&professionalInfoAdapter{professionalRepo: professionalRepo},
+				&appointmentCreatorAdapter{appointmentService: appointmentService},
+				messageQueue,
+				clinicRepo,
+			)
 
-				// Wire waitlist service into whatsapp service for response handling
-				whatsappService.SetWaitlistHandler(waitlistSvc)
+			// Wire waitlist service into appointment service
+			appointmentService.SetWaitlistProcessor(waitlistSvc)
 
-				log.Println("Waitlist (encaixe) service initialized")
-			}
+			// Wire waitlist service into whatsapp service for response handling
+			whatsappService.SetWaitlistHandler(waitlistSvc)
+
+			log.Println("Waitlist (encaixe) service initialized")
 		}
 	} else {
-		log.Println("RabbitMQ not configured - reminder workers and waitlist disabled")
+		log.Fatal("FATAL: RabbitMQ URL not configured in environment variables. Please set RABBITMQ_URL.")
 	}
 
 	// Wire patient risk calculator into appointment service (always enabled)

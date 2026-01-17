@@ -17,9 +17,10 @@ import (
 
 // Config holds the Evolution API configuration
 type Config struct {
-	BaseURL string
-	APIKey  string
-	Timeout time.Duration
+	BaseURL    string
+	APIKey     string
+	Timeout    time.Duration
+	WebhookURL string
 }
 
 // evolutionClient implements service.WhatsAppClient
@@ -80,11 +81,48 @@ func (c *evolutionClient) CreateInstance(ctx context.Context, instance string) (
 		return nil, nil // Return nil, nil to indicate success but no QR data
 	}
 
-	return &model.QRCodeData{
+	qrData := &model.QRCodeData{
 		Instance: result.Instance.InstanceName,
 		QRCode:   result.Qrcode.Code,
 		Base64:   result.Qrcode.Base64,
-	}, nil
+	}
+
+	// Configure webhook automatically if WebhookURL is set
+	if c.config.WebhookURL != "" {
+		if err := c.SetWebhook(ctx, instance); err != nil {
+			log.Printf("[Evolution API] Warning: Failed to configure webhook for instance %s: %v", instance, err)
+			// Don't fail the instance creation if webhook setup fails
+		}
+	}
+
+	return qrData, nil
+}
+
+// SetWebhook configures the webhook for an instance
+func (c *evolutionClient) SetWebhook(ctx context.Context, instance string) error {
+	if c.config.WebhookURL == "" {
+		return errors.ErrInternalInstance.WithMessage("webhook URL not configured")
+	}
+
+	payload := map[string]interface{}{
+		"webhook": map[string]interface{}{
+			"enabled":          true,
+			"url":              c.config.WebhookURL,
+			"webhookByEvents":  false,
+			"webhookBase64":    false,
+			"events": []string{
+				"MESSAGES_UPSERT",
+			},
+		},
+	}
+
+	_, err := c.doRequest(ctx, "POST", "/webhook/set/"+instance, payload)
+	if err != nil {
+		return err
+	}
+
+	log.Printf("[Evolution API] Webhook configured successfully for instance %s", instance)
+	return nil
 }
 
 // SendTextMessage sends a text message via Evolution API

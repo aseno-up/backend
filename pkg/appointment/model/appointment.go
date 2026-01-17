@@ -211,9 +211,9 @@ type CancelAppointmentRequest struct {
 // AppointmentWithClinic represents an appointment with clinic info for reminders
 type AppointmentWithClinic struct {
 	Appointment
-	ClinicName        string `json:"clinic_name"`
-	WhatsAppInstance  string `json:"whatsapp_instance"`
-	WhatsAppConnected bool   `json:"whatsapp_connected"`
+	ClinicName        string `json:"clinic_name" gorm:"column:clinic_name"`
+	WhatsAppInstance  string `json:"whatsapp_instance" gorm:"column:whatsapp_instance"`
+	WhatsAppConnected bool   `json:"whatsapp_connected" gorm:"column:whatsapp_connected"`
 }
 
 // SlotPerformanceStats represents historical performance of a time slot
