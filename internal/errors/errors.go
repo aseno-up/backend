@@ -3,6 +3,8 @@ package errors
 import (
 	"fmt"
 	"net/http"
+
+	"gorm.io/gorm"
 )
 
 // Error types constants
@@ -168,6 +170,10 @@ var (
 func IsNotFound(err error) bool {
 	if appErr, ok := err.(*AppError); ok {
 		return appErr.StatusCode == http.StatusNotFound
+	}
+	// Also check for GORM's specific "record not found" error
+	if err == gorm.ErrRecordNotFound {
+		return true
 	}
 	return false
 }

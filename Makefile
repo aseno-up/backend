@@ -72,16 +72,18 @@ docker-down:
 	@echo "Stopping Docker services..."
 	docker-compose down
 
-# Start everything (database + app) - recommended for development
+# Start everything (database + app + waha) - recommended for development
 up:
 	@echo "Starting Docker services..."
 	@docker-compose up -d postgres redis
+	@docker-compose -f docker-compose.waha.yaml up -d
 	@echo "Waiting for PostgreSQL to be ready..."
 	@until docker-compose exec -T postgres pg_isready -U aseno -d aseno_db > /dev/null 2>&1; do \
 		echo "Waiting for database..."; \
 		sleep 2; \
 	done
 	@echo "Database is ready!"
+	@echo "WAHA started on http://localhost:3002"
 	@echo "Starting application..."
 	$(GORUN) ./cmd/api/main.go
 
@@ -89,6 +91,7 @@ up:
 down:
 	@echo "Stopping all services..."
 	docker-compose down
+	docker-compose -f docker-compose.waha.yaml down
 
 # Start pgAdmin (Database UI)
 pgadmin:
@@ -115,6 +118,27 @@ rabbitmq-down:
 rabbitmq-logs:
 	docker-compose logs -f rabbitmq
 
+# Start WAHA (WhatsApp HTTP API)
+waha:
+	@echo "Starting WAHA on http://localhost:3002..."
+	@echo "API Key: seu_api_key_aqui_123456"
+	@echo "Swagger UI: http://localhost:3002/"
+	docker-compose -f docker-compose.waha.yaml up -d
+
+# Stop WAHA
+waha-down:
+	@echo "Stopping WAHA..."
+	docker-compose -f docker-compose.waha.yaml down
+
+# Restart WAHA
+waha-restart:
+	@echo "Restarting WAHA..."
+	docker-compose -f docker-compose.waha.yaml restart
+
+# WAHA logs
+waha-logs:
+	docker-compose -f docker-compose.waha.yaml logs -f
+
 # Create new migration (usage: make migration name=create_users_table)
 migration:
 	@echo "Creating migration..."
@@ -125,8 +149,8 @@ migration:
 # Show help
 help:
 	@echo "Available commands:"
-	@echo "  make up             - Start database + application (recommended)"
-	@echo "  make down           - Stop all services"
+	@echo "  make up             - Start database + WAHA + application (recommended)"
+	@echo "  make down           - Stop all services (including WAHA)"
 	@echo "  make build          - Build the binary"
 	@echo "  make run            - Build and run the application"
 	@echo "  make dev            - Run in development mode"
@@ -142,5 +166,9 @@ help:
 	@echo "  make rabbitmq       - Start RabbitMQ on http://localhost:15672"
 	@echo "  make rabbitmq-down  - Stop RabbitMQ"
 	@echo "  make rabbitmq-logs  - Show RabbitMQ logs"
+	@echo "  make waha           - Start WAHA (WhatsApp API) on http://localhost:3002"
+	@echo "  make waha-down      - Stop WAHA"
+	@echo "  make waha-restart   - Restart WAHA"
+	@echo "  make waha-logs      - Show WAHA logs"
 	@echo "  make migration      - Create new migration file"
 	@echo "  make help           - Show this help"

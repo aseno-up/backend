@@ -22,7 +22,7 @@ import (
 // All methods receive an instance parameter to support per-clinic WhatsApp connections
 type WhatsAppClient interface {
 	// CreateInstance creates a new WhatsApp instance for a clinic
-	CreateInstance(ctx context.Context, instance string) error
+	CreateInstance(ctx context.Context, instance string) (*model.QRCodeData, error)
 
 	// SendTextMessage sends a simple text message
 	SendTextMessage(ctx context.Context, instance, phone, message string) (*model.SendMessageResponse, error)
@@ -75,7 +75,7 @@ type SchedulingIntentRepository interface {
 // WhatsAppService defines the interface for WhatsApp business logic
 type WhatsAppService interface {
 	// CreateInstance creates a new WhatsApp instance for a clinic
-	CreateInstance(ctx context.Context, instance string) error
+	CreateInstance(ctx context.Context, instance string) (*model.QRCodeData, error)
 
 	// SendTextMessage sends a simple text message
 	SendTextMessage(ctx context.Context, instance, phone, message string) (*model.SendMessageResponse, error)
@@ -369,7 +369,7 @@ func (s *whatsAppService) SetNewAppointmentCreator(creator NewAppointmentCreator
 }
 
 // CreateInstance creates a new WhatsApp instance for a clinic
-func (s *whatsAppService) CreateInstance(ctx context.Context, instance string) error {
+func (s *whatsAppService) CreateInstance(ctx context.Context, instance string) (*model.QRCodeData, error) {
 	return s.client.CreateInstance(ctx, instance)
 }
 
@@ -409,7 +409,7 @@ func (s *whatsAppService) SendRescheduleOptions(ctx context.Context, instance, p
 
 	// Build message with options
 	message := fmt.Sprintf(
-		"❌ Seu agendamento com %s foi cancelado.\n\n"+
+		"❌ Seu agendamento com %s foi cancelado.\n\n" +
 			"Deseja reagendar? Escolha um novo horario:\n\n",
 		apt.Professional,
 	)
@@ -485,12 +485,12 @@ func (s *whatsAppService) SendConfirmationMessage(ctx context.Context, instance 
 
 	// Build confirmation message with buttons
 	message := fmt.Sprintf(
-		"Ola %s!\n\n"+
-			"Sua consulta foi agendada:\n\n"+
-			"📅 Data: %s\n"+
-			"🕐 Horario: %s\n"+
-			"👨‍⚕️ Profissional: %s\n"+
-			"🏥 Local: %s\n\n"+
+		"Ola %s!\n\n" +
+			"Sua consulta foi agendada:\n\n" +
+			"📅 Data: %s\n" +
+			"🕐 Horario: %s\n" +
+			"👨‍⚕️ Profissional: %s\n" +
+			"🏥 Local: %s\n\n" +
 			"Por favor, confirme sua presenca:",
 		msg.PatientName,
 		dateStr,
@@ -540,12 +540,12 @@ func (s *whatsAppService) SendReminderMessage(ctx context.Context, instance stri
 	}
 
 	message := fmt.Sprintf(
-		"🔔 %s\n\n"+
-			"Ola %s!\n\n"+
-			"📅 Data: %s\n"+
-			"🕐 Horario: %s\n"+
-			"👨‍⚕️ Profissional: %s\n"+
-			"🏥 Local: %s\n\n"+
+		"🔔 %s\n\n" +
+			"Ola %s!\n\n" +
+			"📅 Data: %s\n" +
+			"🕐 Horario: %s\n" +
+			"👨‍⚕️ Profissional: %s\n" +
+			"🏥 Local: %s\n\n" +
 			"Caso precise remarcar ou cancelar, responda esta mensagem.",
 		reminderText,
 		msg.PatientName,
@@ -1062,10 +1062,10 @@ func (s *whatsAppService) handleSlotSelection(ctx context.Context, clinicID uuid
 	timeStr := selectedSlot.StartTime.Format("15:04")
 
 	message := fmt.Sprintf(
-		"Consulta agendada com sucesso!\n\n"+
-			"%s Data: %s %s\n"+
-			"%s Horario: %s\n"+
-			"%s Profissional: %s\n\n"+
+		"Consulta agendada com sucesso!\n\n" +
+			"%s Data: %s %s\n" +
+			"%s Horario: %s\n" +
+			"%s Profissional: %s\n\n" +
 			"Te aguardamos!",
 		"📅", weekday, dateStr,
 		"🕐", timeStr,

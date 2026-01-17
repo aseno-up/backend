@@ -76,6 +76,7 @@ import (
 	waitlist_service "github.com/aseno/backend/pkg/waitlist/service"
 	whatsapp_classifier "github.com/aseno/backend/pkg/whatsapp/classifier"
 	whatsapp_evolution "github.com/aseno/backend/pkg/whatsapp/client/evolution"
+	whatsapp_waha "github.com/aseno/backend/pkg/whatsapp/client/waha"
 	whatsapp_handler "github.com/aseno/backend/pkg/whatsapp/handler"
 	whatsapp_model "github.com/aseno/backend/pkg/whatsapp/model"
 	whatsapp_repository "github.com/aseno/backend/pkg/whatsapp/repository"
@@ -156,14 +157,36 @@ func main() {
 	// Initialize Settings service (used by professional service and public config)
 	settingsSvc := settings_service.NewSettingsService(settingsRepo)
 
-	// Initialize WhatsApp client (Evolution API)
+	// Initialize WhatsApp client (Evolution API or WAHA)
 	var whatsappClient whatsapp_service.WhatsAppClient
-	if cfg.GetEvolutionAPIURL() != "" {
-		whatsappClient = whatsapp_evolution.NewEvolutionClient(whatsapp_evolution.Config{
-			BaseURL: cfg.GetEvolutionAPIURL(),
-			APIKey:  cfg.GetEvolutionAPIKey(),
-		})
-		log.Println("WhatsApp (Evolution API) client initialized")
+	whatsappProvider := cfg.GetWhatsAppProvider()
+
+	switch whatsappProvider {
+	case "waha":
+		if cfg.GetWahaAPIURL() != "" {
+			whatsappClient = whatsapp_waha.NewWahaClient(whatsapp_waha.Config{
+				BaseURL: cfg.GetWahaAPIURL(),
+				APIKey:  cfg.GetWahaAPIKey(),
+			})
+			log.Println("WhatsApp (WAHA) client initialized")
+		}
+	case "evolution":
+		if cfg.GetEvolutionAPIURL() != "" {
+			whatsappClient = whatsapp_evolution.NewEvolutionClient(whatsapp_evolution.Config{
+				BaseURL: cfg.GetEvolutionAPIURL(),
+				APIKey:  cfg.GetEvolutionAPIKey(),
+			})
+			log.Println("WhatsApp (Evolution API) client initialized")
+		}
+	default:
+		// Default to Evolution for backwards compatibility
+		if cfg.GetEvolutionAPIURL() != "" {
+			whatsappClient = whatsapp_evolution.NewEvolutionClient(whatsapp_evolution.Config{
+				BaseURL: cfg.GetEvolutionAPIURL(),
+				APIKey:  cfg.GetEvolutionAPIKey(),
+			})
+			log.Println("WhatsApp (Evolution API) client initialized (default)")
+		}
 	}
 
 	// Initialize Asaas client (Payment Gateway)
@@ -208,7 +231,14 @@ func main() {
 
 	// Initialize Email service
 	var emailSvc email_service.EmailService
-	if cfg.GetSMTPHost() != "" {
+	if cfg.GetBrevoAPIKey() != "" {
+		var err error
+		emailSvc, err = email_service.NewBrevoEmailService()
+		if err != nil {
+			log.Fatalf("Failed to initialize Brevo email service: %v", err)
+		}
+		log.Println("Brevo email service initialized")
+	} else if cfg.GetSMTPHost() != "" {
 		emailSvc = email_service.NewSMTPEmailService(email_service.SMTPConfig{
 			Host:        cfg.GetSMTPHost(),
 			Port:        cfg.GetSMTPPort(),
@@ -220,7 +250,7 @@ func main() {
 		log.Println("SMTP email service initialized")
 	} else {
 		emailSvc = email_service.NewNoOpEmailService()
-		log.Println("Using no-op email service (SMTP not configured)")
+		log.Println("Using no-op email service (no email provider configured)")
 	}
 
 	// Initialize auth service with or without Google OAuth
@@ -428,7 +458,7 @@ func main() {
 	// Initialize WhatsApp handler (if service is configured)
 	var whatsappHandler whatsapp_handler.WhatsAppHandler
 	if whatsappService != nil {
-		whatsappHandler = whatsapp_handler.NewWhatsAppHandler(whatsappService, clinicRepo, cfg.GetWhatsAppWebhookSecret())
+		whatsappHandler = whatsapp_handler.NewWhatsAppHandler(whatsappService, clinicRepo, cfg.GetWhatsAppWebhookSecret(), cfg.GetWhatsAppProvider())
 	}
 
 	// Initialize Payment handler (if service is configured)

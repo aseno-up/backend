@@ -28,9 +28,17 @@ type Config struct {
 	GoogleRedirectURL     string // For calendar integration
 	GoogleAuthRedirectURL string // For authentication
 
+	// WhatsApp Provider Selection
+	whatsappProvider      string // "evolution" or "waha"
+
 	// Evolution API / WhatsApp (private - sensitive)
 	evolutionAPIURL       string
 	evolutionAPIKey       string
+
+	// WAHA (WhatsApp HTTP API) (private - sensitive)
+	wahaAPIURL            string
+	wahaAPIKey            string
+
 	whatsappWebhookSecret string
 
 	// Asaas Payment (private - sensitive)
@@ -64,6 +72,7 @@ type Config struct {
 	geminiAPIKey                    string
 	anthropicAPIKey                 string
 	openaiAPIKey                    string
+	brevoAPIKey                     string
 }
 
 // NewConfig creates a new configuration from environment variables
@@ -82,8 +91,11 @@ func NewConfig() *Config {
 		googleClientSecret:    getEnv("GOOGLE_CLIENT_SECRET", ""),
 		GoogleRedirectURL:     getEnv("GOOGLE_REDIRECT_URL", ""),
 		GoogleAuthRedirectURL: getEnv("GOOGLE_AUTH_REDIRECT_URL", ""),
+		whatsappProvider:      getEnv("WHATSAPP_PROVIDER", "evolution"), // Default to evolution for backwards compatibility
 		evolutionAPIURL:       getEnv("EVOLUTION_API_URL", ""),
 		evolutionAPIKey:       getEnv("EVOLUTION_API_KEY", ""),
+		wahaAPIURL:            getEnv("WAHA_API_URL", ""),
+		wahaAPIKey:            getEnv("WAHA_API_KEY", ""),
 		whatsappWebhookSecret: getEnv("WHATSAPP_WEBHOOK_SECRET", ""),
 		asaasAPIURL:        getEnv("ASAAS_API_URL", "https://sandbox.asaas.com/api/v3"),
 		asaasAPIKey:        getEnv("ASAAS_API_KEY", ""),
@@ -107,6 +119,7 @@ func NewConfig() *Config {
 		geminiAPIKey:                    getEnv("GEMINI_API_KEY", ""),
 		anthropicAPIKey:                 getEnv("ANTHROPIC_API_KEY", ""),
 		openaiAPIKey:                    getEnv("OPENAI_API_KEY", ""),
+		brevoAPIKey:                     getEnv("BREVO_API_KEY", ""),
 	}
 }
 
@@ -157,6 +170,11 @@ func (c *Config) GetGoogleClientSecret() string {
 	return c.googleClientSecret
 }
 
+// GetWhatsAppProvider returns the WhatsApp provider (evolution or waha)
+func (c *Config) GetWhatsAppProvider() string {
+	return c.whatsappProvider
+}
+
 // GetEvolutionAPIURL returns the Evolution API URL
 func (c *Config) GetEvolutionAPIURL() string {
 	return c.evolutionAPIURL
@@ -165,6 +183,16 @@ func (c *Config) GetEvolutionAPIURL() string {
 // GetEvolutionAPIKey returns the Evolution API key
 func (c *Config) GetEvolutionAPIKey() string {
 	return c.evolutionAPIKey
+}
+
+// GetWahaAPIURL returns the WAHA API URL
+func (c *Config) GetWahaAPIURL() string {
+	return c.wahaAPIURL
+}
+
+// GetWahaAPIKey returns the WAHA API key
+func (c *Config) GetWahaAPIKey() string {
+	return c.wahaAPIKey
 }
 
 // GetWhatsAppWebhookSecret returns the WhatsApp webhook secret
@@ -265,6 +293,10 @@ func (c *Config) GetAnthropicAPIKey() string {
 // GetOpenAIAPIKey returns the OpenAI API key
 func (c *Config) GetOpenAIAPIKey() string {
 	return c.openaiAPIKey
+}
+
+func (c *Config) GetBrevoAPIKey() string {
+	return c.brevoAPIKey
 }
 
 func getEnv(key, defaultValue string) string {

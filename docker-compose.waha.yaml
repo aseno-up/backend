@@ -1,0 +1,27 @@
+version: '3.8'
+
+services:
+  waha:
+    image: devlikeapro/waha:latest
+    container_name: aseno-waha
+    restart: unless-stopped
+    ports:
+      - "3002:3000"
+    environment:
+      - WAHA_API_KEY=seu_api_key_aqui_123456
+      - WAHA_HTTP_PORT=3000
+      - WAHA_DASHBOARD_USERNAME=admin
+      - WAHA_DASHBOARD_PASSWORD=admin
+      - WHATSAPP_SWAGGER_USERNAME=admin
+      - WHATSAPP_SWAGGER_PASSWORD=admin
+    volumes:
+      - ./waha_data:/app/.waha
+    networks:
+      - aseno-network
+
+networks:
+  aseno-network:
+    driver: bridge
+
+volumes:
+  waha_data:

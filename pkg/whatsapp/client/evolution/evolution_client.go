@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"time"
 
@@ -42,15 +43,48 @@ func NewEvolutionClient(config Config) service.WhatsAppClient {
 }
 
 // CreateInstance creates a new WhatsApp instance
-func (c *evolutionClient) CreateInstance(ctx context.Context, instance string) error {
+func (c *evolutionClient) CreateInstance(ctx context.Context, instance string) (*model.QRCodeData, error) {
 	payload := map[string]interface{}{
 		"instanceName": instance,
 		"qrcode":       true,
 		"integration":  "WHATSAPP-BAILEYS",
 	}
 
-	_, err := c.doRequest(ctx, "POST", "/instance/create", payload)
-	return err
+	respBody, err := c.doRequest(ctx, "POST", "/instance/create", payload)
+	if err != nil {
+		return nil, err
+	}
+
+	// Parse the response to get the QR code. The structure is based on Evolution API docs.
+	var result struct {
+		Instance struct {
+			InstanceName string `json:"instanceName"`
+		} `json:"instance"`
+		Hash   interface{} `json:"hash"` // Can be string or object
+		Qrcode struct {
+			Code   string `json:"code"`
+			Base64 string `json:"base64"`
+			Count  int    `json:"count"`
+		} `json:"qrcode"`
+	}
+
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		log.Printf("[Evolution API] Failed to unmarshal CreateInstance response: %v. Body: %s", err, string(respBody))
+		return nil, errors.ErrInternalInstance.WithError(err)
+	}
+
+	// If qrcode is not in the response or count is 0, it may mean the instance already existed
+	// or the QR code is not ready yet. The caller should fetch it separately.
+	if result.Qrcode.Base64 == "" || result.Qrcode.Count == 0 {
+		log.Printf("[Evolution API] CreateInstance response did not contain a QR code for instance %s (count=%d). QR code may need to be fetched separately.", instance, result.Qrcode.Count)
+		return nil, nil // Return nil, nil to indicate success but no QR data
+	}
+
+	return &model.QRCodeData{
+		Instance: result.Instance.InstanceName,
+		QRCode:   result.Qrcode.Code,
+		Base64:   result.Qrcode.Base64,
+	}, nil
 }
 
 // SendTextMessage sends a text message via Evolution API
@@ -132,10 +166,16 @@ func (c *evolutionClient) GetQRCode(ctx context.Context, instance string) (*mode
 	var result struct {
 		Code   string `json:"code"`
 		Base64 string `json:"base64"`
+		Count  int    `json:"count"` // Evolution API returns {"count":0} when no QR code is available
 	}
 
 	if err := json.Unmarshal(resp, &result); err != nil {
 		return nil, errors.ErrInternalInstance.WithError(err)
+	}
+
+	// If count is 0, it means no QR code is available (instance might be stuck or already connected)
+	if result.Count == 0 && result.Base64 == "" {
+		log.Printf("[Evolution API] No QR code available for instance %s (count=0). Instance may need to be restarted.", instance)
 	}
 
 	return &model.QRCodeData{
@@ -169,6 +209,8 @@ func (c *evolutionClient) doRequest(ctx context.Context, method, path string, bo
 	}
 
 	url := c.config.BaseURL + path
+	log.Printf("[Evolution API] Request: %s %s", method, url)
+
 	req, err := http.NewRequestWithContext(ctx, method, url, reqBody)
 	if err != nil {
 		return nil, errors.ErrInternalInstance.WithError(err)
@@ -179,16 +221,22 @@ func (c *evolutionClient) doRequest(ctx context.Context, method, path string, bo
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
+		log.Printf("[Evolution API] Connection Error: %v", err)
 		return nil, errors.ErrWhatsAppConnectionInstance.WithError(err)
 	}
 	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
+		log.Printf("[Evolution API] Error reading response body: %v", err)
 		return nil, errors.ErrInternalInstance.WithError(err)
 	}
 
+	log.Printf("[Evolution API] Response Status: %d", resp.StatusCode)
+
 	if resp.StatusCode >= 400 {
+		log.Printf("[Evolution API] Error Response Body: %s", string(respBody))
+		
 		var errResp struct {
 			Message  interface{} `json:"message"` // Can be string or []string
 			Error    string      `json:"error"`
@@ -228,6 +276,13 @@ func (c *evolutionClient) doRequest(ctx context.Context, method, path string, bo
 
 		return nil, errors.ErrWhatsAppSendFailedInstance.WithMessage(errMsg)
 	}
+
+	// Limiting success log size to avoid spamming console
+	logBody := string(respBody)
+	if len(logBody) > 500 {
+		logBody = logBody[:500] + "..."
+	}
+	log.Printf("[Evolution API] Success Response Body: %s", logBody)
 
 	return respBody, nil
 }
