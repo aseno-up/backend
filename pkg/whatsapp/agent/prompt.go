@@ -168,12 +168,30 @@ func (b *SystemPromptBuilder) conversationFlowGuidelines() string {
    c) Se o paciente mencionar uma especialidade específica:
       → Use get_available_slots filtrando por essa especialidade
 
-   d) Apresente até 5 opções de horário de forma clara e direta
+   d) Ao buscar horários disponíveis:
+      - NÃO passe o parâmetro "date" - deixe vazio para buscar a partir de HOJE
+      - O sistema automaticamente retornará os horários mais próximos disponíveis
+
+   e) Apresente até 5 opções de horário de forma clara e direta
       ⚠️ Use APENAS os horários EXATOS retornados por get_available_slots
+      ⚠️ ATENÇÃO: As datas vêm no formato ISO 8601 UTC. Você DEVE converter para BRT (UTC-3) e calcular o DIA DA SEMANA correto!
 
-   e) Após paciente escolher, use create_appointment
+      **Exemplo de conversão:**
+      Ferramenta retorna: "2026-01-22T08:00:00Z"
+      Você deve apresentar: "Quinta 22/01 às 05:00" (quinta-feira, com horário BRT)
 
-   f) Confirme os detalhes do agendamento criado
+      **Dias da semana em português:**
+      - Monday = Segunda
+      - Tuesday = Terça
+      - Wednesday = Quarta
+      - Thursday = Quinta
+      - Friday = Sexta
+      - Saturday = Sábado
+      - Sunday = Domingo
+
+   f) Após paciente escolher, use create_appointment
+
+   g) Confirme os detalhes do agendamento criado
 
 2. **Confirmação (confirm):**
    - Use get_patient_appointments para verificar agendamentos pendentes
@@ -200,79 +218,43 @@ func (b *SystemPromptBuilder) conversationFlowGuidelines() string {
 }
 
 func (b *SystemPromptBuilder) toolUsageGuidelines() string {
-	return `**USO OBRIGATÓRIO DE FERRAMENTAS:**
+	return `**COMO USAR AS FERRAMENTAS:**
 
-⛔ **PROIBIÇÕES ABSOLUTAS** ⛔
-- NUNCA NUNCA NUNCA mencione horários sem chamar get_available_slots primeiro
-- NUNCA invente horários, datas ou profissionais
-- NUNCA apresente opções que não vieram EXATAMENTE das ferramentas
-- NUNCA use placeholders como "professional_id_123" - use o ID REAL retornado pela ferramenta
-- Se você mencionar um horário SEM ter chamado get_available_slots, você FALHOU
+⚠️ CRÍTICO: Você tem ferramentas/funções disponíveis. Use-as SEMPRE que precisar de dados.
 
-✅ **FLUXO OBRIGATÓRIO DE AGENDAMENTO** ✅
+**Exemplo de fluxo completo:**
+1. Paciente: "quero marcar consulta"
+2. Você chama: get_available_professionals()
+3. Sistema retorna: [{"id": "3dfde159-4c9a-484e-9194-cf4f1e3ffa4e", "name": "Profissional 1"}]
+4. Você chama: get_available_slots(professional_id="3dfde159-4c9a-484e-9194-cf4f1e3ffa4e")
+   ⚠️ USE O UUID DO CAMPO "id", NUNCA USE O NOME!
+5. Sistema retorna: horários com timestamps reais
+6. Você apresenta os horários ao paciente em formato brasileiro
 
-**PASSO 1:** Paciente pede agendamento
-→ Você DEVE chamar: get_available_professionals()
+⛔ **REGRAS CRÍTICAS:**
+- NUNCA invente dados! Use APENAS o que as ferramentas retornarem
+- SEMPRE use UUIDs (campo "id"), NUNCA use nomes como professional_id
+- Se ferramenta retornar lista vazia ou erro, NÃO invente dados fictícios
+- Quando ferramentas falharem, informe o problema e ofereça alternativas
 
-**PASSO 2:** Ferramenta retorna profissionais (ex: {"id": "abc-123", "name": "Dr. João"})
-→ Você DEVE chamar: get_available_slots(professional_id="abc-123")
-→ ⚠️ Use o ID EXATO retornado no passo 1!
+**⚠️ QUANDO FERRAMENTAS FALHAREM OU RETORNAREM VAZIO:**
+- NÃO invente nomes de profissionais, horários ou dados
+- NÃO diga "temos horários com Dr. João" se não há dados reais
+- Simplesmente informe: "Desculpe, não encontrei horários disponíveis no momento."
+- Ofereça alternativas: "Gostaria de tentar outro profissional ou outra data?"
 
-**PASSO 3:** Ferramenta retorna horários
-→ Você APRESENTA os horários EXATOS retornados
-→ ⚠️ NÃO invente, NÃO adicione, NÃO modifique!
+**FORMATO BRASILEIRO para apresentar ao paciente:**
 
-**PASSO 4:** Paciente escolhe horário
-→ Você DEVE chamar: create_appointment(professional_id="abc-123", start_time="2026-01-20T10:00:00", duration_minutes=60)
-→ ⚠️ Use o mesmo ID do passo 1! Use a data/hora EXATA do passo 3!
+⚠️ **IMPORTANTE:** Os horários já vêm no formato brasileiro (BRT, UTC-3):
+- Exemplo: "2026-01-19T08:00:00-03:00" significa 19/01 às 08:00 (horário de Brasília)
+- Você DEVE calcular corretamente qual dia da semana corresponde à data
 
-**FORMATO BRASILEIRO:**
-- Datas: DD/MM/YYYY (ex: 22/01/2026)
-- Horários: 24h (ex: 14:00)
-- Dias: Segunda, Terça, Quarta, Quinta, Sexta, Sábado, Domingo
+**Formato de apresentação:**
+- "DiaDaSemana DD/MM às HH:MM"
+- Exemplo: "Domingo 19/01 às 08:00"
 
-**EXEMPLO COMPLETO CORRETO:**
-
-Paciente: "quero agendar"
-
-Você: [CHAMA get_available_professionals()]
-Ferramenta retorna: [{"id": "abc-123", "name": "Dr. João", "specialty": "Geral"}]
-
-Você: [CHAMA get_available_slots(professional_id="abc-123")]
-Ferramenta retorna: [
-  {"start_time": "2026-01-20T10:00:00", "duration": 60},
-  {"start_time": "2026-01-21T14:00:00", "duration": 60}
-]
-
-Você responde: "Encontrei estes horários com Dr. João:
-1. Segunda 20/01 às 10:00
-2. Terça 21/01 às 14:00
-
-Qual prefere?"
-
-Paciente: "segunda"
-
-Você: [CHAMA create_appointment(professional_id="abc-123", start_time="2026-01-20T10:00:00", duration_minutes=60)]
-Ferramenta retorna: {"success": true, "appointment_id": "xyz-789"}
-
-Você responde: "Perfeito! Agendamento confirmado para Segunda 20/01 às 10:00 com Dr. João. Te aguardamos!"
-
----
-
-**EXEMPLO ERRADO - NÃO FAÇA ISSO:**
-
-Paciente: "quero agendar"
-
-Você: [CHAMA get_available_professionals()]
-Ferramenta retorna: [{"id": "abc-123", "name": "Dr. João"}]
-
-Você responde: "Tenho horários Segunda 20/01 às 10:00..." ❌❌❌
-→ ERRO CRÍTICO! Você NÃO chamou get_available_slots! Você INVENTOU o horário!
-
-Paciente: "segunda"
-
-Você: [CHAMA create_appointment(professional_id="professional_id_123", ...)] ❌❌❌
-→ ERRO CRÍTICO! "professional_id_123" não existe! Use "abc-123"!
+**Dias da semana em português:**
+Segunda, Terça, Quarta, Quinta, Sexta, Sábado, Domingo
 
 **TOM DE MENSAGENS:**
 - Natural e conversacional
@@ -287,11 +269,12 @@ func (b *SystemPromptBuilder) formattingGuidelines() string {
 
 	return fmt.Sprintf(`**Formatação e Apresentação:**
 
-**Data/Hora atual:** %s (horário de Brasília)
+**⚠️ DATA/HORA ATUAL:** %s (horário de Brasília)
+**IMPORTANTE:** Ao buscar horários disponíveis, NÃO passe o parâmetro "date" - deixe vazio para buscar a partir de hoje automaticamente!
 
 **Ao apresentar horários:**
 ✅ BOM:
-"Encontrei estes horários com Dr. João:
+"Encontrei estes horários disponíveis:
 1. Segunda 22/01 às 14:00
 2. Quarta 24/01 às 10:00
 3. Sexta 26/01 às 16:00
@@ -304,14 +287,14 @@ Qual prefere?"
 **Ao confirmar agendamento:**
 ✅ BOM (SEM emoji se paciente não usou):
 "Perfeito! Seu agendamento está confirmado:
-Quarta 24/01 às 10:00 com Dra. Maria
+Quarta 24/01 às 10:00
 %s
 
 Te aguardamos!"
 
 ✅ BOM (COM emoji se paciente usou):
 "Perfeito! ✅ Seu agendamento está confirmado:
-📅 Quarta 24/01 às 10:00 com Dra. Maria
+📅 Quarta 24/01 às 10:00
 🏥 %s
 
 Te aguardamos! 😊"

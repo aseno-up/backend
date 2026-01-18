@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -161,6 +162,18 @@ func main() {
 
 	// Initialize Settings service (used by professional service and public config)
 	settingsSvc := settings_service.NewSettingsService(settingsRepo)
+
+	// Initialize Notification service (needed early for booking and other services)
+	notificationSvc := notification_service.NewNotificationService(notificationRepo)
+
+	// Initialize Booking service (needed early for AI Agent and public booking)
+	bookingSvc := booking_service.NewBookingService(
+		clinicRepo,
+		professionalRepo,
+		appointmentRepo,
+		patientRepo,
+		notificationSvc,
+	)
 
 	// Initialize WhatsApp client (Evolution API or WAHA)
 	var whatsappClient whatsapp_service.WhatsAppClient
@@ -356,6 +369,9 @@ func main() {
 				patientService,
 				clinicService,
 				patientRepo,
+				bookingSvc,
+				clinicRepo,
+				professionalRepo,
 			)
 			if err != nil {
 				log.Printf("Warning: Failed to initialize AI Agent: %v", err)
@@ -410,8 +426,8 @@ func main() {
 	// Initialize Analytics service
 	analyticsSvc := analytics_service.NewAnalyticsService(analyticsRepo, clinicRepo)
 
-	// Initialize Notification service
-	notificationSvc := notification_service.NewNotificationService(notificationRepo)
+	// Notification service already initialized earlier (for AI Agent)
+	// notificationSvc already exists
 
 	// Initialize Waitlist service (if WhatsApp and queue are available)
 	var waitlistSvc waitlist_service.WaitlistService
@@ -575,14 +591,8 @@ func main() {
 	// Initialize Public handler (no auth required - landing page config)
 	publicHdlr := public_handler.NewPublicHandler(settingsSvc)
 
-	// Initialize Booking service and handler (public online booking)
-	bookingSvc := booking_service.NewBookingService(
-		clinicRepo,
-		professionalRepo,
-		appointmentRepo,
-		patientRepo,
-		notificationSvc,
-	)
+	// Booking service already initialized earlier (for AI Agent)
+	// bookingSvc already exists
 	bookingHdlr := booking_handler.NewBookingHandler(bookingSvc)
 
 	// Setup router
@@ -1272,6 +1282,9 @@ func initializeAIAgent(
 	patientService patient_service.PatientService,
 	clinicService clinic_service.ClinicService,
 	patientRepo patient_repository.PatientRepository,
+	bookingService booking_service.BookingService,
+	clinicRepo clinic_repository.ClinicRepository,
+	professionalRepo professional_repository.ProfessionalRepository,
 ) (agent.Service, conversation.Manager, *tools.ExecutionContext, error) {
 	// Check if AI agent is enabled
 	workerCfg := config.NewWorkerConfig()
@@ -1305,7 +1318,7 @@ func initializeAIAgent(
 	execContext := &tools.ExecutionContext{
 		// Service dependencies - wrapped with adapters
 		ProfessionalLister:       &aiAgentProfessionalListerAdapter{professionalService: professionalService},
-		SlotFinder:               &aiAgentSlotFinderAdapter{appointmentService: appointmentService},
+		SlotFinder:               &aiAgentSlotFinderAdapter{bookingService: bookingService, clinicRepo: clinicRepo, professionalRepo: professionalRepo},
 		AppointmentCreator:       &aiAgentAppointmentCreatorAdapter{appointmentService: appointmentService},
 		AppointmentFinder:        &aiAgentAppointmentFinderAdapter{appointmentService: appointmentService},
 		AppointmentConfirmer:     &aiAgentAppointmentConfirmerAdapter{appointmentService: appointmentService},
@@ -1320,16 +1333,12 @@ func initializeAIAgent(
 	// 5. Create tool executor
 	toolExecutor := tools.NewExecutor(toolRegistry)
 
-	// 6. Get Gemini API key
-	geminiAPIKey := os.Getenv("GEMINI_API_KEY")
-	if geminiAPIKey == "" {
-		return nil, nil, nil, fmt.Errorf("GEMINI_API_KEY is required when AI_AGENT_ENABLED=true")
-	}
+	// 6. Create AI agent with dynamic provider selection
+	var aiAgent agent.Agent
+	var err error
 
-	// 7. Create AI agent (Gemini)
 	agentConfig := agent.Config{
 		Provider:       workerCfg.AIAgentProvider,
-		APIKey:         geminiAPIKey,
 		Model:          workerCfg.AIAgentModel,
 		FallbackModels: workerCfg.AIAgentFallbackModels,
 		MaxTokens:      workerCfg.AIAgentMaxTokens,
@@ -1337,9 +1346,29 @@ func initializeAIAgent(
 		Timeout:        workerCfg.AIAgentTimeout,
 	}
 
-	aiAgent, err := agent.NewGeminiAgent(agentConfig, toolRegistry, toolExecutor, execContext)
+	switch strings.ToLower(workerCfg.AIAgentProvider) {
+	case "gemini":
+		apiKey := strings.TrimSpace(os.Getenv("GEMINI_API_KEY"))
+		if apiKey == "" {
+			return nil, nil, nil, fmt.Errorf("GEMINI_API_KEY is required for Gemini provider")
+		}
+		agentConfig.APIKey = apiKey
+		aiAgent, err = agent.NewGeminiAgent(agentConfig, toolRegistry, toolExecutor, execContext)
+
+	case "openrouter":
+		apiKey := strings.TrimSpace(os.Getenv("OPENROUTER_API_KEY"))
+		if apiKey == "" {
+			return nil, nil, nil, fmt.Errorf("OPENROUTER_API_KEY is required for OpenRouter provider")
+		}
+		agentConfig.APIKey = apiKey
+		aiAgent, err = agent.NewOpenRouterAgent(agentConfig, toolRegistry, toolExecutor, execContext)
+
+	default:
+		return nil, nil, nil, fmt.Errorf("unsupported AI provider: %s (supported: gemini, openrouter)", workerCfg.AIAgentProvider)
+	}
+
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to create AI agent: %w", err)
+		return nil, nil, nil, fmt.Errorf("failed to initialize AI agent (%s): %w", workerCfg.AIAgentProvider, err)
 	}
 
 	// 8. Create feature flags
@@ -1408,19 +1437,98 @@ func (a *aiAgentProfessionalListerAdapter) ListAvailable(ctx context.Context, cl
 }
 
 type aiAgentSlotFinderAdapter struct {
-	appointmentService appointment_service.AppointmentService
+	bookingService   booking_service.BookingService
+	clinicRepo       clinic_repository.ClinicRepository
+	professionalRepo professional_repository.ProfessionalRepository
 }
 
 func (a *aiAgentSlotFinderAdapter) GetAvailableSlots(ctx context.Context, clinicID uuid.UUID, professionalID uuid.UUID, date time.Time, durationMinutes int) ([]*tools.AvailableSlot, error) {
-	// Use appointment service to get available slots
-	// This would need to be implemented in your appointment service
-	// For now, return empty - you'll need to implement this
-	return []*tools.AvailableSlot{}, nil
+	// Get clinic to get slug
+	clinic, err := a.clinicRepo.GetByID(ctx, clinicID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get clinic: %w", err)
+	}
+
+	// Get professional info
+	professional, err := a.professionalRepo.GetByID(ctx, professionalID, clinicID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get professional: %w", err)
+	}
+
+	// Call booking service with slug
+	response, err := a.bookingService.GetAvailableSlots(ctx, clinic.Slug, professionalID, date)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get available slots: %w", err)
+	}
+
+	// Convert to tools.AvailableSlot format
+	result := make([]*tools.AvailableSlot, len(response.Slots))
+	for i, slot := range response.Slots {
+		result[i] = &tools.AvailableSlot{
+			ProfessionalID:   professionalID,
+			ProfessionalName: professional.Name,
+			StartTime:        slot.StartTime,
+			EndTime:          slot.EndTime,
+		}
+	}
+
+	return result, nil
 }
 
 func (a *aiAgentSlotFinderAdapter) GetAvailableSlotsMultipleProfessionals(ctx context.Context, clinicID uuid.UUID, professionalIDs []uuid.UUID, date time.Time, days int, durationMinutes int, limit int) ([]*tools.AvailableSlot, error) {
-	// Similar to above - needs implementation
-	return []*tools.AvailableSlot{}, nil
+	// Get clinic to get slug
+	clinic, err := a.clinicRepo.GetByID(ctx, clinicID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get clinic: %w", err)
+	}
+
+	// If no specific professionals, get all active ones
+	if len(professionalIDs) == 0 {
+		professionals, _, err := a.professionalRepo.GetByClinicID(ctx, clinicID, true, 100, 0)
+		if err != nil {
+			return nil, fmt.Errorf("failed to list professionals: %w", err)
+		}
+		for _, prof := range professionals {
+			professionalIDs = append(professionalIDs, prof.ID)
+		}
+	}
+
+	// Collect slots from all professionals across multiple days
+	var allSlots []*tools.AvailableSlot
+	for day := 0; day < days; day++ {
+		currentDate := date.AddDate(0, 0, day)
+
+		for _, profID := range professionalIDs {
+			// Get professional info
+			professional, err := a.professionalRepo.GetByID(ctx, profID, clinicID)
+			if err != nil {
+				continue // Skip if professional not found
+			}
+
+			// Get slots for this professional on this day
+			response, err := a.bookingService.GetAvailableSlots(ctx, clinic.Slug, profID, currentDate)
+			if err != nil {
+				continue // Skip if error getting slots
+			}
+
+			// Convert and add to results
+			for _, slot := range response.Slots {
+				allSlots = append(allSlots, &tools.AvailableSlot{
+					ProfessionalID:   profID,
+					ProfessionalName: professional.Name,
+					StartTime:        slot.StartTime,
+					EndTime:          slot.EndTime,
+				})
+
+				// Stop if we hit the limit
+				if len(allSlots) >= limit {
+					return allSlots[:limit], nil
+				}
+			}
+		}
+	}
+
+	return allSlots, nil
 }
 
 type aiAgentAppointmentCreatorAdapter struct {

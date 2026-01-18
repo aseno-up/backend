@@ -64,6 +64,101 @@ func (r *Registry) GetGeminiFunctionDeclarations() []*genai.FunctionDeclaration 
 	return declarations
 }
 
+// OpenRouterTool represents a tool in OpenRouter/OpenAI format
+type OpenRouterTool struct {
+	Type     string             `json:"type"`
+	Function OpenRouterFunction `json:"function"`
+}
+
+// OpenRouterFunction represents a function in OpenRouter/OpenAI format
+type OpenRouterFunction struct {
+	Name        string                 `json:"name"`
+	Description string                 `json:"description"`
+	Parameters  map[string]interface{} `json:"parameters"`
+}
+
+// GetOpenRouterFunctionDeclarations returns OpenRouter/OpenAI-compatible function declarations
+func (r *Registry) GetOpenRouterFunctionDeclarations() []OpenRouterTool {
+	tools := make([]OpenRouterTool, 0, len(r.tools))
+
+	for _, tool := range r.tools {
+		tools = append(tools, OpenRouterTool{
+			Type: "function",
+			Function: OpenRouterFunction{
+				Name:        tool.Name,
+				Description: tool.Description,
+				Parameters:  convertGeminiSchemaToOpenRouter(tool.Parameters),
+			},
+		})
+	}
+
+	return tools
+}
+
+// convertGeminiSchemaToOpenRouter converts a Gemini schema to OpenRouter/OpenAI JSON schema format
+func convertGeminiSchemaToOpenRouter(schema *genai.Schema) map[string]interface{} {
+	if schema == nil {
+		return map[string]interface{}{
+			"type":                 "object",
+			"properties":           map[string]interface{}{},
+			"additionalProperties": false,
+		}
+	}
+
+	result := make(map[string]interface{})
+
+	// Convert type
+	switch schema.Type {
+	case genai.TypeObject:
+		result["type"] = "object"
+		result["additionalProperties"] = false
+	case genai.TypeString:
+		result["type"] = "string"
+	case genai.TypeInteger:
+		result["type"] = "integer"
+	case genai.TypeNumber:
+		result["type"] = "number"
+	case genai.TypeBoolean:
+		result["type"] = "boolean"
+	case genai.TypeArray:
+		result["type"] = "array"
+	default:
+		result["type"] = "object"
+		result["additionalProperties"] = false
+	}
+
+	// Add description if present
+	if schema.Description != "" {
+		result["description"] = schema.Description
+	}
+
+	// Add required fields if present
+	if len(schema.Required) > 0 {
+		result["required"] = schema.Required
+	}
+
+	// Convert properties recursively
+	if len(schema.Properties) > 0 {
+		properties := make(map[string]interface{})
+		for key, propSchema := range schema.Properties {
+			properties[key] = convertGeminiSchemaToOpenRouter(propSchema)
+		}
+		result["properties"] = properties
+	}
+
+	// Convert items for arrays
+	if schema.Items != nil {
+		result["items"] = convertGeminiSchemaToOpenRouter(schema.Items)
+	}
+
+	// Add enum if present
+	if len(schema.Enum) > 0 {
+		result["enum"] = schema.Enum
+	}
+
+	return result
+}
+
 // register adds a tool to the registry
 func (r *Registry) register(tool *Tool) {
 	r.tools[tool.Name] = tool
@@ -89,26 +184,26 @@ func (r *Registry) registerSlotManagementTools() {
 	// get_available_slots
 	r.register(&Tool{
 		Name:        "get_available_slots",
-		Description: "Busca horários disponíveis para agendamento. Retorna até 5 opções de horários livres.",
+		Description: "Busca horários disponíveis para agendamento. Busca automaticamente nos próximos 7 dias até encontrar horários. Retorna até 5 opções de horários livres. NUNCA retorna vazio se houver slots disponíveis na semana.",
 		Parameters: &genai.Schema{
 			Type:     genai.TypeObject,
 			Required: []string{}, // All parameters are optional
 			Properties: map[string]*genai.Schema{
 				"professional_id": {
 					Type:        genai.TypeString,
-					Description: "UUID do profissional (opcional, se não fornecido busca para todos)",
+					Description: "UUID of the professional (e.g. '3dfde159-4c9a-484e-9194-cf4f1e3ffa4e'). OMIT THIS PARAMETER to search across all professionals. MUST be a valid UUID format, never use names or text like 'Profissional 1'.",
 				},
 				"date": {
 					Type:        genai.TypeString,
-					Description: "Data inicial para busca no formato YYYY-MM-DD (opcional, padrão: hoje)",
+					Description: "Start date in YYYY-MM-DD format. OMIT THIS PARAMETER to search from today automatically. Only provide if you need a specific future date. Never use past dates.",
 				},
 				"duration_minutes": {
 					Type:        genai.TypeInteger,
-					Description: "Duração da consulta em minutos (opcional, padrão: 60 minutos)",
+					Description: "Consultation duration in minutes. OMIT THIS PARAMETER to use default of 60 minutes. Only provide if a different duration is needed.",
 				},
 				"days_ahead": {
 					Type:        genai.TypeInteger,
-					Description: "Quantos dias à frente buscar (opcional, padrão: 7)",
+					Description: "How many days ahead to search. OMIT THIS PARAMETER to use default of 7 days. Only provide if a different range is needed.",
 				},
 			},
 		},
@@ -127,19 +222,19 @@ func (r *Registry) registerAppointmentManagementTools() {
 			Properties: map[string]*genai.Schema{
 				"professional_id": {
 					Type:        genai.TypeString,
-					Description: "UUID do profissional",
+					Description: "UUID of the professional (e.g. '3dfde159-4c9a-484e-9194-cf4f1e3ffa4e'). REQUIRED. MUST be valid UUID format, never use names or text like 'Profissional 1'.",
 				},
 				"start_time": {
 					Type:        genai.TypeString,
-					Description: "Data e hora de início no formato ISO 8601 (YYYY-MM-DDTHH:MM:SS)",
+					Description: "Start date and time in ISO 8601 format (YYYY-MM-DDTHH:MM:SS or YYYY-MM-DDTHH:MM:SS-03:00). REQUIRED. Use the EXACT timestamp from get_available_slots result.",
 				},
 				"duration_minutes": {
 					Type:        genai.TypeInteger,
-					Description: "Duração da consulta em minutos",
+					Description: "Consultation duration in minutes. REQUIRED. Use the value from the slot or 60 as default.",
 				},
 				"notes": {
 					Type:        genai.TypeString,
-					Description: "Observações adicionais (opcional)",
+					Description: "Additional notes or observations. OMIT THIS PARAMETER if patient did not provide any specific notes. Only include if patient mentioned specific requests or observations.",
 				},
 			},
 		},
@@ -154,7 +249,7 @@ func (r *Registry) registerAppointmentManagementTools() {
 			Properties: map[string]*genai.Schema{
 				"appointment_id": {
 					Type:        genai.TypeString,
-					Description: "UUID do agendamento (opcional se houver apenas um pendente)",
+					Description: "UUID of the appointment (e.g. '7b8e3c2a-5f1d-4e9a-b3c4-1a2b3c4d5e6f'). OMIT THIS PARAMETER if there is only one pending appointment - system will auto-detect. MUST be valid UUID format.",
 				},
 			},
 		},
@@ -169,11 +264,11 @@ func (r *Registry) registerAppointmentManagementTools() {
 			Properties: map[string]*genai.Schema{
 				"appointment_id": {
 					Type:        genai.TypeString,
-					Description: "UUID do agendamento (opcional se houver apenas um futuro)",
+					Description: "UUID of the appointment (e.g. '7b8e3c2a-5f1d-4e9a-b3c4-1a2b3c4d5e6f'). OMIT THIS PARAMETER if there is only one future appointment - system will auto-detect. MUST be valid UUID format.",
 				},
 				"reason": {
 					Type:        genai.TypeString,
-					Description: "Motivo do cancelamento (opcional)",
+					Description: "Cancellation reason. OMIT THIS PARAMETER if no specific reason was provided by the patient. Only include if patient explicitly states a reason.",
 				},
 			},
 		},
@@ -189,15 +284,15 @@ func (r *Registry) registerAppointmentManagementTools() {
 			Properties: map[string]*genai.Schema{
 				"appointment_id": {
 					Type:        genai.TypeString,
-					Description: "UUID do agendamento a remarcar",
+					Description: "UUID of the appointment to reschedule (e.g. '7b8e3c2a-5f1d-4e9a-b3c4-1a2b3c4d5e6f'). REQUIRED. MUST be valid UUID format.",
 				},
 				"new_start_time": {
 					Type:        genai.TypeString,
-					Description: "Nova data e hora no formato ISO 8601 (YYYY-MM-DDTHH:MM:SS)",
+					Description: "New date and time in ISO 8601 format (YYYY-MM-DDTHH:MM:SS or YYYY-MM-DDTHH:MM:SS-03:00). REQUIRED.",
 				},
 				"new_professional_id": {
 					Type:        genai.TypeString,
-					Description: "Novo profissional (opcional, mantém o mesmo se não fornecido)",
+					Description: "UUID of new professional (e.g. '3dfde159-4c9a-484e-9194-cf4f1e3ffa4e'). OMIT THIS PARAMETER to keep the same professional. Only provide if patient wants to change professional. MUST be valid UUID format.",
 				},
 			},
 		},
@@ -212,11 +307,11 @@ func (r *Registry) registerAppointmentManagementTools() {
 			Properties: map[string]*genai.Schema{
 				"status": {
 					Type:        genai.TypeString,
-					Description: "Filtrar por status: pending, confirmed, completed, cancelled (opcional)",
+					Description: "Filter by status: pending, confirmed, completed, cancelled. OMIT THIS PARAMETER to get all appointments regardless of status. Only provide if filtering for specific status is needed.",
 				},
 				"limit": {
 					Type:        genai.TypeInteger,
-					Description: "Quantidade máxima de resultados (opcional, padrão: 10)",
+					Description: "Maximum number of results. OMIT THIS PARAMETER to use default of 10. Only provide if a different limit is needed.",
 				},
 			},
 		},
@@ -232,19 +327,19 @@ func (r *Registry) registerAppointmentManagementTools() {
 			Properties: map[string]*genai.Schema{
 				"period": {
 					Type:        genai.TypeString,
-					Description: "Período para busca. Pode ser: 'last_week', 'last_month', 'last_3_months', 'last_6_months', 'last_year', 'year_2024', 'year_2023', etc. ou uma data específica no formato YYYY-MM-DD",
+					Description: "Search period. REQUIRED. Can be: 'last_week', 'last_month', 'last_3_months', 'last_6_months', 'last_year', 'year_2024', 'year_2023', etc. or a specific date in YYYY-MM-DD format.",
 				},
 				"professional_id": {
 					Type:        genai.TypeString,
-					Description: "Filtrar por profissional específico (UUID, opcional)",
+					Description: "UUID of specific professional to filter (e.g. '3dfde159-4c9a-484e-9194-cf4f1e3ffa4e'). OMIT THIS PARAMETER to search across all professionals. MUST be valid UUID format.",
 				},
 				"status": {
 					Type:        genai.TypeString,
-					Description: "Filtrar por status: confirmed, completed, cancelled, no_show (opcional)",
+					Description: "Filter by status: confirmed, completed, cancelled, no_show. OMIT THIS PARAMETER to search all statuses. Only provide if filtering for specific status is needed.",
 				},
 				"limit": {
 					Type:        genai.TypeInteger,
-					Description: "Quantidade máxima de resultados (opcional, padrão: 20)",
+					Description: "Maximum number of results. OMIT THIS PARAMETER to use default of 20. Only provide if a different limit is needed.",
 				},
 			},
 		},
@@ -273,7 +368,7 @@ func (r *Registry) registerInformationTools() {
 			Properties: map[string]*genai.Schema{
 				"professional_id": {
 					Type:        genai.TypeString,
-					Description: "UUID do profissional",
+					Description: "UUID of the professional (e.g. '3dfde159-4c9a-484e-9194-cf4f1e3ffa4e'). REQUIRED. MUST be valid UUID format, never use names.",
 				},
 			},
 		},

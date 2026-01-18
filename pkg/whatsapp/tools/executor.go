@@ -209,7 +209,7 @@ func (e *Executor) getAvailableSlots(execCtx *ExecutionContext, params map[strin
 
 	// Parse optional date (default to today)
 	date := time.Now()
-	if dateStr, ok := params["date"].(string); ok && dateStr != "" {
+	if dateStr, ok := params["date"].(string); ok && dateStr != "" && dateStr != "null" && dateStr != "undefined" {
 		parsedDate, err := time.Parse("2006-01-02", dateStr)
 		if err != nil {
 			return nil, fmt.Errorf("invalid date format, use YYYY-MM-DD: %w", err)
@@ -234,17 +234,31 @@ func (e *Executor) getAvailableSlots(execCtx *ExecutionContext, params map[strin
 			return nil, fmt.Errorf("invalid professional_id: %w", err)
 		}
 
-		slots, err := execCtx.SlotFinder.GetAvailableSlots(execCtx.Context, execCtx.ClinicID, profID, date, int(durationMinutes))
-		if err != nil {
-			return nil, fmt.Errorf("failed to get slots: %w", err)
+		// Search across multiple days to find available slots
+		// This ensures we always return slots even if today has none (e.g., weekends)
+		var allSlots []*AvailableSlot
+		for day := 0; day < daysAhead; day++ {
+			searchDate := date.AddDate(0, 0, day)
+
+			daySlots, err := execCtx.SlotFinder.GetAvailableSlots(execCtx.Context, execCtx.ClinicID, profID, searchDate, int(durationMinutes))
+			if err != nil {
+				return nil, fmt.Errorf("failed to get slots for day %d: %w", day, err)
+			}
+
+			allSlots = append(allSlots, daySlots...)
+
+			// Stop searching if we have enough slots
+			if len(allSlots) >= 5 {
+				break
+			}
 		}
 
 		// Limit to 5 slots
-		if len(slots) > 5 {
-			slots = slots[:5]
+		if len(allSlots) > 5 {
+			allSlots = allSlots[:5]
 		}
 
-		return slots, nil
+		return allSlots, nil
 	}
 
 	// Otherwise, search across all professionals
