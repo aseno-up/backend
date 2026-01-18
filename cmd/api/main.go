@@ -377,6 +377,7 @@ func main() {
 				log.Printf("Warning: Failed to initialize AI Agent: %v", err)
 			} else if aiAgentService != nil {
 				whatsappService.SetAIAgentService(aiAgentService)
+				whatsappService.SetClinicRepo(clinicRepo)
 				log.Println("AI Agent service connected to WhatsApp")
 			}
 		} else if redis == nil {
@@ -476,7 +477,7 @@ func main() {
 			go reminderWorker.Start()
 
 			// Initialize and start Message Sender Worker
-			messageSenderWorker = worker.NewMessageSenderWorker(workerCfg, messageQueue, whatsappService, rateLimiter)
+			messageSenderWorker = worker.NewMessageSenderWorker(workerCfg, messageQueue, whatsappService, rateLimiter, clinicRepo)
 			go messageSenderWorker.Start()
 
 			// Initialize and start Timeout Worker (marks no_response when patient doesn't confirm)
@@ -1387,6 +1388,8 @@ func initializeAIAgent(
 		toolExecutor,
 		execContext,
 		featureFlags,
+		clinicRepo,
+		workerCfg.MinDelayBetweenMessagesSeconds,
 	)
 
 	log.Printf("AI Agent initialized: provider=%s model=%s", workerCfg.AIAgentProvider, workerCfg.AIAgentModel)

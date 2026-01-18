@@ -1,6 +1,8 @@
 package model
 
 import (
+	"fmt"
+	"regexp"
 	"time"
 
 	"github.com/google/uuid"
@@ -63,6 +65,24 @@ type Clinic struct {
 	DeletedAt          *time.Time         `json:"deleted_at,omitempty" gorm:"index"`
 }
 
+// DaySchedule define o horário de um dia específico
+type DaySchedule struct {
+	Enabled   bool   `json:"enabled"`
+	StartTime string `json:"start_time"` // Formato: "08:00"
+	EndTime   string `json:"end_time"`   // Formato: "18:00"
+}
+
+// BusinessHoursConfig define o horário de atendimento da IA
+type BusinessHoursConfig struct {
+	Monday    *DaySchedule `json:"monday,omitempty"`
+	Tuesday   *DaySchedule `json:"tuesday,omitempty"`
+	Wednesday *DaySchedule `json:"wednesday,omitempty"`
+	Thursday  *DaySchedule `json:"thursday,omitempty"`
+	Friday    *DaySchedule `json:"friday,omitempty"`
+	Saturday  *DaySchedule `json:"saturday,omitempty"`
+	Sunday    *DaySchedule `json:"sunday,omitempty"`
+}
+
 // ClinicSettings contains clinic-specific settings
 type ClinicSettings struct {
 	Timezone                  string `json:"timezone"`
@@ -73,6 +93,11 @@ type ClinicSettings struct {
 	// Notification settings
 	WhatsAppRemindersEnabled bool `json:"whatsapp_reminders_enabled"`
 	EmailRemindersEnabled    bool `json:"email_reminders_enabled"`
+
+	// AI/WhatsApp settings
+	AIMinDelayBetweenMessages *int                 `json:"ai_min_delay_between_messages,omitempty"`
+	AIMinDelayBetweenPatients *int                 `json:"ai_min_delay_between_patients,omitempty"`
+	AIBusinessHours           *BusinessHoursConfig `json:"ai_business_hours,omitempty"`
 }
 
 // TableName returns the table name for GORM
@@ -159,6 +184,11 @@ type UpdateClinicSettingsRequest struct {
 	RequireConfirmation       *bool  `json:"require_confirmation,omitempty"`
 	WhatsAppRemindersEnabled  *bool  `json:"whatsapp_reminders_enabled,omitempty"`
 	EmailRemindersEnabled     *bool  `json:"email_reminders_enabled,omitempty"`
+
+	// AI/WhatsApp settings
+	AIMinDelayBetweenMessages *int                 `json:"ai_min_delay_between_messages,omitempty"`
+	AIMinDelayBetweenPatients *int                 `json:"ai_min_delay_between_patients,omitempty"`
+	AIBusinessHours           *BusinessHoursConfig `json:"ai_business_hours,omitempty"`
 }
 
 // UpdateClinicRequest represents the request to update a clinic
@@ -172,4 +202,98 @@ type UpdateClinicRequest struct {
 	LogoURL      string                       `json:"logo_url"`
 	PrimaryColor string                       `json:"primary_color"`
 	Settings     *UpdateClinicSettingsRequest `json:"settings"`
+}
+
+// Validate valida a configuração de horário
+func (b *BusinessHoursConfig) Validate() error {
+	if b == nil {
+		return nil
+	}
+
+	days := []*DaySchedule{b.Monday, b.Tuesday, b.Wednesday, b.Thursday, b.Friday, b.Saturday, b.Sunday}
+	dayNames := []string{"Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"}
+	timeRegex := regexp.MustCompile(`^([01]\d|2[0-3]):([0-5]\d)$`)
+
+	for i, day := range days {
+		if day == nil || !day.Enabled {
+			continue
+		}
+
+		if !timeRegex.MatchString(day.StartTime) {
+			return fmt.Errorf("%s start_time has invalid format (expected HH:MM)", dayNames[i])
+		}
+		if !timeRegex.MatchString(day.EndTime) {
+			return fmt.Errorf("%s end_time has invalid format (expected HH:MM)", dayNames[i])
+		}
+		if day.StartTime >= day.EndTime {
+			return fmt.Errorf("%s start_time must be before end_time", dayNames[i])
+		}
+	}
+
+	return nil
+}
+
+// IsWithinBusinessHours verifica se está no horário de atendimento
+func (c *Clinic) IsWithinBusinessHours(now time.Time) bool {
+	// Obter timezone da clínica
+	loc := time.UTC
+	if c.Settings.Timezone != "" {
+		if tz, err := time.LoadLocation(c.Settings.Timezone); err == nil {
+			loc = tz
+		}
+	}
+
+	localNow := now.In(loc)
+	weekday := localNow.Weekday()
+	currentTime := localNow.Format("15:04")
+
+	// Se AIBusinessHours não está configurado, usar HORÁRIO PADRÃO
+	if c.Settings.AIBusinessHours == nil {
+		// Padrão: Segunda a Sábado, 08:00 às 18:00
+		if weekday == time.Sunday {
+			return false
+		}
+		return currentTime >= "08:00" && currentTime <= "18:00"
+	}
+
+	// Usar configuração customizada
+	var schedule *DaySchedule
+	switch weekday {
+	case time.Monday:
+		schedule = c.Settings.AIBusinessHours.Monday
+	case time.Tuesday:
+		schedule = c.Settings.AIBusinessHours.Tuesday
+	case time.Wednesday:
+		schedule = c.Settings.AIBusinessHours.Wednesday
+	case time.Thursday:
+		schedule = c.Settings.AIBusinessHours.Thursday
+	case time.Friday:
+		schedule = c.Settings.AIBusinessHours.Friday
+	case time.Saturday:
+		schedule = c.Settings.AIBusinessHours.Saturday
+	case time.Sunday:
+		schedule = c.Settings.AIBusinessHours.Sunday
+	}
+
+	if schedule == nil || !schedule.Enabled {
+		return false
+	}
+
+	return currentTime >= schedule.StartTime && currentTime <= schedule.EndTime
+}
+
+// GetMinDelayBetweenMessages retorna o delay entre mensagens configurado (clínica > env)
+func (c *Clinic) GetMinDelayBetweenMessages(defaultDelay int) int {
+	if c.Settings.AIMinDelayBetweenMessages != nil && *c.Settings.AIMinDelayBetweenMessages > 0 {
+		return *c.Settings.AIMinDelayBetweenMessages
+	}
+	return defaultDelay
+}
+
+// GetMinDelayBetweenPatients retorna o delay entre pacientes configurado (clínica > env)
+func (c *Clinic) GetMinDelayBetweenPatients(defaultDelay int) int {
+	if c.Settings.AIMinDelayBetweenPatients != nil && *c.Settings.AIMinDelayBetweenPatients > 0 {
+		return *c.Settings.AIMinDelayBetweenPatients
+	}
+	return defaultDelay
 }

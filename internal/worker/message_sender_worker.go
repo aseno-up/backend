@@ -7,9 +7,12 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/aseno/backend/internal/config"
 	"github.com/aseno/backend/internal/queue"
 	"github.com/aseno/backend/internal/redis"
+	clinic_repository "github.com/aseno/backend/pkg/clinic/repository"
 	whatsapp_service "github.com/aseno/backend/pkg/whatsapp/service"
 )
 
@@ -19,6 +22,7 @@ type MessageSenderWorker struct {
 	queue           queue.Queue
 	whatsappService whatsapp_service.WhatsAppService
 	rateLimiter     *redis.RateLimiter
+	clinicRepo      clinic_repository.ClinicRepository
 	stopCh          chan struct{}
 
 	// Stats
@@ -33,12 +37,14 @@ func NewMessageSenderWorker(
 	q queue.Queue,
 	whatsappService whatsapp_service.WhatsAppService,
 	rateLimiter *redis.RateLimiter,
+	clinicRepo clinic_repository.ClinicRepository,
 ) *MessageSenderWorker {
 	return &MessageSenderWorker{
 		config:          cfg,
 		queue:           q,
 		whatsappService: whatsappService,
 		rateLimiter:     rateLimiter,
+		clinicRepo:      clinicRepo,
 		stopCh:          make(chan struct{}),
 	}
 }
@@ -75,9 +81,22 @@ func (w *MessageSenderWorker) processMessage(job *queue.MessageJob) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
+	// Get clinic-specific delay settings (clinic overrides env default)
+	minDelaySeconds := w.config.MinDelayBetweenPatientsSeconds
+	if w.clinicRepo != nil {
+		clinicID, err := uuid.Parse(job.ClinicID)
+		if err != nil {
+			log.Printf("[MessageSender] Warning: invalid clinic ID format: %v", err)
+		} else if clinic, err := w.clinicRepo.GetByID(ctx, clinicID); err == nil {
+			minDelaySeconds = clinic.GetMinDelayBetweenPatients(w.config.MinDelayBetweenPatientsSeconds)
+		} else {
+			log.Printf("[MessageSender] Warning: failed to fetch clinic settings, using default delay: %v", err)
+		}
+	}
+
 	// Step 1: Check rate limit between different patients (if Redis available)
 	if w.rateLimiter != nil && w.rateLimiter.IsAvailable() {
-		minDelay := time.Duration(w.config.MinDelayBetweenPatientsSeconds) * time.Second
+		minDelay := time.Duration(minDelaySeconds) * time.Second
 		delayNeeded := w.rateLimiter.CheckRateLimit(ctx, job.ClinicID, job.Phone, minDelay)
 
 		if delayNeeded > 0 {
@@ -125,7 +144,7 @@ func (w *MessageSenderWorker) processMessage(job *queue.MessageJob) error {
 
 	// Step 4: Record message sent for rate limiting (TTL = 2x min delay)
 	if w.rateLimiter != nil && w.rateLimiter.IsAvailable() {
-		ttl := time.Duration(w.config.MinDelayBetweenPatientsSeconds*2) * time.Second
+		ttl := time.Duration(minDelaySeconds*2) * time.Second
 		if err := w.rateLimiter.RecordMessageSent(ctx, job.ClinicID, job.Phone, ttl); err != nil {
 			log.Printf("[MessageSender] Warning: Failed to record rate limit: %v", err)
 			// Don't fail the job due to Redis error

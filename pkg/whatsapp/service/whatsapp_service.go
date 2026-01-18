@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	aptModel "github.com/aseno/backend/pkg/appointment/model"
+	clinic_model "github.com/aseno/backend/pkg/clinic/model"
 	"github.com/aseno/backend/internal/queue"
 	"github.com/aseno/backend/pkg/whatsapp/agent"
 	"github.com/aseno/backend/pkg/whatsapp/classifier"
@@ -77,6 +78,11 @@ type SchedulingIntentRepository interface {
 // MessageQueue defines the interface for enqueueing WhatsApp messages
 type MessageQueue interface {
 	PublishWithDelay(ctx context.Context, job *queue.MessageJob, delay time.Duration) error
+}
+
+// ClinicRepository defines the interface for clinic operations
+type ClinicRepository interface {
+	GetByID(ctx context.Context, id uuid.UUID) (*clinic_model.Clinic, error)
 }
 
 // WhatsAppService defines the interface for WhatsApp business logic
@@ -152,6 +158,9 @@ type WhatsAppService interface {
 
 	// SetAIAgentService wires up the AI agent for dynamic conversations
 	SetAIAgentService(agentService agent.Service)
+
+	// SetClinicRepo sets the clinic repository for fetching clinic settings
+	SetClinicRepo(repo ClinicRepository)
 }
 
 // whatsAppService implements WhatsAppService
@@ -177,6 +186,8 @@ type whatsAppService struct {
 	messageQueue             MessageQueue
 	// AI Agent service for dynamic conversations
 	aiAgentService           agent.Service
+	// Clinic repository for fetching clinic settings
+	clinicRepo               ClinicRepository
 }
 
 // AppointmentStatusUpdater interface for updating appointment status
@@ -393,6 +404,11 @@ func (s *whatsAppService) SetMessageQueue(queue MessageQueue) {
 // SetAIAgentService sets the AI agent service for dynamic conversations
 func (s *whatsAppService) SetAIAgentService(agentService agent.Service) {
 	s.aiAgentService = agentService
+}
+
+// SetClinicRepo sets the clinic repository for fetching clinic settings
+func (s *whatsAppService) SetClinicRepo(repo ClinicRepository) {
+	s.clinicRepo = repo
 }
 
 // CreateInstance creates a new WhatsApp instance for a clinic
@@ -893,6 +909,18 @@ func (s *whatsAppService) handleWithAIAgent(ctx context.Context, clinicID uuid.U
 	if s.aiAgentService == nil {
 		log.Printf("[AI Agent] Service is nil, falling back to traditional flow")
 		return nil
+	}
+
+	// Check business hours if clinic repo is available
+	if s.clinicRepo != nil {
+		clinic, err := s.clinicRepo.GetByID(ctx, clinicID)
+		if err != nil {
+			log.Printf("[WhatsApp] Warning: failed to fetch clinic for business hours check: %v", err)
+		} else if !clinic.IsWithinBusinessHours(time.Now()) {
+			log.Printf("[WhatsApp] Message outside business hours for clinic %s - ignoring message", clinicID)
+			// Don't send any message, just ignore
+			return nil
+		}
 	}
 
 	// Classify message intent

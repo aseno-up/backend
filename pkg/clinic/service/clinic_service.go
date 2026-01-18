@@ -82,6 +82,30 @@ func (s *clinicService) Update(ctx context.Context, id uuid.UUID, req *model.Upd
 		clinic.PrimaryColor = req.PrimaryColor
 	}
 	if req.Settings != nil {
+		// Validate AI/WhatsApp settings before updating
+		if req.Settings.AIMinDelayBetweenMessages != nil {
+			delay := *req.Settings.AIMinDelayBetweenMessages
+			if delay < 1 || delay > 30 {
+				return nil, errors.ErrValidationInstance.WithMessage(
+					"ai_min_delay_between_messages must be between 1 and 30")
+			}
+		}
+
+		if req.Settings.AIMinDelayBetweenPatients != nil {
+			delay := *req.Settings.AIMinDelayBetweenPatients
+			if delay < 1 || delay > 300 {
+				return nil, errors.ErrValidationInstance.WithMessage(
+					"ai_min_delay_between_patients must be between 1 and 300")
+			}
+		}
+
+		if req.Settings.AIBusinessHours != nil {
+			if err := req.Settings.AIBusinessHours.Validate(); err != nil {
+				return nil, errors.ErrValidationInstance.WithMessage(
+					fmt.Sprintf("Invalid business hours: %v", err))
+			}
+		}
+
 		// Merge settings - only update fields that are provided
 		if req.Settings.Timezone != "" {
 			clinic.Settings.Timezone = req.Settings.Timezone
@@ -104,6 +128,17 @@ func (s *clinicService) Update(ctx context.Context, id uuid.UUID, req *model.Upd
 		}
 		if req.Settings.EmailRemindersEnabled != nil {
 			clinic.Settings.EmailRemindersEnabled = *req.Settings.EmailRemindersEnabled
+		}
+
+		// AI/WhatsApp settings
+		if req.Settings.AIMinDelayBetweenMessages != nil {
+			clinic.Settings.AIMinDelayBetweenMessages = req.Settings.AIMinDelayBetweenMessages
+		}
+		if req.Settings.AIMinDelayBetweenPatients != nil {
+			clinic.Settings.AIMinDelayBetweenPatients = req.Settings.AIMinDelayBetweenPatients
+		}
+		if req.Settings.AIBusinessHours != nil {
+			clinic.Settings.AIBusinessHours = req.Settings.AIBusinessHours
 		}
 	}
 

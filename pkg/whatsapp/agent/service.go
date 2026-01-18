@@ -9,6 +9,8 @@ import (
 
 	"github.com/google/uuid"
 
+	clinic_model "github.com/aseno/backend/pkg/clinic/model"
+	clinic_repository "github.com/aseno/backend/pkg/clinic/repository"
 	"github.com/aseno/backend/pkg/whatsapp/conversation"
 	"github.com/aseno/backend/pkg/whatsapp/model"
 	"github.com/aseno/backend/pkg/whatsapp/tools"
@@ -46,12 +48,14 @@ type MessageResponse struct {
 
 // aiAgentService implements Service
 type aiAgentService struct {
-	agent              Agent
-	conversationMgr    conversation.Manager
-	toolRegistry       *tools.Registry
-	toolExecutor       *tools.Executor
-	executionContext   *tools.ExecutionContext
-	featureFlags       *FeatureFlags
+	agent                        Agent
+	conversationMgr              conversation.Manager
+	toolRegistry                 *tools.Registry
+	toolExecutor                 *tools.Executor
+	executionContext             *tools.ExecutionContext
+	featureFlags                 *FeatureFlags
+	clinicRepo                   clinic_repository.ClinicRepository
+	defaultMinDelayBetweenMessages int
 }
 
 // FeatureFlags holds feature enablement flags
@@ -70,14 +74,18 @@ func NewService(
 	toolExecutor *tools.Executor,
 	executionContext *tools.ExecutionContext,
 	featureFlags *FeatureFlags,
+	clinicRepo clinic_repository.ClinicRepository,
+	defaultMinDelayBetweenMessages int,
 ) Service {
 	return &aiAgentService{
-		agent:            agent,
-		conversationMgr:  conversationMgr,
-		toolRegistry:     toolRegistry,
-		toolExecutor:     toolExecutor,
-		executionContext: executionContext,
-		featureFlags:     featureFlags,
+		agent:                        agent,
+		conversationMgr:              conversationMgr,
+		toolRegistry:                 toolRegistry,
+		toolExecutor:                 toolExecutor,
+		executionContext:             executionContext,
+		featureFlags:                 featureFlags,
+		clinicRepo:                   clinicRepo,
+		defaultMinDelayBetweenMessages: defaultMinDelayBetweenMessages,
 	}
 }
 
@@ -104,6 +112,13 @@ func (s *aiAgentService) ShouldUseAIAgent(intent model.MessageIntent) bool {
 // ProcessMessage processes an incoming message using the AI agent
 func (s *aiAgentService) ProcessMessage(ctx context.Context, req *MessageRequest) (*MessageResponse, error) {
 	start := time.Now()
+
+	// Get clinic configuration for AI settings
+	clinic, err := s.clinicRepo.GetByID(ctx, req.ClinicID)
+	if err != nil {
+		log.Printf("[AI Agent Service] Warning: failed to fetch clinic settings, using defaults: %v", err)
+		clinic = nil // Will use default settings
+	}
 
 	// Get or create conversation context
 	conv, err := s.conversationMgr.GetOrCreate(ctx, req.ClinicID, req.PatientPhone, req.PatientName)
@@ -178,7 +193,7 @@ func (s *aiAgentService) ProcessMessage(ctx context.Context, req *MessageRequest
 	}
 
 	// Segment the response for natural message delivery
-	segments := s.segmentResponse(agentResp.Content)
+	segments := s.segmentResponse(agentResp.Content, clinic)
 
 	// Build message response
 	msgResp := &MessageResponse{
@@ -217,7 +232,7 @@ func (s *aiAgentService) mapIntentToState(intent model.MessageIntent) conversati
 
 // segmentResponse segments a long AI response into natural message chunks
 // This creates a more human-like conversation flow with appropriate delays
-func (s *aiAgentService) segmentResponse(response string) []*model.MessageSegment {
+func (s *aiAgentService) segmentResponse(response string, clinic *clinic_model.Clinic) []*model.MessageSegment {
 	segments := []*model.MessageSegment{}
 
 	// Split response into lines
@@ -306,7 +321,7 @@ func (s *aiAgentService) segmentResponse(response string) []*model.MessageSegmen
 			segments = append(segments, &model.MessageSegment{
 				Content:    contentText,
 				Type:       model.SegmentTypeContent,
-				DelayAfter: s.calculateDelayByLength(len(contentText)),
+				DelayAfter: s.calculateDelayByLength(len(contentText), clinic),
 			})
 		}
 	}
@@ -381,9 +396,15 @@ func (s *aiAgentService) looksLikeQuestion(line string) bool {
 }
 
 // calculateDelayByLength calculates delay based on message length
-// Formula: 3s base + 1s per 100 characters, Max: 10s
-func (s *aiAgentService) calculateDelayByLength(messageLength int) time.Duration {
-	const baseDelay = 3 * time.Second
+// Formula: baseDelay (from clinic or env) + 1s per 100 characters, Max: 10s
+func (s *aiAgentService) calculateDelayByLength(messageLength int, clinic *clinic_model.Clinic) time.Duration {
+	// Use delay from clinic settings (overrides env default)
+	baseDelaySeconds := s.defaultMinDelayBetweenMessages
+	if clinic != nil {
+		baseDelaySeconds = clinic.GetMinDelayBetweenMessages(s.defaultMinDelayBetweenMessages)
+	}
+	baseDelay := time.Duration(baseDelaySeconds) * time.Second
+
 	const maxDelay = 10 * time.Second
 	const charsPerSecond = 100
 
