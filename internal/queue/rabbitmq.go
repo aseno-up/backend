@@ -247,6 +247,9 @@ func (r *rabbitMQ) PublishWithDelay(ctx context.Context, job *MessageJob, delay 
 	// Per-message TTL in milliseconds
 	ttlMs := fmt.Sprintf("%d", delay.Milliseconds())
 
+	log.Printf("[RabbitMQ] Publishing with delay: job_id=%s, delay=%v, ttl_ms=%s, queue=%s",
+		job.ID, delay, ttlMs, r.config.DelayQueueName)
+
 	return r.channel.PublishWithContext(
 		ctx,
 		"",                       // exchange

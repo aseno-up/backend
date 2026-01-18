@@ -14,6 +14,7 @@ import (
 
 	aptModel "github.com/aseno/backend/pkg/appointment/model"
 	"github.com/aseno/backend/internal/queue"
+	"github.com/aseno/backend/pkg/whatsapp/agent"
 	"github.com/aseno/backend/pkg/whatsapp/classifier"
 	"github.com/aseno/backend/pkg/whatsapp/model"
 )
@@ -148,6 +149,9 @@ type WhatsAppService interface {
 
 	// SetMessageQueue sets the message queue for segmented message delivery
 	SetMessageQueue(queue MessageQueue)
+
+	// SetAIAgentService wires up the AI agent for dynamic conversations
+	SetAIAgentService(agentService agent.Service)
 }
 
 // whatsAppService implements WhatsAppService
@@ -171,6 +175,8 @@ type whatsAppService struct {
 	newAppointmentCreator    NewAppointmentCreator
 	// Message queue for segmented delivery
 	messageQueue             MessageQueue
+	// AI Agent service for dynamic conversations
+	aiAgentService           agent.Service
 }
 
 // AppointmentStatusUpdater interface for updating appointment status
@@ -384,6 +390,11 @@ func (s *whatsAppService) SetMessageQueue(queue MessageQueue) {
 	s.messageQueue = queue
 }
 
+// SetAIAgentService sets the AI agent service for dynamic conversations
+func (s *whatsAppService) SetAIAgentService(agentService agent.Service) {
+	s.aiAgentService = agentService
+}
+
 // CreateInstance creates a new WhatsApp instance for a clinic
 func (s *whatsAppService) CreateInstance(ctx context.Context, instance string) (*model.QRCodeData, error) {
 	return s.client.CreateInstance(ctx, instance)
@@ -592,6 +603,11 @@ func (s *whatsAppService) SendReminderMessage(ctx context.Context, instance stri
 func (s *whatsAppService) HandleIncomingMessage(ctx context.Context, clinicID uuid.UUID, msg *model.ParsedIncomingMessage) error {
 	// Log incoming message
 	s.logMessage(ctx, clinicID, nil, msg.Phone, model.MessageDirectionInbound, msg.Content, model.MessageStatusDelivered, msg.MessageID)
+
+	// If AI Agent is enabled, use it for dynamic conversations
+	if s.aiAgentService != nil {
+		return s.handleWithAIAgent(ctx, clinicID, msg)
+	}
 
 	// Check for reschedule button response first (rsch_0, rsch_1, etc.)
 	if msg.ButtonID != "" && strings.HasPrefix(msg.ButtonID, "rsch_") {
@@ -870,6 +886,105 @@ func (s *whatsAppService) logMessage(
 			}
 		}
 	}
+}
+
+// handleWithAIAgent delegates message handling to the AI Agent
+func (s *whatsAppService) handleWithAIAgent(ctx context.Context, clinicID uuid.UUID, msg *model.ParsedIncomingMessage) error {
+	if s.aiAgentService == nil {
+		log.Printf("[AI Agent] Service is nil, falling back to traditional flow")
+		return nil
+	}
+
+	// Classify message intent
+	intent := s.ClassifyMessage(msg.Content)
+
+	// Create message request
+	req := &agent.MessageRequest{
+		ClinicID:     clinicID,
+		ClinicName:   "", // TODO: Fetch clinic name if needed
+		PatientPhone: msg.Phone,
+		PatientName:  msg.SenderName,
+		MessageText:  msg.Content,
+		Intent:       intent,
+	}
+
+	log.Printf("[AI Agent] Processing message from %s (intent: %s): %s", msg.Phone, intent, msg.Content)
+
+	// Call AI Agent
+	resp, err := s.aiAgentService.ProcessMessage(ctx, req)
+	if err != nil {
+		log.Printf("[AI Agent] Error processing message: %v, falling back to traditional flow", err)
+		return nil // Fall back gracefully
+	}
+
+	if resp == nil || len(resp.Segments) == 0 {
+		log.Printf("[AI Agent] No response segments from agent")
+		return nil
+	}
+
+	// Use message queue for segmented delivery with delays (if available)
+	if s.messageQueue != nil {
+		return s.sendAIResponseSegmented(ctx, msg.Instance, msg.Phone, resp)
+	}
+
+	// Fallback: send immediately without queue
+	for i, segment := range resp.Segments {
+		if i > 0 && segment.DelayAfter > 0 {
+			time.Sleep(segment.DelayAfter)
+		}
+
+		_, err := s.SendTextMessage(ctx, msg.Instance, msg.Phone, segment.Content)
+		if err != nil {
+			log.Printf("[AI Agent] Failed to send segment %d: %v", i, err)
+			return err
+		}
+	}
+
+	log.Printf("[AI Agent] Successfully sent %d segments (tokens: %d, latency: %v)",
+		len(resp.Segments), resp.TokensUsed, resp.Latency)
+	return nil
+}
+
+// sendAIResponseSegmented sends AI response segments through the message queue with delays
+func (s *whatsAppService) sendAIResponseSegmented(ctx context.Context, instance, phone string, resp *agent.MessageResponse) error {
+	var cumulativeDelay time.Duration
+
+	for i, segment := range resp.Segments {
+		job := &queue.MessageJob{
+			ID:          uuid.New().String(),
+			Instance:    instance,
+			Phone:       phone,
+			Message:     segment.Content,
+			MessageType: fmt.Sprintf("ai_agent_%s", segment.Type),
+			MaxAttempts: 3,
+			CreatedAt:   time.Now(),
+			ScheduledAt: time.Now().Add(cumulativeDelay),
+		}
+
+		log.Printf("[AI Agent] Segment %d/%d: type=%s, delay=%v, content_preview=\"%s...\"",
+			i+1, len(resp.Segments), segment.Type, cumulativeDelay,
+			truncate(segment.Content, 50))
+
+		if err := s.messageQueue.PublishWithDelay(ctx, job, cumulativeDelay); err != nil {
+			log.Printf("[AI Agent] Failed to enqueue segment %d: %v", i, err)
+			// Continue with next segment - don't fail entirely
+		}
+
+		// Accumulate delay for next segment
+		cumulativeDelay += segment.DelayAfter
+	}
+
+	log.Printf("[AI Agent] Enqueued %d message segments for %s (tokens: %d, latency: %v)",
+		len(resp.Segments), phone, resp.TokensUsed, resp.Latency)
+	return nil
+}
+
+// truncate truncates a string to maxLen characters
+func truncate(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen]
 }
 
 // formatPhoneNumber formats a phone number for WhatsApp

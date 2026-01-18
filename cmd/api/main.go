@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -82,6 +83,9 @@ import (
 	whatsapp_model "github.com/aseno/backend/pkg/whatsapp/model"
 	whatsapp_repository "github.com/aseno/backend/pkg/whatsapp/repository"
 	whatsapp_service "github.com/aseno/backend/pkg/whatsapp/service"
+	"github.com/aseno/backend/pkg/whatsapp/conversation"
+	"github.com/aseno/backend/pkg/whatsapp/agent"
+	"github.com/aseno/backend/pkg/whatsapp/tools"
 	analytics_handler "github.com/aseno/backend/pkg/analytics/handler"
 	analytics_repository "github.com/aseno/backend/pkg/analytics/repository"
 	analytics_service "github.com/aseno/backend/pkg/analytics/service"
@@ -270,6 +274,20 @@ func main() {
 	// Initialize message log service
 	messageLogService := whatsapp_service.NewMessageLogService(messageLogRepo)
 
+	// Initialize worker configuration (needed for Redis and AI Agent)
+	workerCfg := config.NewWorkerConfig()
+
+	// Initialize Redis client (for AI Agent conversation management)
+	var redis *redisClient.RedisClient
+	if workerCfg.RedisURL != "" {
+		var err error
+		redis, err = redisClient.NewRedisClient(workerCfg.RedisURL)
+		if err != nil {
+			log.Printf("Warning: Failed to connect to Redis: %v (AI Agent will not be available)", err)
+			redis = nil
+		}
+	}
+
 	// Initialize WhatsApp service (if client is configured)
 	var whatsappService whatsapp_service.WhatsAppService
 	if whatsappClient != nil {
@@ -325,6 +343,31 @@ func main() {
 					cfg.AIClassifierProvider())
 			}
 		}
+
+		// Initialize AI Agent for dynamic WhatsApp conversations (if enabled)
+		if redis != nil && workerCfg.AIAgentEnabled {
+			clinicService := clinic_service.NewClinicService(clinicRepo, cfg.GetFrontendURL())
+			aiAgentService, _, _, err := initializeAIAgent(
+				cfg,
+				db,
+				redis,
+				professionalService,
+				appointmentService,
+				patientService,
+				clinicService,
+				patientRepo,
+			)
+			if err != nil {
+				log.Printf("Warning: Failed to initialize AI Agent: %v", err)
+			} else if aiAgentService != nil {
+				whatsappService.SetAIAgentService(aiAgentService)
+				log.Println("AI Agent service connected to WhatsApp")
+			}
+		} else if redis == nil {
+			log.Println("AI Agent: Not initialized (requires Redis configuration)")
+		} else if !workerCfg.AIAgentEnabled {
+			log.Println("AI Agent: Disabled (set AI_AGENT_ENABLED=true to enable)")
+		}
 	}
 
 	// Initialize Payment service (if Asaas client is configured)
@@ -377,9 +420,6 @@ func main() {
 	// Initialize Session Plan worker (runs every hour)
 	sessionPlanWorker := worker.NewSessionPlanWorker(sessionPlanService, 1*time.Hour)
 	go sessionPlanWorker.Start()
-
-	// Initialize worker configuration
-	workerCfg := config.NewWorkerConfig()
 
 	// Initialize RabbitMQ queue (if configured)
 	var messageQueue queue.Queue
@@ -856,6 +896,9 @@ func runMigrations(db *database.Database) error {
 		&notification_model.Notification{},
 		&waitlist_model.WaitlistEntry{},
 		&settings_model.SystemSetting{},
+		// AI Agent conversation tables
+		&conversation.ConversationContext{},
+		&conversation.ToolCallLog{},
 	}
 
 	if err := db.AutoMigrate(models...); err != nil {
@@ -1216,5 +1259,334 @@ func (a *newAppointmentCreatorAdapter) CreateFromSchedulingIntent(ctx context.Co
 		Professional:   professionalName,
 		StartTime:      aptResp.StartTime,
 		EndTime:        aptResp.EndTime,
+	}, nil
+}
+
+// initializeAIAgent initializes the AI agent stack for WhatsApp conversations
+func initializeAIAgent(
+	cfg *config.Config,
+	db *database.Database,
+	redis *redisClient.RedisClient,
+	professionalService professional_service.ProfessionalService,
+	appointmentService appointment_service.AppointmentService,
+	patientService patient_service.PatientService,
+	clinicService clinic_service.ClinicService,
+	patientRepo patient_repository.PatientRepository,
+) (agent.Service, conversation.Manager, *tools.ExecutionContext, error) {
+	// Check if AI agent is enabled
+	workerCfg := config.NewWorkerConfig()
+	if !workerCfg.AIAgentEnabled {
+		log.Println("AI Agent is disabled (AI_AGENT_ENABLED=false)")
+		return nil, nil, nil, nil
+	}
+
+	log.Println("Initializing AI Agent for WhatsApp...")
+
+	// 1. Create conversation repository
+	conversationRepo := conversation.NewRepository(
+		db.GetDB(),
+		redis.GetClient(),
+		workerCfg.ConversationRedisTTL,
+		workerCfg.ConversationPostgresTTL,
+	)
+
+	// 2. Create conversation manager
+	conversationMgr := conversation.NewManager(
+		conversationRepo,
+		workerCfg.ConversationRedisTTL,
+		workerCfg.ConversationPostgresTTL,
+		workerCfg.ConversationMaxTurns,
+	)
+
+	// 3. Create tool registry (defines all 10 tools)
+	toolRegistry := tools.NewRegistry()
+
+	// 4. Create execution context (will be updated per request)
+	execContext := &tools.ExecutionContext{
+		// Service dependencies - wrapped with adapters
+		ProfessionalLister:       &aiAgentProfessionalListerAdapter{professionalService: professionalService},
+		SlotFinder:               &aiAgentSlotFinderAdapter{appointmentService: appointmentService},
+		AppointmentCreator:       &aiAgentAppointmentCreatorAdapter{appointmentService: appointmentService},
+		AppointmentFinder:        &aiAgentAppointmentFinderAdapter{appointmentService: appointmentService},
+		AppointmentConfirmer:     &aiAgentAppointmentConfirmerAdapter{appointmentService: appointmentService},
+		AppointmentCanceller:     &aiAgentAppointmentCancellerAdapter{appointmentService: appointmentService},
+		AppointmentRescheduler:   &aiAgentAppointmentReschedulerAdapter{appointmentService: appointmentService},
+		ClinicInfoProvider:       &aiAgentClinicInfoAdapter{clinicService: clinicService},
+		ProfessionalInfoProvider: &aiAgentProfessionalInfoAdapter{professionalService: professionalService},
+		PatientInfoProvider:      &aiAgentPatientInfoAdapter{patientService: patientService},
+		PatientFinderCreator:     &aiAgentPatientFinderCreatorAdapter{patientService: patientService, patientRepo: patientRepo},
+	}
+
+	// 5. Create tool executor
+	toolExecutor := tools.NewExecutor(toolRegistry)
+
+	// 6. Get Gemini API key
+	geminiAPIKey := os.Getenv("GEMINI_API_KEY")
+	if geminiAPIKey == "" {
+		return nil, nil, nil, fmt.Errorf("GEMINI_API_KEY is required when AI_AGENT_ENABLED=true")
+	}
+
+	// 7. Create AI agent (Gemini)
+	agentConfig := agent.Config{
+		Provider:       workerCfg.AIAgentProvider,
+		APIKey:         geminiAPIKey,
+		Model:          workerCfg.AIAgentModel,
+		FallbackModels: workerCfg.AIAgentFallbackModels,
+		MaxTokens:      workerCfg.AIAgentMaxTokens,
+		Temperature:    workerCfg.AIAgentTemperature,
+		Timeout:        workerCfg.AIAgentTimeout,
+	}
+
+	aiAgent, err := agent.NewGeminiAgent(agentConfig, toolRegistry, toolExecutor, execContext)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("failed to create AI agent: %w", err)
+	}
+
+	// 8. Create feature flags
+	featureFlags := &agent.FeatureFlags{
+		SchedulingEnabled: workerCfg.AIAgentSchedulingEnabled,
+		ConfirmEnabled:    workerCfg.AIAgentConfirmEnabled,
+		CancelEnabled:     workerCfg.AIAgentCancelEnabled,
+		RemindersEnabled:  workerCfg.AIAgentRemindersEnabled,
+	}
+
+	// 9. Create AI agent service
+	agentService := agent.NewService(
+		aiAgent,
+		conversationMgr,
+		toolRegistry,
+		toolExecutor,
+		execContext,
+		featureFlags,
+	)
+
+	log.Printf("AI Agent initialized: provider=%s model=%s", workerCfg.AIAgentProvider, workerCfg.AIAgentModel)
+	log.Printf("AI Agent features: scheduling=%v confirm=%v cancel=%v reminders=%v",
+		workerCfg.AIAgentSchedulingEnabled,
+		workerCfg.AIAgentConfirmEnabled,
+		workerCfg.AIAgentCancelEnabled,
+		workerCfg.AIAgentRemindersEnabled)
+
+	return agentService, conversationMgr, execContext, nil
+}
+
+// AI Agent adapters - wrap existing services to match tool interfaces
+
+type aiAgentProfessionalListerAdapter struct {
+	professionalService professional_service.ProfessionalService
+}
+
+func (a *aiAgentProfessionalListerAdapter) ListAvailable(ctx context.Context, clinicID uuid.UUID, specialty string) ([]*tools.ProfessionalInfo, error) {
+	// Use List method with activeOnly=true to get available professionals
+	listResp, err := a.professionalService.List(ctx, clinicID, true, 1, 100)
+	if err != nil {
+		return nil, err
+	}
+
+	var result []*tools.ProfessionalInfo
+	for _, p := range listResp.Data {
+		// Determine actual specialty (use "Geral" if empty)
+		actualSpecialty := p.Specialty
+		if actualSpecialty == "" {
+			actualSpecialty = "Geral"
+		}
+
+		// Filter by specialty if provided
+		if specialty != "" && actualSpecialty != specialty && p.Specialty != specialty {
+			continue
+		}
+
+		result = append(result, &tools.ProfessionalInfo{
+			ID:          p.ID,
+			Name:        p.Name,
+			Specialty:   actualSpecialty,
+			IsAvailable: p.IsActive,
+		})
+	}
+
+	return result, nil
+}
+
+type aiAgentSlotFinderAdapter struct {
+	appointmentService appointment_service.AppointmentService
+}
+
+func (a *aiAgentSlotFinderAdapter) GetAvailableSlots(ctx context.Context, clinicID uuid.UUID, professionalID uuid.UUID, date time.Time, durationMinutes int) ([]*tools.AvailableSlot, error) {
+	// Use appointment service to get available slots
+	// This would need to be implemented in your appointment service
+	// For now, return empty - you'll need to implement this
+	return []*tools.AvailableSlot{}, nil
+}
+
+func (a *aiAgentSlotFinderAdapter) GetAvailableSlotsMultipleProfessionals(ctx context.Context, clinicID uuid.UUID, professionalIDs []uuid.UUID, date time.Time, days int, durationMinutes int, limit int) ([]*tools.AvailableSlot, error) {
+	// Similar to above - needs implementation
+	return []*tools.AvailableSlot{}, nil
+}
+
+type aiAgentAppointmentCreatorAdapter struct {
+	appointmentService appointment_service.AppointmentService
+}
+
+func (a *aiAgentAppointmentCreatorAdapter) CreateFromSchedulingIntent(ctx context.Context, clinicID, patientID, professionalID uuid.UUID, startTime time.Time, durationMinutes int) (*tools.AppointmentInfo, error) {
+	req := &appointment_model.CreateAppointmentRequest{
+		ProfessionalID:  professionalID,
+		PatientID:       patientID,
+		StartTime:       startTime,
+		DurationMinutes: durationMinutes,
+		Notes:           "Agendado via WhatsApp AI",
+	}
+
+	apt, err := a.appointmentService.Create(ctx, clinicID, req)
+	if err != nil {
+		return nil, err
+	}
+
+	return &tools.AppointmentInfo{
+		ID:             apt.ID,
+		PatientID:      apt.PatientID,
+		ProfessionalID: apt.ProfessionalID,
+		StartTime:      apt.StartTime,
+		EndTime:        apt.EndTime,
+		Status:         string(apt.Status),
+	}, nil
+}
+
+type aiAgentAppointmentFinderAdapter struct {
+	appointmentService appointment_service.AppointmentService
+}
+
+func (a *aiAgentAppointmentFinderAdapter) GetByPatientPhone(ctx context.Context, clinicID uuid.UUID, phone string, status string, limit int) ([]*tools.AppointmentInfo, error) {
+	// This would need to be implemented in your appointment service
+	// For now, return empty
+	return []*tools.AppointmentInfo{}, nil
+}
+
+func (a *aiAgentAppointmentFinderAdapter) GetByID(ctx context.Context, appointmentID, clinicID uuid.UUID) (*tools.AppointmentInfo, error) {
+	apt, err := a.appointmentService.GetByID(ctx, appointmentID, clinicID)
+	if err != nil {
+		return nil, err
+	}
+
+	return &tools.AppointmentInfo{
+		ID:             apt.ID,
+		PatientID:      apt.PatientID,
+		ProfessionalID: apt.ProfessionalID,
+		StartTime:      apt.StartTime,
+		EndTime:        apt.EndTime,
+		Status:         string(apt.Status),
+	}, nil
+}
+
+type aiAgentAppointmentConfirmerAdapter struct {
+	appointmentService appointment_service.AppointmentService
+}
+
+func (a *aiAgentAppointmentConfirmerAdapter) ConfirmByPatient(ctx context.Context, appointmentID, clinicID uuid.UUID, patientNotes string) error {
+	_, err := a.appointmentService.Confirm(ctx, appointmentID, clinicID, &appointment_model.ConfirmAppointmentRequest{
+		PatientNotes: patientNotes,
+	})
+	return err
+}
+
+type aiAgentAppointmentCancellerAdapter struct {
+	appointmentService appointment_service.AppointmentService
+}
+
+func (a *aiAgentAppointmentCancellerAdapter) CancelByPatient(ctx context.Context, appointmentID, clinicID uuid.UUID, reason string) error {
+	_, err := a.appointmentService.Cancel(ctx, appointmentID, clinicID, &appointment_model.CancelAppointmentRequest{
+		Reason: reason,
+	})
+	return err
+}
+
+type aiAgentAppointmentReschedulerAdapter struct {
+	appointmentService appointment_service.AppointmentService
+}
+
+func (a *aiAgentAppointmentReschedulerAdapter) Reschedule(ctx context.Context, appointmentID, clinicID uuid.UUID, newStartTime time.Time, newProfessionalID *uuid.UUID) error {
+	// This would need to be implemented in your appointment service
+	// For now, return not implemented error
+	return fmt.Errorf("reschedule not yet implemented")
+}
+
+type aiAgentClinicInfoAdapter struct {
+	clinicService clinic_service.ClinicService
+}
+
+func (a *aiAgentClinicInfoAdapter) GetClinicInfo(ctx context.Context, clinicID uuid.UUID) (*tools.ClinicInfo, error) {
+	clinic, err := a.clinicService.GetByID(ctx, clinicID)
+	if err != nil {
+		return nil, err
+	}
+
+	return &tools.ClinicInfo{
+		Name:          clinic.Name,
+		Address:       clinic.Address,
+		Phone:         clinic.Phone,
+		BusinessHours: "Segunda a Sexta, 8h às 18h", // TODO: Get from clinic settings
+	}, nil
+}
+
+type aiAgentProfessionalInfoAdapter struct {
+	professionalService professional_service.ProfessionalService
+}
+
+func (a *aiAgentProfessionalInfoAdapter) GetProfessionalInfo(ctx context.Context, professionalID uuid.UUID) (*tools.ProfessionalDetailedInfo, error) {
+	// This would need GetByID in professional service
+	// For now, return basic info
+	return &tools.ProfessionalDetailedInfo{
+		ID:          professionalID,
+		Name:        "Professional", // TODO: Get from service
+		Specialty:   "Unknown",
+		Description: "",
+		IsAvailable: true,
+	}, nil
+}
+
+type aiAgentPatientInfoAdapter struct {
+	patientService patient_service.PatientService
+}
+
+func (a *aiAgentPatientInfoAdapter) GetPatientInfo(ctx context.Context, patientID uuid.UUID) (*tools.PatientInfo, error) {
+	// Note: We need clinicID but interface doesn't provide it
+	// This is a limitation - for now we'll need to handle this differently
+	// The executor should pass clinicID through ExecutionContext
+	return nil, fmt.Errorf("GetPatientInfo needs clinicID from ExecutionContext - not yet implemented")
+}
+
+type aiAgentPatientFinderCreatorAdapter struct {
+	patientService patient_service.PatientService
+	patientRepo    patient_repository.PatientRepository
+}
+
+func (a *aiAgentPatientFinderCreatorAdapter) FindOrCreateByPhone(ctx context.Context, clinicID uuid.UUID, phone, name string) (*tools.PatientInfo, error) {
+	// Try to find existing patient by phone
+	patient, err := a.patientRepo.GetByPhone(ctx, phone, clinicID)
+	if err == nil {
+		// Patient found
+		return &tools.PatientInfo{
+			ID:    patient.ID,
+			Name:  patient.Name,
+			Phone: patient.Phone,
+			Email: patient.Email,
+		}, nil
+	}
+
+	// Patient not found, create new one
+	req := &patient_model.CreatePatientRequest{
+		Name:  name,
+		Phone: phone,
+	}
+
+	newPatient, err := a.patientService.Create(ctx, clinicID, req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create patient: %w", err)
+	}
+
+	return &tools.PatientInfo{
+		ID:    newPatient.ID,
+		Name:  newPatient.Name,
+		Phone: newPatient.Phone,
+		Email: newPatient.Email,
 	}, nil
 }

@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -44,6 +45,24 @@ type WorkerConfig struct {
 	RabbitMQURL   string
 	RabbitMQQueue string
 	RabbitMQDLQ   string
+
+	// AI Agent Configuration
+	AIAgentEnabled          bool
+	AIAgentProvider         string  // gemini, claude, openai
+	AIAgentModel            string
+	AIAgentFallbackModels   []string // List of fallback models to try in order
+	AIAgentMaxTokens        int
+	AIAgentTemperature      float32
+	AIAgentTimeout          time.Duration
+	ConversationMaxTurns    int
+	ConversationRedisTTL    time.Duration
+	ConversationPostgresTTL time.Duration
+
+	// AI Agent Feature Flags (gradual rollout)
+	AIAgentSchedulingEnabled  bool
+	AIAgentConfirmEnabled     bool
+	AIAgentCancelEnabled      bool
+	AIAgentRemindersEnabled   bool
 }
 
 // NewWorkerConfig creates a new worker configuration from environment variables
@@ -84,6 +103,29 @@ func NewWorkerConfig() *WorkerConfig {
 		RabbitMQURL:   getEnvW("RABBITMQ_URL", "amqp://guest:guest@localhost:5672/"),
 		RabbitMQQueue: getEnvW("RABBITMQ_QUEUE", "whatsapp_messages"),
 		RabbitMQDLQ:   getEnvW("RABBITMQ_DLQ", "whatsapp_messages_dlq"),
+
+		// AI Agent Configuration
+		AIAgentEnabled:  getEnvAsBoolW("AI_AGENT_ENABLED", false),
+		AIAgentProvider: getEnvW("AI_AGENT_PROVIDER", "gemini"),
+		AIAgentModel:    getEnvW("AI_AGENT_MODEL", "gemini-2.0-flash-exp"),
+		AIAgentFallbackModels: getEnvAsSliceW("AI_AGENT_FALLBACK_MODELS", []string{
+			"gemini-2.0-flash",
+			"gemini-2.5-flash-lite",
+			"gemini-1.5-flash",
+			"gemini-2.5-flash",
+		}),
+		AIAgentMaxTokens:        getEnvAsIntW("AI_AGENT_MAX_TOKENS", 2048),
+		AIAgentTemperature:      getEnvAsFloat32W("AI_AGENT_TEMPERATURE", 0.7),
+		AIAgentTimeout:          getEnvAsDurationW("AI_AGENT_TIMEOUT", 30*time.Second),
+		ConversationMaxTurns:    getEnvAsIntW("CONVERSATION_MAX_TURNS", 30),
+		ConversationRedisTTL:    getEnvAsDurationW("CONVERSATION_REDIS_TTL", 30*time.Minute),
+		ConversationPostgresTTL: getEnvAsDurationW("CONVERSATION_POSTGRES_TTL", 7*24*time.Hour),
+
+		// AI Agent Feature Flags (all disabled by default for gradual rollout)
+		AIAgentSchedulingEnabled: getEnvAsBoolW("AI_AGENT_SCHEDULING_ENABLED", false),
+		AIAgentConfirmEnabled:    getEnvAsBoolW("AI_AGENT_CONFIRM_ENABLED", false),
+		AIAgentCancelEnabled:     getEnvAsBoolW("AI_AGENT_CANCEL_ENABLED", false),
+		AIAgentRemindersEnabled:  getEnvAsBoolW("AI_AGENT_REMINDERS_ENABLED", false),
 	}
 }
 
@@ -161,6 +203,34 @@ func getEnvAsDurationW(key string, defaultValue time.Duration) time.Duration {
 	if value := os.Getenv(key); value != "" {
 		if duration, err := time.ParseDuration(value); err == nil {
 			return duration
+		}
+	}
+	return defaultValue
+}
+
+func getEnvAsFloat32W(key string, defaultValue float32) float32 {
+	if value := os.Getenv(key); value != "" {
+		if floatValue, err := strconv.ParseFloat(value, 32); err == nil {
+			return float32(floatValue)
+		}
+	}
+	return defaultValue
+}
+
+// getEnvAsSliceW reads an environment variable as a comma-separated list
+func getEnvAsSliceW(key string, defaultValue []string) []string {
+	if value := os.Getenv(key); value != "" {
+		// Split by comma and trim whitespace
+		parts := strings.Split(value, ",")
+		result := make([]string, 0, len(parts))
+		for _, part := range parts {
+			trimmed := strings.TrimSpace(part)
+			if trimmed != "" {
+				result = append(result, trimmed)
+			}
+		}
+		if len(result) > 0 {
+			return result
 		}
 	}
 	return defaultValue
