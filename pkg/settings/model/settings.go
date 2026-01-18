@@ -48,6 +48,12 @@ const (
 	SettingPlanProPrice          = "plan_pro_price"
 	SettingPlanAdvancedPrice     = "plan_advanced_price"
 	SettingTrialDays             = "trial_days"
+
+	// WhatsApp Rate Limiting & Message Segmentation
+	SettingWhatsAppMinDelayBetweenPatients = "whatsapp_min_delay_between_patients"
+	SettingWhatsAppMinDelayBetweenMessages = "whatsapp_min_delay_between_messages"
+	SettingWhatsAppMaxDelayBetweenMessages = "whatsapp_max_delay_between_messages"
+	SettingWhatsAppSegmentationEnabled     = "whatsapp_segmentation_enabled"
 )
 
 // DefaultSettings returns the default settings to seed the database
@@ -62,5 +68,11 @@ func DefaultSettings() []SystemSetting {
 		{Key: SettingPlanProPrice, Value: "199", Description: "Preço mensal plano Profissional (BRL)"},
 		{Key: SettingPlanAdvancedPrice, Value: "349", Description: "Preço mensal plano Avançado (BRL)"},
 		{Key: SettingTrialDays, Value: "14", Description: "Dias de trial gratuito"},
+
+		// WhatsApp Rate Limiting & Message Segmentation
+		{Key: SettingWhatsAppMinDelayBetweenPatients, Value: "60", Description: "Delay mínimo entre mensagens para pacientes diferentes (segundos)"},
+		{Key: SettingWhatsAppMinDelayBetweenMessages, Value: "3", Description: "Delay mínimo entre mensagens segmentadas (segundos)"},
+		{Key: SettingWhatsAppMaxDelayBetweenMessages, Value: "10", Description: "Delay máximo entre mensagens segmentadas (segundos)"},
+		{Key: SettingWhatsAppSegmentationEnabled, Value: "true", Description: "Habilitar segmentação de mensagens do WhatsApp"},
 	}
 }

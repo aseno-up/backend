@@ -171,25 +171,35 @@ func (c *evolutionClient) SendButtonMessage(ctx context.Context, instance, phone
 
 // GetConnectionStatus gets the current connection status
 func (c *evolutionClient) GetConnectionStatus(ctx context.Context, instance string) (*model.ConnectionStatus, error) {
-	resp, err := c.doRequest(ctx, "GET", "/instance/connectionState/"+instance, nil)
+	resp, err := c.doRequest(ctx, "GET", "/instance/fetchInstances?instanceName="+instance, nil)
 	if err != nil {
 		return nil, err
 	}
 
-	var result struct {
-		Instance struct {
-			InstanceName string `json:"instanceName"`
-			State        string `json:"state"`
-		} `json:"instance"`
+	var instances []struct {
+		Name             string `json:"name"`
+		ConnectionStatus string `json:"connectionStatus"`
+		OwnerJid         string `json:"ownerJid"`
+		ProfileName      string `json:"profileName"`
 	}
 
-	if err := json.Unmarshal(resp, &result); err != nil {
+	if err := json.Unmarshal(resp, &instances); err != nil {
 		return nil, errors.ErrInternalInstance.WithError(err)
 	}
 
+	// The API returns an array with a single instance when filtered by name
+	if len(instances) > 0 {
+		return &model.ConnectionStatus{
+			Instance:   instances[0].Name,
+			State:      instances[0].ConnectionStatus,
+			StatusCode: 200,
+		}, nil
+	}
+
+	// Instance not found
 	return &model.ConnectionStatus{
-		Instance:   result.Instance.InstanceName,
-		State:      result.Instance.State,
+		Instance:   instance,
+		State:      "close",
 		StatusCode: 200,
 	}, nil
 }
@@ -315,12 +325,24 @@ func (c *evolutionClient) doRequest(ctx context.Context, method, path string, bo
 		return nil, errors.ErrWhatsAppSendFailedInstance.WithMessage(errMsg)
 	}
 
-	// Limiting success log size to avoid spamming console
-	logBody := string(respBody)
-	if len(logBody) > 500 {
-		logBody = logBody[:500] + "..."
+	// Pretty-print JSON response for better readability
+	var prettyJSON bytes.Buffer
+	if err := json.Indent(&prettyJSON, respBody, "", "  "); err == nil {
+		// Successfully formatted as JSON
+		formatted := prettyJSON.String()
+		if len(formatted) > 2000 {
+			// Truncate long responses but keep it readable
+			formatted = formatted[:2000] + "\n  ... (truncated)"
+		}
+		log.Printf("[Evolution API] Success Response Body:\n%s", formatted)
+	} else {
+		// Not valid JSON, log as-is with size limit
+		logBody := string(respBody)
+		if len(logBody) > 500 {
+			logBody = logBody[:500] + "..."
+		}
+		log.Printf("[Evolution API] Success Response Body: %s", logBody)
 	}
-	log.Printf("[Evolution API] Success Response Body: %s", logBody)
 
 	return respBody, nil
 }

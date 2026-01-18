@@ -119,3 +119,19 @@ type ReminderMessage struct {
 	ClinicName    string       `json:"clinic_name"`
 	ReminderType  ReminderType `json:"reminder_type"`
 }
+
+// SegmentType represents the type of message segment
+type SegmentType string
+
+const (
+	SegmentTypeGreeting  SegmentType = "greeting"
+	SegmentTypeContent   SegmentType = "content"
+	SegmentTypeQuestion  SegmentType = "question"
+)
+
+// MessageSegment represents a single segment of a multi-part message
+type MessageSegment struct {
+	Content     string        `json:"content"`      // Content of the message
+	Type        SegmentType   `json:"type"`         // greeting, content, question
+	DelayAfter  time.Duration `json:"delay_after"`  // Delay after sending this segment
+}

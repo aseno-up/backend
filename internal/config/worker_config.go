@@ -31,6 +31,15 @@ type WorkerConfig struct {
 	MessageRetryMax         int
 	MessageRetryDelay       time.Duration
 
+	// WhatsApp Rate Limiting & Message Segmentation
+	MinDelayBetweenPatientsSeconds int
+	MinDelayBetweenMessagesSeconds int
+	MaxDelayBetweenMessagesSeconds int
+	MessageSegmentationEnabled     bool
+
+	// Redis
+	RedisURL string
+
 	// RabbitMQ
 	RabbitMQURL   string
 	RabbitMQQueue string
@@ -61,6 +70,15 @@ func NewWorkerConfig() *WorkerConfig {
 		MessageRateLimitSeconds: getEnvAsIntW("MESSAGE_RATE_LIMIT_SECONDS", 1),
 		MessageRetryMax:         getEnvAsIntW("MESSAGE_RETRY_MAX", 3),
 		MessageRetryDelay:       getEnvAsDurationW("MESSAGE_RETRY_DELAY", 1*time.Minute),
+
+		// WhatsApp Rate Limiting & Message Segmentation
+		MinDelayBetweenPatientsSeconds: getEnvAsIntW("WHATSAPP_MIN_DELAY_BETWEEN_PATIENTS_SECONDS", 60),
+		MinDelayBetweenMessagesSeconds: getEnvAsIntW("WHATSAPP_MIN_DELAY_BETWEEN_MESSAGES_SECONDS", 3),
+		MaxDelayBetweenMessagesSeconds: getEnvAsIntW("WHATSAPP_MAX_DELAY_BETWEEN_MESSAGES_SECONDS", 10),
+		MessageSegmentationEnabled:     getEnvAsBoolW("WHATSAPP_MESSAGE_SEGMENTATION_ENABLED", true),
+
+		// Redis
+		RedisURL: getEnvW("REDIS_URL", "redis://localhost:6379"),
 
 		// RabbitMQ
 		RabbitMQURL:   getEnvW("RABBITMQ_URL", "amqp://guest:guest@localhost:5672/"),

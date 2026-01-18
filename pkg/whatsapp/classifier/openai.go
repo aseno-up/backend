@@ -3,6 +3,8 @@ package classifier
 import (
 	"context"
 	"fmt"
+
+	"github.com/aseno/backend/pkg/whatsapp/model"
 )
 
 type openaiClassifier struct {
@@ -20,4 +22,8 @@ func (o *openaiClassifier) Provider() string {
 
 func (o *openaiClassifier) Classify(ctx context.Context, content string) (*ClassificationResult, error) {
 	return nil, fmt.Errorf("openai classifier not implemented")
+}
+
+func (o *openaiClassifier) MatchSlot(ctx context.Context, message string, slots []model.SlotOption) (*SlotMatchResult, error) {
+	return nil, fmt.Errorf("openai slot matching not implemented yet")
 }

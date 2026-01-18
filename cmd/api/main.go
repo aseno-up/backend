@@ -16,6 +16,7 @@ import (
 	"github.com/aseno/backend/internal/config"
 	"github.com/aseno/backend/internal/database"
 	"github.com/aseno/backend/internal/queue"
+	redisClient "github.com/aseno/backend/internal/redis"
 	"github.com/aseno/backend/internal/worker"
 	appointment_handler "github.com/aseno/backend/pkg/appointment/handler"
 	appointment_model "github.com/aseno/backend/pkg/appointment/model"
@@ -400,13 +401,26 @@ func main() {
 
 		log.Println("RabbitMQ connected successfully")
 
+		// Initialize Redis rate limiter
+		rateLimiter, err := redisClient.NewRateLimiter(workerCfg.RedisURL)
+		if err != nil {
+			log.Printf("Warning: Failed to initialize Redis rate limiter: %v (rate limiting will use fallback)", err)
+			rateLimiter = nil
+		}
+
+		// Wire message queue into WhatsApp service for segmented message delivery
+		if whatsappService != nil {
+			whatsappService.SetMessageQueue(messageQueue)
+			log.Println("WhatsApp message queue configured for segmented delivery")
+		}
+
 		// Initialize and start Reminder Worker (only if WhatsApp is configured)
 		if whatsappService != nil && workerCfg.ReminderWorkerEnabled {
 			reminderWorker = worker.NewReminderWorker(workerCfg, appointmentRepo, messageQueue)
 			go reminderWorker.Start()
 
 			// Initialize and start Message Sender Worker
-			messageSenderWorker = worker.NewMessageSenderWorker(workerCfg, messageQueue, whatsappService)
+			messageSenderWorker = worker.NewMessageSenderWorker(workerCfg, messageQueue, whatsappService, rateLimiter)
 			go messageSenderWorker.Start()
 
 			// Initialize and start Timeout Worker (marks no_response when patient doesn't confirm)
@@ -596,7 +610,7 @@ func main() {
 		messageQueue.Close()
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	if err := srv.Shutdown(ctx); err != nil {

@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -94,8 +96,17 @@ func (h *whatsAppHandler) processWebhook(c *gin.Context) {
 		return
 	}
 
-	// Log the raw payload for debugging
-	log.Printf("WhatsApp Webhook received: %s", string(body))
+	// Log the raw payload for debugging (pretty-printed)
+	var prettyJSON bytes.Buffer
+	if err := json.Indent(&prettyJSON, body, "", "  "); err == nil {
+		formatted := prettyJSON.String()
+		if len(formatted) > 2000 {
+			formatted = formatted[:2000] + "\n  ... (truncated)"
+		}
+		log.Printf("[Webhook] WhatsApp message received:\n%s", formatted)
+	} else {
+		log.Printf("[Webhook] WhatsApp message received (not JSON): %s", string(body))
+	}
 
 	// Parse the webhook payload based on provider
 	var parsed *model.ParsedIncomingMessage
@@ -410,7 +421,13 @@ func (h *whatsAppHandler) SendMessage(c *gin.Context) {
 		return
 	}
 
-	log.Printf("[SendMessage] Sending message to %s: %s", req.Phone, req.Message)
+	// Log message details in pretty JSON format
+	reqJSON, _ := json.MarshalIndent(map[string]interface{}{
+		"phone":   req.Phone,
+		"message": req.Message,
+		"buttons": req.Buttons,
+	}, "", "  ")
+	log.Printf("[SendMessage] Sending message:\n%s", string(reqJSON))
 
 	// Send the message
 	resp, err := h.service.SendTextMessage(c.Request.Context(), clinic.WhatsAppInstance, req.Phone, req.Message)

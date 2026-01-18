@@ -3,6 +3,8 @@ package classifier
 import (
 	"context"
 	"fmt"
+
+	"github.com/aseno/backend/pkg/whatsapp/model"
 )
 
 type claudeClassifier struct {
@@ -20,4 +22,8 @@ func (c *claudeClassifier) Provider() string {
 
 func (c *claudeClassifier) Classify(ctx context.Context, content string) (*ClassificationResult, error) {
 	return nil, fmt.Errorf("claude classifier not implemented")
+}
+
+func (c *claudeClassifier) MatchSlot(ctx context.Context, message string, slots []model.SlotOption) (*SlotMatchResult, error) {
+	return nil, fmt.Errorf("claude slot matching not implemented yet")
 }

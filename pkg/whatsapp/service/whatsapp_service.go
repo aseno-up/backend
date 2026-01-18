@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	aptModel "github.com/aseno/backend/pkg/appointment/model"
+	"github.com/aseno/backend/internal/queue"
 	"github.com/aseno/backend/pkg/whatsapp/classifier"
 	"github.com/aseno/backend/pkg/whatsapp/model"
 )
@@ -70,6 +71,11 @@ type SchedulingIntentRepository interface {
 	UpdateStatus(ctx context.Context, id uuid.UUID, status model.SchedulingIntentStatus) error
 	GetExpired(ctx context.Context) ([]*model.SchedulingIntent, error)
 	ExpireOld(ctx context.Context) error
+}
+
+// MessageQueue defines the interface for enqueueing WhatsApp messages
+type MessageQueue interface {
+	PublishWithDelay(ctx context.Context, job *queue.MessageJob, delay time.Duration) error
 }
 
 // WhatsAppService defines the interface for WhatsApp business logic
@@ -139,6 +145,9 @@ type WhatsAppService interface {
 
 	// SetNewAppointmentCreator sets the new appointment creator for scheduling
 	SetNewAppointmentCreator(creator NewAppointmentCreator)
+
+	// SetMessageQueue sets the message queue for segmented message delivery
+	SetMessageQueue(queue MessageQueue)
 }
 
 // whatsAppService implements WhatsAppService
@@ -160,6 +169,8 @@ type whatsAppService struct {
 	professionalLister       ProfessionalLister
 	slotFinder               SlotFinder
 	newAppointmentCreator    NewAppointmentCreator
+	// Message queue for segmented delivery
+	messageQueue             MessageQueue
 }
 
 // AppointmentStatusUpdater interface for updating appointment status
@@ -368,6 +379,11 @@ func (s *whatsAppService) SetNewAppointmentCreator(creator NewAppointmentCreator
 	s.newAppointmentCreator = creator
 }
 
+// SetMessageQueue sets the message queue for segmented message delivery
+func (s *whatsAppService) SetMessageQueue(queue MessageQueue) {
+	s.messageQueue = queue
+}
+
 // CreateInstance creates a new WhatsApp instance for a clinic
 func (s *whatsAppService) CreateInstance(ctx context.Context, instance string) (*model.QRCodeData, error) {
 	return s.client.CreateInstance(ctx, instance)
@@ -483,16 +499,19 @@ func (s *whatsAppService) SendConfirmationMessage(ctx context.Context, instance 
 	dateStr := msg.DateTime.Format("02/01/2006")
 	timeStr := msg.DateTime.Format("15:04")
 
+	// Build greeting with time of day
+	greeting := s.buildGreeting(msg.PatientName)
+
 	// Build confirmation message with buttons
 	message := fmt.Sprintf(
-		"Ola %s!\n\n" +
+		"%s\n\n" +
 			"Sua consulta foi agendada:\n\n" +
 			"📅 Data: %s\n" +
 			"🕐 Horario: %s\n" +
 			"👨‍⚕️ Profissional: %s\n" +
 			"🏥 Local: %s\n\n" +
 			"Por favor, confirme sua presenca:",
-		msg.PatientName,
+		greeting,
 		dateStr,
 		timeStr,
 		msg.Professional,
@@ -539,16 +558,19 @@ func (s *whatsAppService) SendReminderMessage(ctx context.Context, instance stri
 		reminderText = "Lembrete de consulta"
 	}
 
+	// Build greeting with time of day
+	greeting := s.buildGreeting(msg.PatientName)
+
 	message := fmt.Sprintf(
 		"🔔 %s\n\n" +
-			"Ola %s!\n\n" +
+			"%s\n\n" +
 			"📅 Data: %s\n" +
 			"🕐 Horario: %s\n" +
 			"👨‍⚕️ Profissional: %s\n" +
 			"🏥 Local: %s\n\n" +
 			"Caso precise remarcar ou cancelar, responda esta mensagem.",
 		reminderText,
-		msg.PatientName,
+		greeting,
 		dateStr,
 		timeStr,
 		msg.Professional,
@@ -956,12 +978,58 @@ func (s *whatsAppService) handleScheduleIntent(ctx context.Context, clinicID uui
 	return s.SendSchedulingOptions(ctx, msg.Instance, msg.Phone, intent)
 }
 
-// SendSchedulingOptions sends available time slots as WhatsApp buttons
+// SendSchedulingOptions sends available time slots as WhatsApp messages
 func (s *whatsAppService) SendSchedulingOptions(ctx context.Context, instance, phone string, intent *model.SchedulingIntent) error {
 	if len(intent.SuggestedSlots) == 0 {
 		return nil
 	}
 
+	patientName := intent.PatientName
+	if patientName == "" {
+		patientName = "Paciente"
+	}
+
+	// Use segmented messages if queue is available
+	if s.messageQueue != nil {
+		return s.sendSchedulingOptionsSegmented(ctx, instance, phone, intent, patientName)
+	}
+
+	// Fallback: send as single message
+	return s.sendSchedulingOptionsSimple(ctx, instance, phone, intent)
+}
+
+// sendSchedulingOptionsSegmented sends scheduling options as segmented messages
+func (s *whatsAppService) sendSchedulingOptionsSegmented(ctx context.Context, instance, phone string, intent *model.SchedulingIntent, patientName string) error {
+	segments := s.buildSchedulingMessageSegments(intent, patientName)
+
+	var cumulativeDelay time.Duration
+	for i, segment := range segments {
+		job := &queue.MessageJob{
+			ID:          uuid.New().String(),
+			Instance:    instance,
+			Phone:       phone,
+			Message:     segment.Content,
+			MessageType: fmt.Sprintf("scheduling_%s", segment.Type),
+			MaxAttempts: 3,
+			CreatedAt:   time.Now(),
+			ScheduledAt: time.Now().Add(cumulativeDelay),
+		}
+
+		if err := s.messageQueue.PublishWithDelay(ctx, job, cumulativeDelay); err != nil {
+			log.Printf("[Schedule] Failed to enqueue segment %d: %v", i, err)
+			// Continue with next segment - don't fail entirely
+		}
+
+		// Accumulate delay for next segment
+		cumulativeDelay += segment.DelayAfter
+	}
+
+	log.Printf("[Schedule] Enqueued %d message segments for %s", len(segments), phone)
+	return nil
+}
+
+// sendSchedulingOptionsSimple sends scheduling options as a single message (fallback)
+func (s *whatsAppService) sendSchedulingOptionsSimple(ctx context.Context, instance, phone string, intent *model.SchedulingIntent) error {
 	// Build message
 	var sb strings.Builder
 	sb.WriteString("Perfeito! Encontrei alguns horarios disponiveis:\n\n")
@@ -974,7 +1042,7 @@ func (s *whatsAppService) SendSchedulingOptions(ctx context.Context, instance, p
 			i+1, weekday, dateStr, timeStr, slot.ProfessionalName))
 	}
 
-	sb.WriteString("\nQual horario prefere? Responda com o numero (1, 2, 3...)")
+	sb.WriteString("\nQual horario voce prefere?")
 
 	// Send as text message (buttons have a limit of 3, we might have more slots)
 	formattedPhone := formatPhoneNumber(phone)
@@ -991,26 +1059,38 @@ func (s *whatsAppService) SendSchedulingOptions(ctx context.Context, instance, p
 // handleSlotSelection handles when a patient selects a time slot
 func (s *whatsAppService) handleSlotSelection(ctx context.Context, clinicID uuid.UUID, msg *model.ParsedIncomingMessage, intent *model.SchedulingIntent) error {
 	content := strings.TrimSpace(msg.Content)
-
-	// Try to parse slot selection (1, 2, 3, etc.)
 	slotIndex := -1
-	if num, err := strconv.Atoi(content); err == nil && num >= 1 && num <= len(intent.SuggestedSlots) {
-		slotIndex = num - 1
+
+	// Step 1: Try AI matching first (if classifier is available)
+	if s.classifier != nil {
+		result, err := s.classifier.MatchSlot(ctx, content, intent.SuggestedSlots)
+		if err == nil && result.Confidence >= s.confidenceThreshold {
+			slotIndex = result.SlotIndex
+			log.Printf("[Schedule] AI matched slot %d with confidence %.2f: %s",
+				slotIndex, result.Confidence, result.Reasoning)
+		} else if err != nil {
+			log.Printf("[Schedule] AI matching failed: %v", err)
+		} else {
+			log.Printf("[Schedule] AI confidence too low: %.2f < %.2f",
+				result.Confidence, s.confidenceThreshold)
+		}
 	}
 
-	// Also try to match by button ID
-	if slotIndex == -1 && msg.ButtonID != "" {
-		for i, slot := range intent.SuggestedSlots {
-			if slot.ButtonID == msg.ButtonID {
-				slotIndex = i
-				break
+	// Step 2: Fallback to numeric parsing (still support numbers)
+	if slotIndex == -1 {
+		if num, err := strconv.Atoi(content); err == nil {
+			if num >= 1 && num <= len(intent.SuggestedSlots) {
+				slotIndex = num - 1
+				log.Printf("[Schedule] Numeric selection: %d", num)
 			}
 		}
 	}
 
+	// Step 3: If still no match, send helpful message
 	if slotIndex == -1 {
-		// Could not parse selection, might be a different message
 		log.Printf("[Schedule] Could not parse slot selection from: %q", content)
+		_, _ = s.SendTextMessage(ctx, msg.Instance, msg.Phone,
+			"Desculpe, nao consegui entender sua escolha. Voce pode me dizer qual dia/horario prefere, ou responder com o numero da opcao?")
 		return nil
 	}
 
@@ -1094,4 +1174,104 @@ func translateWeekday(weekday time.Weekday) string {
 		time.Saturday:  "Sabado",
 	}
 	return days[weekday]
+}
+
+// buildGreeting creates a personalized greeting based on time of day
+func (s *whatsAppService) buildGreeting(patientName string) string {
+	timeOfDay := getTimeOfDay()
+
+	greetings := map[string]string{
+		"morning":   "Ola %s, bom dia! 😊",
+		"afternoon": "Ola %s, boa tarde! 😊",
+		"evening":   "Ola %s, boa noite! 😊",
+	}
+
+	greeting := greetings[timeOfDay]
+	return fmt.Sprintf(greeting, patientName)
+}
+
+// getTimeOfDay returns the current time of day period
+func getTimeOfDay() string {
+	hour := time.Now().Hour()
+
+	if hour >= 6 && hour < 12 {
+		return "morning"
+	} else if hour >= 12 && hour < 18 {
+		return "afternoon"
+	}
+	return "evening"
+}
+
+// buildSlotsText builds the formatted text for time slots
+func (s *whatsAppService) buildSlotsText(slots model.SlotOptions) string {
+	var sb strings.Builder
+	sb.WriteString("Encontrei alguns horarios disponiveis:\n\n")
+
+	for i, slot := range slots {
+		weekday := translateWeekday(slot.StartTime.Weekday())
+		dateStr := slot.StartTime.Format("02/01")
+		timeStr := slot.StartTime.Format("15:04")
+		sb.WriteString(fmt.Sprintf("%d. %s %s as %s - %s\n",
+			i+1, weekday, dateStr, timeStr, slot.ProfessionalName))
+	}
+
+	return sb.String()
+}
+
+// calculateDelayByLength calculates delay based on message length (3-10 seconds)
+func (s *whatsAppService) calculateDelayByLength(messageLength int) time.Duration {
+	// Formula: 3s base + 1s per 100 characters
+	// Min: 3s, Max: 10s
+	const baseDelay = 3 * time.Second
+	const maxDelay = 10 * time.Second
+	const charsPerSecond = 100
+
+	additionalDelay := time.Duration(messageLength/charsPerSecond) * time.Second
+	totalDelay := baseDelay + additionalDelay
+
+	if totalDelay > maxDelay {
+		return maxDelay
+	}
+	return totalDelay
+}
+
+// calculateSegmentDelay calculates the delay for a message segment
+func (s *whatsAppService) calculateSegmentDelay(segment model.MessageSegment) time.Duration {
+	if segment.DelayAfter > 0 {
+		return segment.DelayAfter
+	}
+	return s.calculateDelayByLength(len(segment.Content))
+}
+
+// buildSchedulingMessageSegments builds message segments for scheduling options
+func (s *whatsAppService) buildSchedulingMessageSegments(
+	intent *model.SchedulingIntent,
+	patientName string,
+) []model.MessageSegment {
+	segments := []model.MessageSegment{}
+
+	// 1. Greeting
+	greeting := s.buildGreeting(patientName)
+	segments = append(segments, model.MessageSegment{
+		Content:    greeting,
+		Type:       model.SegmentTypeGreeting,
+		DelayAfter: 3 * time.Second, // Minimum 3s
+	})
+
+	// 2. Slots list
+	slotsText := s.buildSlotsText(intent.SuggestedSlots)
+	segments = append(segments, model.MessageSegment{
+		Content:    slotsText,
+		Type:       model.SegmentTypeContent,
+		DelayAfter: s.calculateDelayByLength(len(slotsText)),
+	})
+
+	// 3. Question
+	segments = append(segments, model.MessageSegment{
+		Content:    "Qual horario voce prefere?",
+		Type:       model.SegmentTypeQuestion,
+		DelayAfter: 0, // Last message
+	})
+
+	return segments
 }

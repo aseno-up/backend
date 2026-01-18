@@ -1,100 +1,117 @@
+# ============================================
+# Docker Compose para Backend APENAS
+#
+# IMPORTANTE: Este compose assume que a infraestrutura (PostgreSQL, Redis, RabbitMQ, Evolution, WAHA)
+# já está rodando via `make up` na raiz do projeto.
+#
+# Use este compose apenas quando quiser rodar o backend no Docker ao invés de `go run`
+# ============================================
+
 version: '3.8'
 
 services:
-  postgres:
-    image: postgres:16-alpine
-    container_name: aseno_postgres
+  # Backend API
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: aseno_backend
     restart: unless-stopped
+    ports:
+      - "4901:8080"
     environment:
-      POSTGRES_USER: aseno
-      POSTGRES_PASSWORD: aseno_password
-      POSTGRES_DB: aseno_db
-    ports:
-      - "5432:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - TZ=America/Sao_Paulo
+      - PORT=8080
+
+      # Database - conecta no PostgreSQL da raiz (container name: aseno-postgres)
+      - DATABASE_URL=postgres://aseno:aseno_password@aseno-postgres:5432/aseno_db?sslmode=disable
+
+      # JWT
+      - JWT_SECRET=${JWT_SECRET}
+      - JWT_ACCESS_TOKEN_TTL=${JWT_ACCESS_TOKEN_TTL}
+      - JWT_REFRESH_TOKEN_TTL=${JWT_REFRESH_TOKEN_TTL}
+
+      # CORS & Frontend
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS}
+      - FRONTEND_URL=${FRONTEND_URL}
+
+      # Email
+      - BREVO_API_KEY=${BREVO_API_KEY}
+      - EMAIL_SENDER_SUPORT_ADDRESS=${EMAIL_SENDER_SUPORT_ADDRESS}
+      - EMAIL_SENDER_NAME=${EMAIL_SENDER_NAME}
+
+      # Google OAuth
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
+      - GOOGLE_AUTH_REDIRECT_URL=${GOOGLE_AUTH_REDIRECT_URL}
+      - GOOGLE_REDIRECT_URL=${GOOGLE_REDIRECT_URL}
+
+      # WhatsApp - conecta nos containers da raiz
+      - WHATSAPP_PROVIDER=${WHATSAPP_PROVIDER}
+      - EVOLUTION_API_URL=http://aseno-evolution:8080
+      - EVOLUTION_API_KEY=${EVOLUTION_API_KEY}
+      - WHATSAPP_WEBHOOK_SECRET=${WHATSAPP_WEBHOOK_SECRET}
+      - WHATSAPP_WEBHOOK_URL=http://aseno_backend:8080/api/v1/whatsapp/webhook
+      - WAHA_API_URL=http://aseno-waha:3000
+      - WAHA_API_KEY=${WAHA_API_KEY}
+
+      # RabbitMQ - conecta no RabbitMQ da raiz (container name: aseno-rabbitmq)
+      - RABBITMQ_URL=amqp://aseno:aseno_password@aseno-rabbitmq:5672/aseno
+      - RABBITMQ_QUEUE=${RABBITMQ_QUEUE}
+      - RABBITMQ_DLQ=${RABBITMQ_DLQ}
+
+      # Redis - conecta no Redis da raiz (container name: aseno-redis)
+      - REDIS_URL=redis://aseno-redis:6379
+
+      # Workers
+      - REMINDER_WORKER_ENABLED=${REMINDER_WORKER_ENABLED}
+      - REMINDER_WORKER_INTERVAL=${REMINDER_WORKER_INTERVAL}
+      - TIMEOUT_WORKER_ENABLED=${TIMEOUT_WORKER_ENABLED}
+      - TIMEOUT_WORKER_INTERVAL=${TIMEOUT_WORKER_INTERVAL}
+      - CONFIRMATION_TIMEOUT_DURATION=${CONFIRMATION_TIMEOUT_DURATION}
+
+      # Reminder Thresholds
+      - REMINDER_48H_ENABLED=${REMINDER_48H_ENABLED}
+      - REMINDER_48H_BEFORE=${REMINDER_48H_BEFORE}
+      - REMINDER_24H_ENABLED=${REMINDER_24H_ENABLED}
+      - REMINDER_24H_BEFORE=${REMINDER_24H_BEFORE}
+      - REMINDER_2H_ENABLED=${REMINDER_2H_ENABLED}
+      - REMINDER_2H_BEFORE=${REMINDER_2H_BEFORE}
+
+      # Rate Limiting
+      - MESSAGE_RATE_LIMIT_SECONDS=${MESSAGE_RATE_LIMIT_SECONDS}
+      - MESSAGE_RETRY_MAX=${MESSAGE_RETRY_MAX}
+      - MESSAGE_RETRY_DELAY=${MESSAGE_RETRY_DELAY}
+
+      # WhatsApp Rate Limiting & Message Segmentation
+      - WHATSAPP_MIN_DELAY_BETWEEN_PATIENTS_SECONDS=${WHATSAPP_MIN_DELAY_BETWEEN_PATIENTS_SECONDS}
+      - WHATSAPP_MIN_DELAY_BETWEEN_MESSAGES_SECONDS=${WHATSAPP_MIN_DELAY_BETWEEN_MESSAGES_SECONDS}
+      - WHATSAPP_MAX_DELAY_BETWEEN_MESSAGES_SECONDS=${WHATSAPP_MAX_DELAY_BETWEEN_MESSAGES_SECONDS}
+      - WHATSAPP_MESSAGE_SEGMENTATION_ENABLED=${WHATSAPP_MESSAGE_SEGMENTATION_ENABLED}
+
+      # Waitlist
+      - WAITLIST_ENABLED=${WAITLIST_ENABLED}
+      - WAITLIST_RESPONSE_TIMEOUT=${WAITLIST_RESPONSE_TIMEOUT}
+
+      # AI Classifier
+      - AI_CLASSIFIER_ENABLED=${AI_CLASSIFIER_ENABLED}
+      - AI_CLASSIFIER_PROVIDER=${AI_CLASSIFIER_PROVIDER}
+      - AI_CLASSIFIER_MODEL=${AI_CLASSIFIER_MODEL}
+      - AI_CLASSIFIER_TIMEOUT=${AI_CLASSIFIER_TIMEOUT}
+      - AI_CLASSIFIER_CONFIDENCE_THRESHOLD=${AI_CLASSIFIER_CONFIDENCE_THRESHOLD}
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+
+    networks:
+      - aseno-network
+
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U aseno -d aseno_db"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 3s
+      start_period: 10s
+      retries: 3
 
-  redis:
-    image: redis:7-alpine
-    container_name: aseno_redis
-    restart: unless-stopped
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis_data:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  # RabbitMQ for message queuing (reminder workers)
-  rabbitmq:
-    image: rabbitmq:3.13-management-alpine
-    container_name: aseno_rabbitmq
-    restart: unless-stopped
-    ports:
-      - "5672:5672"   # AMQP protocol
-      - "15672:15672" # Management UI
-    environment:
-      RABBITMQ_DEFAULT_USER: aseno
-      RABBITMQ_DEFAULT_PASS: aseno_password
-      RABBITMQ_DEFAULT_VHOST: aseno
-    volumes:
-      - rabbitmq_data:/var/lib/rabbitmq
-    healthcheck:
-      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  # Evolution API for WhatsApp integration (optional for development)
-  # Uncomment when ready to test WhatsApp integration
-  # evolution:
-  #   image: atendai/evolution-api:v2.1.1
-  #   container_name: aseno_evolution
-  #   restart: unless-stopped
-  #   ports:
-  #     - "8081:8080"
-  #   environment:
-  #     - SERVER_URL=http://localhost:8081
-  #     - AUTHENTICATION_API_KEY=your-evolution-api-key
-  #     - DATABASE_ENABLED=true
-  #     - DATABASE_CONNECTION_URI=postgresql://postgres:postgres@postgres:5432/evolution
-  #   depends_on:
-  #     postgres:
-  #       condition: service_healthy
-  #   volumes:
-  #     - evolution_instances:/evolution/instances
-
-  # pgAdmin - Database Management UI
-  pgadmin:
-    image: dpage/pgadmin4:latest
-    container_name: aseno_pgadmin
-    restart: unless-stopped
-    environment:
-      PGADMIN_DEFAULT_EMAIL: admin@admin.com
-      PGADMIN_DEFAULT_PASSWORD: admin
-      PGADMIN_CONFIG_SERVER_MODE: "False"
-      PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: "False"
-    volumes:
-      - pgadmin_data:/var/lib/pgadmin
-    ports:
-      - "5555:80"
-    depends_on:
-      postgres:
-        condition: service_healthy
-    profiles:
-      - tools
-
-volumes:
-  postgres_data:
-  redis_data:
-  rabbitmq_data:
-  pgadmin_data:
-  # evolution_instances:
+# Use external network created by the root project
+networks:
+  aseno-network:
+    external: true

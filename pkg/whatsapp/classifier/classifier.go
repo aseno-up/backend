@@ -19,9 +19,20 @@ type ClassificationResult struct {
 	Latency    time.Duration            `json:"latency"`
 }
 
+// SlotMatchResult represents the result of slot matching
+type SlotMatchResult struct {
+	SlotIndex  int           `json:"slot_index"`  // Index of the matched slot (0-based)
+	Confidence float64       `json:"confidence"`  // Confidence of the match (0.0-1.0)
+	Reasoning  string        `json:"reasoning"`   // Why this slot was chosen
+	Provider   string        `json:"provider"`    // "gemini", "openai", "claude"
+	Model      string        `json:"model"`       // Model name used
+	Latency    time.Duration `json:"latency"`     // Time taken to match
+}
+
 // MessageClassifier interface for all AI providers
 type MessageClassifier interface {
 	Classify(ctx context.Context, content string) (*ClassificationResult, error)
+	MatchSlot(ctx context.Context, message string, slots []model.SlotOption) (*SlotMatchResult, error)
 	Provider() string
 }
 
