@@ -297,3 +297,88 @@ func (c *Clinic) GetMinDelayBetweenPatients(defaultDelay int) int {
 	}
 	return defaultDelay
 }
+
+// getDaySchedule retorna o DaySchedule para um dia da semana
+func (c *Clinic) getDaySchedule(weekday time.Weekday) *DaySchedule {
+	if c.Settings.AIBusinessHours == nil {
+		// Horário padrão: Segunda a Sábado 08:00-18:00
+		if weekday == time.Sunday {
+			return nil
+		}
+		return &DaySchedule{
+			Enabled:   true,
+			StartTime: "08:00",
+			EndTime:   "18:00",
+		}
+	}
+
+	switch weekday {
+	case time.Monday:
+		return c.Settings.AIBusinessHours.Monday
+	case time.Tuesday:
+		return c.Settings.AIBusinessHours.Tuesday
+	case time.Wednesday:
+		return c.Settings.AIBusinessHours.Wednesday
+	case time.Thursday:
+		return c.Settings.AIBusinessHours.Thursday
+	case time.Friday:
+		return c.Settings.AIBusinessHours.Friday
+	case time.Saturday:
+		return c.Settings.AIBusinessHours.Saturday
+	case time.Sunday:
+		return c.Settings.AIBusinessHours.Sunday
+	}
+	return nil
+}
+
+// CalculateNextBusinessHour calcula o próximo horário de atendimento
+func (c *Clinic) CalculateNextBusinessHour(now time.Time) time.Time {
+	// Obter timezone da clínica
+	loc := time.UTC
+	if c.Settings.Timezone != "" {
+		if tz, err := time.LoadLocation(c.Settings.Timezone); err == nil {
+			loc = tz
+		}
+	}
+
+	current := now.In(loc)
+
+	// Se já está dentro do horário de atendimento, retorna agora
+	if c.IsWithinBusinessHours(current) {
+		return current
+	}
+
+	// Verificar se ainda está no mesmo dia mas antes do horário de abertura
+	schedule := c.getDaySchedule(current.Weekday())
+	if schedule != nil && schedule.Enabled {
+		openTime := parseTimeToday(current, schedule.StartTime)
+		if current.Before(openTime) {
+			return openTime
+		}
+	}
+
+	// Procurar próximo dia de atendimento (até 7 dias no futuro)
+	for i := 1; i <= 7; i++ {
+		nextDay := current.Add(time.Duration(i) * 24 * time.Hour)
+		nextSchedule := c.getDaySchedule(nextDay.Weekday())
+
+		if nextSchedule != nil && nextSchedule.Enabled {
+			return parseTimeToday(nextDay, nextSchedule.StartTime)
+		}
+	}
+
+	// Fallback: próxima segunda 08:00 (se nenhum dia está habilitado)
+	daysUntilMonday := (7 - int(current.Weekday()) + int(time.Monday)) % 7
+	if daysUntilMonday == 0 {
+		daysUntilMonday = 7
+	}
+	nextMonday := current.Add(time.Duration(daysUntilMonday) * 24 * time.Hour)
+	return parseTimeToday(nextMonday, "08:00")
+}
+
+// parseTimeToday parseia um horário "HH:MM" e retorna time.Time para a data fornecida
+func parseTimeToday(date time.Time, timeStr string) time.Time {
+	var hour, minute int
+	fmt.Sscanf(timeStr, "%d:%d", &hour, &minute)
+	return time.Date(date.Year(), date.Month(), date.Day(), hour, minute, 0, 0, date.Location())
+}

@@ -139,6 +139,7 @@ func main() {
 	appointmentRepo := appointment_repository.NewAppointmentRepository(db.GetDB())
 	messageRepo := whatsapp_repository.NewMessageRepository(db.GetDB())
 	messageLogRepo := whatsapp_repository.NewMessageLogRepository(db.GetDB())
+	scheduledMsgRepo := whatsapp_repository.NewScheduledMessageRepository(db.GetDB())
 	customerRepo := payment_repository.NewCustomerRepository(db.GetDB())
 	paymentRepo := payment_repository.NewPaymentRepository(db.GetDB())
 	subscriptionRepo := payment_repository.NewSubscriptionRepository(db.GetDB())
@@ -378,6 +379,8 @@ func main() {
 			} else if aiAgentService != nil {
 				whatsappService.SetAIAgentService(aiAgentService)
 				whatsappService.SetClinicRepo(clinicRepo)
+				whatsappService.SetScheduledMessageRepo(scheduledMsgRepo)
+				whatsappService.SetDefaultDelayBetweenPatients(workerCfg.MinDelayBetweenPatientsSeconds)
 				log.Println("AI Agent service connected to WhatsApp")
 			}
 		} else if redis == nil {
@@ -442,6 +445,7 @@ func main() {
 	var messageQueue queue.Queue
 	var reminderWorker *worker.ReminderWorker
 	var messageSenderWorker *worker.MessageSenderWorker
+	var scheduledMessageWorker *worker.ScheduledMessageWorker
 
 	if workerCfg.RabbitMQURL != "" {
 		messageQueue = queue.NewRabbitMQ(queue.RabbitMQConfig{
@@ -479,6 +483,16 @@ func main() {
 			// Initialize and start Message Sender Worker
 			messageSenderWorker = worker.NewMessageSenderWorker(workerCfg, messageQueue, whatsappService, rateLimiter, clinicRepo)
 			go messageSenderWorker.Start()
+
+			// Initialize and start Scheduled Message Worker (processes messages scheduled for outside business hours)
+			// Uses WHATSAPP_MIN_DELAY_BETWEEN_PATIENTS_SECONDS as poll interval
+			scheduledMessageWorker = worker.NewScheduledMessageWorker(
+				workerCfg,
+				scheduledMsgRepo,
+				clinicRepo,
+				whatsappService,
+			)
+			go scheduledMessageWorker.Start()
 
 			// Initialize and start Timeout Worker (marks no_response when patient doesn't confirm)
 			if workerCfg.TimeoutWorkerEnabled {
@@ -656,6 +670,9 @@ func main() {
 	}
 	if messageSenderWorker != nil {
 		messageSenderWorker.Stop()
+	}
+	if scheduledMessageWorker != nil {
+		scheduledMessageWorker.Stop()
 	}
 	if messageQueue != nil {
 		messageQueue.Close()
@@ -893,6 +910,7 @@ func runMigrations(db *database.Database) error {
 		&whatsapp_model.Message{},
 		&whatsapp_model.MessageLog{},
 		&whatsapp_model.SchedulingIntent{},
+		&whatsapp_model.ScheduledMessage{},
 		&payment_model.Customer{},
 		&payment_model.Subscription{},
 		&payment_model.Payment{},
