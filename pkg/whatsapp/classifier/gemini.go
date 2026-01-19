@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"github.com/aseno/backend/internal/logger"
 	"strings"
 	"sync"
 	"time"
@@ -58,7 +58,7 @@ func (r *modelRotator) RotateToNext() string {
 	r.currentIndex = (r.currentIndex + 1) % len(r.models)
 	newModel := r.models[r.currentIndex]
 
-	log.Printf("[Gemini Rotator] Rotating from '%s' to '%s' (index: %d/%d)",
+	logger.Printf("[Gemini Rotator] Rotating from '%s' to '%s' (index: %d/%d)",
 		oldModel, newModel, r.currentIndex, len(r.models)-1)
 
 	return newModel
@@ -72,7 +72,7 @@ func (r *modelRotator) SetModels(models []string) {
 	if len(models) > 0 {
 		r.models = models
 		r.currentIndex = 0
-		log.Printf("[Gemini Rotator] Models configured: %v", models)
+		logger.Printf("[Gemini Rotator] Models configured: %v", models)
 	}
 }
 
@@ -118,8 +118,8 @@ func NewGeminiClassifier(cfg Config) (MessageClassifier, error) {
 		}
 	}
 
-	log.Printf("[Gemini Classifier] Initialized with models: %v", rotator.GetAllModels())
-	log.Printf("[Gemini Classifier] Starting with model: %s", rotator.GetCurrentModel())
+	logger.Printf("[Gemini Classifier] Initialized with models: %v", rotator.GetAllModels())
+	logger.Printf("[Gemini Classifier] Starting with model: %s", rotator.GetCurrentModel())
 
 	return &geminiClassifier{
 		client:  client,
@@ -148,7 +148,7 @@ func (g *geminiClassifier) Classify(ctx context.Context, content string) (*Class
 
 		// Check if it's a rate limit error (429) or resource exhausted
 		if isRateLimitError(err) {
-			log.Printf("[Gemini Classifier] Rate limit hit on model '%s': %v", currentModel, err)
+			logger.Printf("[Gemini Classifier] Rate limit hit on model '%s': %v", currentModel, err)
 			rotator.RotateToNext()
 			// Small delay before retry to avoid hammering the API
 			time.Sleep(100 * time.Millisecond)
@@ -212,7 +212,7 @@ func (g *geminiClassifier) tryClassify(ctx context.Context, content string, mode
 		intent = model.MessageIntentUnknown
 	}
 
-	log.Printf("[Gemini Classifier] Success with model '%s' (latency: %v)", modelName, time.Since(start))
+	logger.Printf("[Gemini Classifier] Success with model '%s' (latency: %v)", modelName, time.Since(start))
 
 	// Build classification result
 	classResult := &ClassificationResult{
@@ -302,7 +302,7 @@ func (g *geminiClassifier) MatchSlot(ctx context.Context, message string, slots 
 
 		// Check if it's a rate limit error (429) or resource exhausted
 		if isRateLimitError(err) {
-			log.Printf("[Gemini Slot Match] Rate limit hit on model '%s': %v", currentModel, err)
+			logger.Printf("[Gemini Slot Match] Rate limit hit on model '%s': %v", currentModel, err)
 			rotator.RotateToNext()
 			// Small delay before retry to avoid hammering the API
 			time.Sleep(100 * time.Millisecond)
@@ -388,7 +388,7 @@ Responda APENAS com JSON valido (sem markdown, sem crases):
 		return nil, fmt.Errorf("invalid slot index %d (must be 0-%d)", result.SlotIndex, len(slots)-1)
 	}
 
-	log.Printf("[Gemini Slot Match] Success with model '%s' (latency: %v)", modelName, time.Since(start))
+	logger.Printf("[Gemini Slot Match] Success with model '%s' (latency: %v)", modelName, time.Since(start))
 
 	return &SlotMatchResult{
 		SlotIndex:  result.SlotIndex,

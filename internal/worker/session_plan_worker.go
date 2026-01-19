@@ -2,7 +2,7 @@ package worker
 
 import (
 	"context"
-	"log"
+	"github.com/aseno/backend/internal/logger"
 	"time"
 
 	"github.com/aseno/backend/pkg/sessionplan/service"
@@ -26,7 +26,7 @@ func NewSessionPlanWorker(svc service.SessionPlanService, interval time.Duration
 
 // Start starts the worker
 func (w *SessionPlanWorker) Start() {
-	log.Printf("Starting session plan worker (interval: %v)", w.interval)
+	logger.Printf("Starting session plan worker (interval: %v)", w.interval)
 
 	// Run immediately on start
 	w.runGeneration()
@@ -39,7 +39,7 @@ func (w *SessionPlanWorker) Start() {
 		case <-ticker.C:
 			w.runGeneration()
 		case <-w.stopCh:
-			log.Println("Session plan worker stopped")
+			logger.Println("Session plan worker stopped")
 			return
 		}
 	}
@@ -55,13 +55,13 @@ func (w *SessionPlanWorker) runGeneration() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	log.Println("Running session plan appointment generation...")
+	logger.Println("Running session plan appointment generation...")
 
 	err := w.service.GenerateAllPending(ctx, 2) // Generate 2 weeks ahead
 	if err != nil {
-		log.Printf("Error generating appointments: %v", err)
+		logger.Printf("Error generating appointments: %v", err)
 		return
 	}
 
-	log.Println("Session plan appointment generation completed")
+	logger.Println("Session plan appointment generation completed")
 }

@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
+	"github.com/aseno/backend/internal/logger"
 	"net/http"
 	"strings"
 	"time"
@@ -61,7 +61,7 @@ func NewOpenRouterAgent(cfg Config, toolRegistry *tools.Registry, toolExecutor *
 		Timeout: timeout,
 	}
 
-	log.Printf("[OpenRouter Agent] Initialized with model: %s (fallbacks: %v)", model, fallbackModels)
+	logger.Printf("[OpenRouter Agent] Initialized with model: %s (fallbacks: %v)", model, fallbackModels)
 
 	return &openRouterAgent{
 		apiKey:         cfg.APIKey,
@@ -95,19 +95,19 @@ func (a *openRouterAgent) Generate(ctx context.Context, req *AgentRequest) (*Age
 	// Try with primary model first
 	resp, err := a.generateWithModel(ctx, req, a.model)
 	if err != nil {
-		log.Printf("[OpenRouter Agent] Primary model (%s) failed: %v", a.model, err)
+		logger.Printf("[OpenRouter Agent] Primary model (%s) failed: %v", a.model, err)
 
 		// Try each fallback model in sequence
 		for i, fallbackModel := range a.fallbackModels {
-			log.Printf("[OpenRouter Agent] Trying fallback model %d/%d: %s", i+1, len(a.fallbackModels), fallbackModel)
+			logger.Printf("[OpenRouter Agent] Trying fallback model %d/%d: %s", i+1, len(a.fallbackModels), fallbackModel)
 			resp, err = a.generateWithModel(ctx, req, fallbackModel)
 			if err == nil {
 				// Success with fallback
-				log.Printf("[OpenRouter Agent] Success with fallback model: %s", fallbackModel)
+				logger.Printf("[OpenRouter Agent] Success with fallback model: %s", fallbackModel)
 				resp.Latency = time.Since(start)
 				return resp, nil
 			}
-			log.Printf("[OpenRouter Agent] Fallback model %s failed: %v", fallbackModel, err)
+			logger.Printf("[OpenRouter Agent] Fallback model %s failed: %v", fallbackModel, err)
 		}
 
 		// All models failed
@@ -266,7 +266,7 @@ func (a *openRouterAgent) generateWithModel(ctx context.Context, req *AgentReque
 			// Parse arguments
 			var args map[string]interface{}
 			if err := json.Unmarshal([]byte(toolCall.Function.Arguments), &args); err != nil {
-				log.Printf("[OpenRouter Agent] Failed to parse tool arguments: %v", err)
+				logger.Printf("[OpenRouter Agent] Failed to parse tool arguments: %v", err)
 				continue
 			}
 
@@ -283,7 +283,7 @@ func (a *openRouterAgent) generateWithModel(ctx context.Context, req *AgentReque
 
 			if toolErr != nil {
 				tc.Error = toolErr.Error()
-				log.Printf("[OpenRouter Agent] Tool %s failed: %v", toolCall.Function.Name, toolErr)
+				logger.Printf("[OpenRouter Agent] Tool %s failed: %v", toolCall.Function.Name, toolErr)
 
 				// Add structured error result
 				result = map[string]interface{}{
@@ -336,7 +336,7 @@ func (a *openRouterAgent) generateWithModel(ctx context.Context, req *AgentReque
 		Provider:     "openrouter",
 	}
 
-	log.Printf("[OpenRouter Agent] Generated response with %d tool calls, %d tokens, model: %s",
+	logger.Printf("[OpenRouter Agent] Generated response with %d tool calls, %d tokens, model: %s",
 		len(allToolCalls), finalResponse.Usage.TotalTokens, modelName)
 
 	return agentResp, nil
@@ -395,7 +395,7 @@ func (a *openRouterAgent) callAPI(ctx context.Context, req openRouterRequest) (*
 
 // executeFunctionCall executes a single function call
 func (a *openRouterAgent) executeFunctionCall(ctx context.Context, name string, args map[string]interface{}) (interface{}, error) {
-	log.Printf("[OpenRouter Agent] Executing tool: %s with args: %v", name, args)
+	logger.Printf("[OpenRouter Agent] Executing tool: %s with args: %v", name, args)
 
 	// Update execution context
 	a.execContext.Context = ctx
@@ -403,13 +403,13 @@ func (a *openRouterAgent) executeFunctionCall(ctx context.Context, name string, 
 	// Execute tool
 	result, err := a.toolExecutor.Execute(a.execContext, name, args)
 	if err != nil {
-		log.Printf("[OpenRouter Agent] Tool %s execution error: %v", name, err)
+		logger.Printf("[OpenRouter Agent] Tool %s execution error: %v", name, err)
 		return map[string]interface{}{
 			"success": false,
 			"error":   err.Error(),
 		}, err
 	}
 
-	log.Printf("[OpenRouter Agent] Tool %s executed successfully", name)
+	logger.Printf("[OpenRouter Agent] Tool %s executed successfully", name)
 	return result, nil
 }

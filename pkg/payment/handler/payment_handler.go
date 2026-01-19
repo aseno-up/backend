@@ -3,7 +3,7 @@ package handler
 import (
 	"encoding/json"
 	"io"
-	"log"
+	"github.com/aseno/backend/internal/logger"
 	"net/http"
 	"strconv"
 	"time"
@@ -392,22 +392,22 @@ func (h *paymentHandler) Webhook(c *gin.Context) {
 
 	body, err := io.ReadAll(c.Request.Body)
 	if err != nil {
-		log.Printf("Error reading webhook body: %v", err)
+		logger.Printf("Error reading webhook body: %v", err)
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Failed to read body"})
 		return
 	}
 
-	log.Printf("Asaas Webhook received: %s", string(body))
+	logger.Printf("Asaas Webhook received: %s", string(body))
 
 	var payload model.AsaasWebhookPayload
 	if err := json.Unmarshal(body, &payload); err != nil {
-		log.Printf("Error parsing webhook payload: %v", err)
+		logger.Printf("Error parsing webhook payload: %v", err)
 		c.JSON(http.StatusOK, gin.H{"status": "received", "error": "parse_error"})
 		return
 	}
 
 	if err := h.service.HandleWebhook(c.Request.Context(), &payload); err != nil {
-		log.Printf("Error handling webhook: %v", err)
+		logger.Printf("Error handling webhook: %v", err)
 	}
 
 	c.JSON(http.StatusOK, gin.H{"status": "processed"})

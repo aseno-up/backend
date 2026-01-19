@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"github.com/aseno/backend/internal/logger"
 	"sync"
 	"time"
 
@@ -97,7 +97,7 @@ func (r *rabbitMQ) Connect(ctx context.Context) error {
 	// Start connection monitoring
 	go r.monitorConnection()
 
-	log.Printf("Connected to RabbitMQ, queue: %s", r.config.QueueName)
+	logger.Printf("Connected to RabbitMQ, queue: %s", r.config.QueueName)
 	return nil
 }
 
@@ -140,7 +140,7 @@ func (r *rabbitMQ) monitorConnection() {
 	select {
 	case err := <-connClose:
 		if err != nil {
-			log.Printf("RabbitMQ connection closed: %v", err)
+			logger.Printf("RabbitMQ connection closed: %v", err)
 			r.mu.Lock()
 			r.connected = false
 			r.mu.Unlock()
@@ -162,15 +162,15 @@ func (r *rabbitMQ) reconnect() {
 		default:
 		}
 
-		log.Println("Attempting to reconnect to RabbitMQ...")
+		logger.Println("Attempting to reconnect to RabbitMQ...")
 		time.Sleep(5 * time.Second)
 
 		if err := r.Connect(context.Background()); err != nil {
-			log.Printf("Reconnection failed: %v", err)
+			logger.Printf("Reconnection failed: %v", err)
 			continue
 		}
 
-		log.Println("Reconnected to RabbitMQ")
+		logger.Println("Reconnected to RabbitMQ")
 		close(r.reconnectCh)
 		r.reconnectCh = make(chan struct{})
 		return
@@ -247,7 +247,7 @@ func (r *rabbitMQ) PublishWithDelay(ctx context.Context, job *MessageJob, delay 
 	// Per-message TTL in milliseconds
 	ttlMs := fmt.Sprintf("%d", delay.Milliseconds())
 
-	log.Printf("[RabbitMQ] Publishing with delay: job_id=%s, delay=%v, ttl_ms=%s, queue=%s",
+	logger.Printf("[RabbitMQ] Publishing with delay: job_id=%s, delay=%v, ttl_ms=%s, queue=%s",
 		job.ID, delay, ttlMs, r.config.DelayQueueName)
 
 	return r.channel.PublishWithContext(
@@ -315,7 +315,7 @@ func (r *rabbitMQ) ConsumeWithRetry(ctx context.Context, handler func(job *Messa
 
 			job, err := FromJSON(msg.Body)
 			if err != nil {
-				log.Printf("Failed to parse message: %v", err)
+				logger.Printf("Failed to parse message: %v", err)
 				msg.Nack(false, false) // Don't requeue malformed messages
 				continue
 			}
@@ -339,24 +339,24 @@ func (r *rabbitMQ) handleFailedMessage(ctx context.Context, job *MessageJob, err
 	// Update job with failure info
 	job.MarkFailed(err.Error(), nextRetryAt)
 
-	log.Printf("Message %s failed (attempt %d/%d): %v. Next retry in %v",
+	logger.Printf("Message %s failed (attempt %d/%d): %v. Next retry in %v",
 		job.ID, job.Attempts, job.MaxAttempts, err, delay)
 
 	// Check if we should retry
 	if job.ShouldRetry() {
 		// Publish to delay queue with exponential backoff
 		if pubErr := r.PublishWithDelay(ctx, job, delay); pubErr != nil {
-			log.Printf("Failed to publish retry for %s: %v", job.ID, pubErr)
+			logger.Printf("Failed to publish retry for %s: %v", job.ID, pubErr)
 			// If we can't publish retry, move to DLQ
 			if dlqErr := r.PublishToDeadLetter(ctx, job, fmt.Sprintf("retry publish failed: %v (original: %v)", pubErr, err)); dlqErr != nil {
-				log.Printf("Failed to publish to DLQ: %v", dlqErr)
+				logger.Printf("Failed to publish to DLQ: %v", dlqErr)
 			}
 		}
 	} else {
 		// Max attempts reached, move to dead letter queue
-		log.Printf("Message %s exceeded max attempts (%d), moving to DLQ", job.ID, job.MaxAttempts)
+		logger.Printf("Message %s exceeded max attempts (%d), moving to DLQ", job.ID, job.MaxAttempts)
 		if dlqErr := r.PublishToDeadLetter(ctx, job, err.Error()); dlqErr != nil {
-			log.Printf("Failed to publish to DLQ: %v", dlqErr)
+			logger.Printf("Failed to publish to DLQ: %v", dlqErr)
 		}
 	}
 

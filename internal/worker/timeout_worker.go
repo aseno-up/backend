@@ -2,7 +2,7 @@ package worker
 
 import (
 	"context"
-	"log"
+	"github.com/aseno/backend/internal/logger"
 	"time"
 
 	"github.com/google/uuid"
@@ -35,11 +35,11 @@ func NewTimeoutWorker(
 // Start starts the timeout worker
 func (w *TimeoutWorker) Start() {
 	if !w.config.TimeoutWorkerEnabled {
-		log.Println("Timeout worker is disabled")
+		logger.Println("Timeout worker is disabled")
 		return
 	}
 
-	log.Printf("Starting timeout worker (interval: %v, timeout duration: %v)",
+	logger.Printf("Starting timeout worker (interval: %v, timeout duration: %v)",
 		w.config.TimeoutWorkerInterval,
 		w.config.ConfirmationTimeoutDuration)
 
@@ -54,7 +54,7 @@ func (w *TimeoutWorker) Start() {
 		case <-ticker.C:
 			w.processTimeouts()
 		case <-w.stopCh:
-			log.Println("Timeout worker stopped")
+			logger.Println("Timeout worker stopped")
 			return
 		}
 	}
@@ -73,7 +73,7 @@ func (w *TimeoutWorker) processTimeouts() {
 	// Get appointments with expired confirmations
 	appointments, err := w.appointmentRepo.GetExpiredConfirmations(ctx, 100)
 	if err != nil {
-		log.Printf("Error getting expired confirmations: %v", err)
+		logger.Printf("Error getting expired confirmations: %v", err)
 		return
 	}
 
@@ -81,19 +81,19 @@ func (w *TimeoutWorker) processTimeouts() {
 		return
 	}
 
-	log.Printf("Processing %d expired confirmation timeouts...", len(appointments))
+	logger.Printf("Processing %d expired confirmation timeouts...", len(appointments))
 
 	processed := 0
 	for _, apt := range appointments {
 		if err := w.processExpiredAppointment(ctx, apt); err != nil {
-			log.Printf("Error processing expired appointment %s: %v", apt.ID, err)
+			logger.Printf("Error processing expired appointment %s: %v", apt.ID, err)
 			continue
 		}
 		processed++
 	}
 
 	if processed > 0 {
-		log.Printf("Timeout processing completed: %d appointments marked as no_response", processed)
+		logger.Printf("Timeout processing completed: %d appointments marked as no_response", processed)
 	}
 }
 
@@ -105,7 +105,7 @@ func (w *TimeoutWorker) processExpiredAppointment(ctx context.Context, apt *appo
 	}
 
 	// Log the timeout event
-	log.Printf("Appointment %s marked as no_response (patient: %s, clinic: %s)",
+	logger.Printf("Appointment %s marked as no_response (patient: %s, clinic: %s)",
 		apt.ID,
 		apt.Patient.Name,
 		apt.ClinicName)

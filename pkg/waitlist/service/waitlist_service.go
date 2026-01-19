@@ -3,7 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
-	"log"
+	"github.com/aseno/backend/internal/logger"
 	"math"
 	"strings"
 	"time"
@@ -244,19 +244,19 @@ func (s *waitlistService) Delete(ctx context.Context, id, clinicID uuid.UUID) er
 func (s *waitlistService) ProcessCancelledAppointment(ctx context.Context, clinicID, professionalID uuid.UUID, slotTime time.Time, durationMinutes int) error {
 	// Check plan restriction silently (log instead of error return, since this is async)
 	if err := s.checkPlanRestriction(ctx, clinicID); err != nil {
-		log.Printf("[Waitlist] Skipping encaixe for clinic %s: %v", clinicID, err)
+		logger.Printf("[Waitlist] Skipping encaixe for clinic %s: %v", clinicID, err)
 		return nil
 	}
 
 	// Get clinic info for WhatsApp
 	clinic, err := s.clinicProvider.GetClinicInfo(ctx, clinicID)
 	if err != nil {
-		log.Printf("[Waitlist] Error getting clinic info: %v", err)
+		logger.Printf("[Waitlist] Error getting clinic info: %v", err)
 		return err
 	}
 
 	if !clinic.WhatsAppConnected || clinic.WhatsAppInstance == "" {
-		log.Printf("[Waitlist] Clinic %s does not have WhatsApp connected, skipping encaixe", clinicID)
+		logger.Printf("[Waitlist] Clinic %s does not have WhatsApp connected, skipping encaixe", clinicID)
 		return nil
 	}
 
@@ -275,12 +275,12 @@ func (s *waitlistService) ProcessCancelledAppointment(ctx context.Context, clini
 	// Find the next matching patient in the waitlist
 	entry, err := s.repo.FindNextMatchingPatient(ctx, clinicID, &professionalID, dayOfWeek, slotTime)
 	if err != nil {
-		log.Printf("[Waitlist] Error finding matching patient: %v", err)
+		logger.Printf("[Waitlist] Error finding matching patient: %v", err)
 		return err
 	}
 
 	if entry == nil {
-		log.Printf("[Waitlist] No matching patient found for slot %s", slotTime)
+		logger.Printf("[Waitlist] No matching patient found for slot %s", slotTime)
 		return nil
 	}
 
@@ -288,7 +288,7 @@ func (s *waitlistService) ProcessCancelledAppointment(ctx context.Context, clini
 	now := time.Now()
 	err = s.repo.UpdateStatus(ctx, entry.ID, model.WaitlistStatusNotified, &now, &slotTime, &professionalID)
 	if err != nil {
-		log.Printf("[Waitlist] Error updating entry status: %v", err)
+		logger.Printf("[Waitlist] Error updating entry status: %v", err)
 		return err
 	}
 
@@ -312,11 +312,11 @@ func (s *waitlistService) ProcessCancelledAppointment(ctx context.Context, clini
 		}
 
 		if err := s.messageQueue.Publish(ctx, job); err != nil {
-			log.Printf("[Waitlist] Error publishing message to queue: %v", err)
+			logger.Printf("[Waitlist] Error publishing message to queue: %v", err)
 			return err
 		}
 
-		log.Printf("[Waitlist] Sent slot offer to %s for slot %s", entry.PatientName, slotTime)
+		logger.Printf("[Waitlist] Sent slot offer to %s for slot %s", entry.PatientName, slotTime)
 	}
 
 	return nil
@@ -331,7 +331,7 @@ func (s *waitlistService) HandlePatientResponse(ctx context.Context, clinicID uu
 	}
 
 	if entry == nil {
-		log.Printf("[Waitlist] No pending entry found for phone %s", phone)
+		logger.Printf("[Waitlist] No pending entry found for phone %s", phone)
 		return nil
 	}
 
@@ -364,29 +364,29 @@ func (s *waitlistService) HandlePatientResponse(ctx context.Context, clinicID uu
 					s.defaultDuration,
 				)
 				if err == nil {
-					log.Printf("[Waitlist] Created appointment %s from waitlist entry %s", newID, entry.ID)
+					logger.Printf("[Waitlist] Created appointment %s from waitlist entry %s", newID, entry.ID)
 				}
 				action = "created"
 			}
 
 			if err != nil {
-				log.Printf("[Waitlist] Error processing acceptance (%s): %v", action, err)
+				logger.Printf("[Waitlist] Error processing acceptance (%s): %v", action, err)
 				// Still mark as scheduled? No, maybe kept as notified or failed?
 				// For now, let's keep it simple and mark as scheduled but log error, 
 				// or maybe we should send a message saying "sorry, slot taken"?
 				// Ideally we should handle this failure gracefully.
 			} else {
-				log.Printf("[Waitlist] Successfully %s appointment for entry %s", action, entry.ID)
+				logger.Printf("[Waitlist] Successfully %s appointment for entry %s", action, entry.ID)
 				
 				// Mark entry as scheduled only if successful
 				err = s.repo.UpdateStatus(ctx, entry.ID, model.WaitlistStatusScheduled, nil, nil, nil)
 				if err != nil {
-					log.Printf("[Waitlist] Error updating status to scheduled: %v", err)
+					logger.Printf("[Waitlist] Error updating status to scheduled: %v", err)
 				}
 
 				// Send confirmation message
 				if err := s.sendConfirmationMessage(ctx, clinicID, entry); err != nil {
-					log.Printf("[Waitlist] Error sending confirmation message: %v", err)
+					logger.Printf("[Waitlist] Error sending confirmation message: %v", err)
 				}
 			}
 		}
@@ -397,7 +397,7 @@ func (s *waitlistService) HandlePatientResponse(ctx context.Context, clinicID uu
 			return err
 		}
 
-		log.Printf("[Waitlist] Patient %s declined slot, looking for next patient", entry.PatientID)
+		logger.Printf("[Waitlist] Patient %s declined slot, looking for next patient", entry.PatientID)
 
 		// Try to offer to the next patient
 		if entry.PendingSlotTime != nil && entry.PendingSlotProfessional != nil {
@@ -405,7 +405,7 @@ func (s *waitlistService) HandlePatientResponse(ctx context.Context, clinicID uu
 				// Use background context since this is async
 				bgCtx := context.Background()
 				if err := s.ProcessCancelledAppointment(bgCtx, clinicID, *entry.PendingSlotProfessional, *entry.PendingSlotTime, s.defaultDuration); err != nil {
-					log.Printf("[Waitlist] Error processing next patient: %v", err)
+					logger.Printf("[Waitlist] Error processing next patient: %v", err)
 				}
 			}()
 		}

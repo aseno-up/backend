@@ -3,7 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
-	"log"
+	"github.com/aseno/backend/internal/logger"
 	"math"
 	"time"
 
@@ -170,7 +170,7 @@ func (s *appointmentService) syncToGoogleCalendar(clinicID uuid.UUID, apt *model
 		bgCtx := context.Background()
 		aptData := s.toCalendarData(apt)
 		if err := s.calendarService.SyncAppointmentToGoogle(bgCtx, clinicID, aptData); err != nil {
-			log.Printf("[Calendar Sync] Error syncing appointment %s: %v", apt.ID, err)
+			logger.Printf("[Calendar Sync] Error syncing appointment %s: %v", apt.ID, err)
 		}
 	}()
 }
@@ -185,7 +185,7 @@ func (s *appointmentService) updateGoogleCalendar(clinicID uuid.UUID, apt *model
 		bgCtx := context.Background()
 		aptData := s.toCalendarData(apt)
 		if err := s.calendarService.UpdateAppointmentInGoogle(bgCtx, clinicID, aptData); err != nil {
-			log.Printf("[Calendar Sync] Error updating appointment %s in Google: %v", apt.ID, err)
+			logger.Printf("[Calendar Sync] Error updating appointment %s in Google: %v", apt.ID, err)
 		}
 	}()
 }
@@ -199,7 +199,7 @@ func (s *appointmentService) deleteFromGoogleCalendar(clinicID uuid.UUID, appoin
 	go func() {
 		bgCtx := context.Background()
 		if err := s.calendarService.DeleteAppointmentFromGoogle(bgCtx, clinicID, appointmentID); err != nil {
-			log.Printf("[Calendar Sync] Error removing appointment %s from Google: %v", appointmentID, err)
+			logger.Printf("[Calendar Sync] Error removing appointment %s from Google: %v", appointmentID, err)
 		}
 	}()
 }
@@ -216,7 +216,7 @@ func (s *appointmentService) SuggestSmartSlots(ctx context.Context, clinicID, pr
 	stats, err := s.repo.GetSlotPerformanceStats(ctx, clinicID, professionalID)
 	if err != nil {
 		// Log error but continue without stats
-		log.Printf("Error getting slot stats: %v", err)
+		logger.Printf("Error getting slot stats: %v", err)
 	}
 
 	// Map stats for easy lookup: [DayOfWeek][Hour] -> Rate
@@ -427,7 +427,7 @@ func (s *appointmentService) Create(ctx context.Context, clinicID uuid.UUID, req
 			}
 
 			if _, err := s.waitlistService.Create(bgCtx, clinicID, wlReq); err != nil {
-				log.Printf("[Appointment] Error creating anticipation waitlist entry: %v", err)
+				logger.Printf("[Appointment] Error creating anticipation waitlist entry: %v", err)
 			}
 		}()
 	}
@@ -655,7 +655,7 @@ func (s *appointmentService) Cancel(ctx context.Context, id, clinicID uuid.UUID,
 		go func() {
 			bgCtx := context.Background()
 			if err := s.waitlistService.ProcessCancelledAppointment(bgCtx, clinicID, professionalID, slotTime, durationMinutes); err != nil {
-				log.Printf("[Appointment] Error processing waitlist for cancelled appointment: %v", err)
+				logger.Printf("[Appointment] Error processing waitlist for cancelled appointment: %v", err)
 			}
 		}()
 	}
@@ -683,7 +683,7 @@ func (s *appointmentService) Complete(ctx context.Context, id, clinicID uuid.UUI
 		go func() {
 			bgCtx := context.Background()
 			if err := s.riskCalculator.CalculateRiskScore(bgCtx, appointment.PatientID, clinicID); err != nil {
-				log.Printf("[Appointment] Error recalculating patient risk after completion: %v", err)
+				logger.Printf("[Appointment] Error recalculating patient risk after completion: %v", err)
 			}
 		}()
 	}
@@ -708,7 +708,7 @@ func (s *appointmentService) MarkNoShow(ctx context.Context, id, clinicID uuid.U
 		go func() {
 			bgCtx := context.Background()
 			if err := s.riskCalculator.CalculateRiskScore(bgCtx, appointment.PatientID, clinicID); err != nil {
-				log.Printf("[Appointment] Error recalculating patient risk after no-show: %v", err)
+				logger.Printf("[Appointment] Error recalculating patient risk after no-show: %v", err)
 			}
 		}()
 	}

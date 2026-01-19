@@ -3,7 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
-	"log"
+	"github.com/aseno/backend/internal/logger"
 	"strings"
 	"time"
 
@@ -116,7 +116,7 @@ func (s *aiAgentService) ProcessMessage(ctx context.Context, req *MessageRequest
 	// Get clinic configuration for AI settings
 	clinic, err := s.clinicRepo.GetByID(ctx, req.ClinicID)
 	if err != nil {
-		log.Printf("[AI Agent Service] Warning: failed to fetch clinic settings, using defaults: %v", err)
+		logger.Printf("[AI Agent Service] Warning: failed to fetch clinic settings, using defaults: %v", err)
 		clinic = nil // Will use default settings
 	}
 
@@ -136,14 +136,14 @@ func (s *aiAgentService) ProcessMessage(ctx context.Context, req *MessageRequest
 
 	// Add user message to conversation history
 	if err := s.conversationMgr.AddUserMessage(ctx, conv.ID, req.MessageText); err != nil {
-		log.Printf("[AI Agent Service] Warning: failed to add user message to history: %v", err)
+		logger.Printf("[AI Agent Service] Warning: failed to add user message to history: %v", err)
 	}
 
 	// Update conversation state if intent is identified
 	if req.Intent != model.MessageIntentUnknown && req.Intent != "" {
 		state := s.mapIntentToState(req.Intent)
 		if err := s.conversationMgr.UpdateState(ctx, conv.ID, state, req.Intent); err != nil {
-			log.Printf("[AI Agent Service] Warning: failed to update conversation state: %v", err)
+			logger.Printf("[AI Agent Service] Warning: failed to update conversation state: %v", err)
 		}
 	}
 
@@ -164,7 +164,7 @@ func (s *aiAgentService) ProcessMessage(ctx context.Context, req *MessageRequest
 
 	// Add assistant message to conversation history
 	if err := s.conversationMgr.AddAssistantMessage(ctx, conv.ID, agentResp.Content, agentResp.ToolCalls); err != nil {
-		log.Printf("[AI Agent Service] Warning: failed to add assistant message to history: %v", err)
+		logger.Printf("[AI Agent Service] Warning: failed to add assistant message to history: %v", err)
 	}
 
 	// Log tool calls for monitoring
@@ -188,7 +188,7 @@ func (s *aiAgentService) ProcessMessage(ctx context.Context, req *MessageRequest
 			err,
 			duration,
 		); logErr != nil {
-			log.Printf("[AI Agent Service] Warning: failed to log tool call: %v", logErr)
+			logger.Printf("[AI Agent Service] Warning: failed to log tool call: %v", logErr)
 		}
 	}
 
@@ -206,7 +206,7 @@ func (s *aiAgentService) ProcessMessage(ctx context.Context, req *MessageRequest
 		UsedFallback:  false, // TODO: Track fallback usage
 	}
 
-	log.Printf("[AI Agent Service] Processed message in %v, %d tools called, %d tokens used",
+	logger.Printf("[AI Agent Service] Processed message in %v, %d tools called, %d tokens used",
 		msgResp.Latency, msgResp.ToolCallCount, msgResp.TokensUsed)
 
 	return msgResp, nil

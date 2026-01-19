@@ -2,7 +2,7 @@ package service
 
 import (
 	"context"
-	"log"
+	"github.com/aseno/backend/internal/logger"
 	"strconv"
 	"sync"
 	"time"
@@ -85,10 +85,10 @@ func (s *settingsService) Get(ctx context.Context, key string) (string, error) {
 
 // Update updates a setting and invalidates cache
 func (s *settingsService) Update(ctx context.Context, key, value string) error {
-	log.Printf("[Settings] Update: key=%s, value=%s", key, value)
+	logger.Printf("[Settings] Update: key=%s, value=%s", key, value)
 
 	if err := s.repo.Set(ctx, key, value); err != nil {
-		log.Printf("[Settings] Update: repo.Set error: %v", err)
+		logger.Printf("[Settings] Update: repo.Set error: %v", err)
 		return err
 	}
 
@@ -98,11 +98,11 @@ func (s *settingsService) Update(ctx context.Context, key, value string) error {
 	s.cacheTime = time.Time{}         // Force refresh on next read
 	s.cacheMu.Unlock()
 
-	log.Printf("[Settings] Update: cache cleared, refreshing...")
+	logger.Printf("[Settings] Update: cache cleared, refreshing...")
 
 	// Force immediate refresh
 	if err := s.RefreshCache(ctx); err != nil {
-		log.Printf("[Settings] Update: RefreshCache error: %v", err)
+		logger.Printf("[Settings] Update: RefreshCache error: %v", err)
 	}
 
 	return nil
@@ -112,7 +112,7 @@ func (s *settingsService) Update(ctx context.Context, key, value string) error {
 func (s *settingsService) RefreshCache(ctx context.Context) error {
 	settings, err := s.repo.GetAll(ctx)
 	if err != nil {
-		log.Printf("[Settings] RefreshCache error: %v", err)
+		logger.Printf("[Settings] RefreshCache error: %v", err)
 		return err
 	}
 
@@ -122,11 +122,11 @@ func (s *settingsService) RefreshCache(ctx context.Context) error {
 	s.cache = make(map[string]string)
 	for _, setting := range settings {
 		s.cache[setting.Key] = setting.Value
-		log.Printf("[Settings] Cached: %s = %s", setting.Key, setting.Value)
+		logger.Printf("[Settings] Cached: %s = %s", setting.Key, setting.Value)
 	}
 	s.cacheTime = time.Now()
 
-	log.Printf("[Settings] Cache refreshed with %d settings", len(settings))
+	logger.Printf("[Settings] Cache refreshed with %d settings", len(settings))
 	return nil
 }
 
@@ -199,19 +199,19 @@ func (s *settingsService) GetPlanPrice(ctx context.Context, planType string) int
 // GetTrialDays returns the trial period in days
 func (s *settingsService) GetTrialDays(ctx context.Context) int {
 	val, err := s.Get(ctx, model.SettingTrialDays)
-	log.Printf("[Settings] GetTrialDays: key=%s, val=%s, err=%v", model.SettingTrialDays, val, err)
+	logger.Printf("[Settings] GetTrialDays: key=%s, val=%s, err=%v", model.SettingTrialDays, val, err)
 	if err != nil || val == "" {
-		log.Printf("[Settings] GetTrialDays: using default 14")
+		logger.Printf("[Settings] GetTrialDays: using default 14")
 		return 14 // default
 	}
 
 	days, err := strconv.Atoi(val)
 	if err != nil {
-		log.Printf("[Settings] GetTrialDays: parse error, using default 14")
+		logger.Printf("[Settings] GetTrialDays: parse error, using default 14")
 		return 14
 	}
 
-	log.Printf("[Settings] GetTrialDays: returning %d", days)
+	logger.Printf("[Settings] GetTrialDays: returning %d", days)
 	return days
 }
 

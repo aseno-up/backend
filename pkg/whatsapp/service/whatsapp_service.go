@@ -3,7 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
-	"log"
+	"github.com/aseno/backend/internal/logger"
 	"regexp"
 	"strconv"
 	"strings"
@@ -531,7 +531,7 @@ func (s *whatsAppService) handleRescheduleResponse(ctx context.Context, msg *mod
 
 	newApt, err := s.appointmentCreator.CreateFromReschedule(ctx, entry.clinicID, msg.Phone, selectedSlot, entry.originalApt)
 	if err != nil {
-		log.Printf("[WhatsApp] Failed to create reschedule appointment: %v", err)
+		logger.Printf("[WhatsApp] Failed to create reschedule appointment: %v", err)
 		s.SendTextMessage(ctx, msg.Instance, msg.Phone, "Nao foi possivel reagendar. Por favor, entre em contato conosco.")
 		return err
 	}
@@ -771,21 +771,21 @@ func (s *whatsAppService) ClassifyMessage(content string) model.MessageIntent {
 
 		result, err := s.classifier.Classify(ctx, content)
 		if err == nil && result.Confidence >= s.confidenceThreshold {
-			log.Printf("[Classifier] AI (%s/%s): intent=%s confidence=%.2f latency=%v reason=%q",
+			logger.Printf("[Classifier] AI (%s/%s): intent=%s confidence=%.2f latency=%v reason=%q",
 				result.Provider, result.Model, result.Intent, result.Confidence, result.Latency, result.Reasoning)
 			return result.Intent
 		}
 		if err != nil {
-			log.Printf("[Classifier] AI error, falling back to regex: %v", err)
+			logger.Printf("[Classifier] AI error, falling back to regex: %v", err)
 		} else {
-			log.Printf("[Classifier] AI confidence %.2f below threshold %.2f, falling back to regex",
+			logger.Printf("[Classifier] AI confidence %.2f below threshold %.2f, falling back to regex",
 				result.Confidence, s.confidenceThreshold)
 		}
 	}
 
 	// Fallback to regex classification
 	intent := s.classifyWithRegex(content)
-	log.Printf("[Classifier] Regex fallback: intent=%s content=%q", intent, content)
+	logger.Printf("[Classifier] Regex fallback: intent=%s content=%q", intent, content)
 	return intent
 }
 
@@ -901,7 +901,7 @@ func (s *whatsAppService) logMessage(
 	}
 
 	if err := s.messageRepo.Create(ctx, msg); err != nil {
-		log.Printf("Failed to create message: %v", err)
+		logger.Printf("Failed to create message: %v", err)
 		return
 	}
 
@@ -914,17 +914,17 @@ func (s *whatsAppService) logMessage(
 
 		// Log message created
 		if err := s.messageLogService.LogCreated(ctx, msg, payload); err != nil {
-			log.Printf("Failed to log message created: %v", err)
+			logger.Printf("Failed to log message created: %v", err)
 		}
 
 		// Log sent or failed based on status
 		if status == model.MessageStatusFailed {
 			if err := s.messageLogService.LogFailed(ctx, msg, externalIDOrError, payload); err != nil {
-				log.Printf("Failed to log message failed: %v", err)
+				logger.Printf("Failed to log message failed: %v", err)
 			}
 		} else if status == model.MessageStatusSent {
 			if err := s.messageLogService.LogSent(ctx, msg, payload); err != nil {
-				log.Printf("Failed to log message sent: %v", err)
+				logger.Printf("Failed to log message sent: %v", err)
 			}
 		}
 	}
@@ -933,7 +933,7 @@ func (s *whatsAppService) logMessage(
 // handleWithAIAgent delegates message handling to the AI Agent
 func (s *whatsAppService) handleWithAIAgent(ctx context.Context, clinicID uuid.UUID, msg *model.ParsedIncomingMessage) error {
 	if s.aiAgentService == nil {
-		log.Printf("[AI Agent] Service is nil, falling back to traditional flow")
+		logger.Printf("[AI Agent] Service is nil, falling back to traditional flow")
 		return nil
 	}
 
@@ -952,17 +952,17 @@ func (s *whatsAppService) handleWithAIAgent(ctx context.Context, clinicID uuid.U
 		Intent:       intent,
 	}
 
-	log.Printf("[AI Agent] Processing message from %s (intent: %s): %s", msg.Phone, intent, msg.Content)
+	logger.Printf("[AI Agent] Processing message from %s (intent: %s): %s", msg.Phone, intent, msg.Content)
 
 	// Call AI Agent
 	resp, err := s.aiAgentService.ProcessMessage(ctx, req)
 	if err != nil {
-		log.Printf("[AI Agent] Error processing message: %v, falling back to traditional flow", err)
+		logger.Printf("[AI Agent] Error processing message: %v, falling back to traditional flow", err)
 		return nil // Fall back gracefully
 	}
 
 	if resp == nil || len(resp.Segments) == 0 {
-		log.Printf("[AI Agent] No response segments from agent")
+		logger.Printf("[AI Agent] No response segments from agent")
 		return nil
 	}
 
@@ -979,12 +979,12 @@ func (s *whatsAppService) handleWithAIAgent(ctx context.Context, clinicID uuid.U
 
 		_, err := s.SendTextMessage(ctx, msg.Instance, msg.Phone, segment.Content)
 		if err != nil {
-			log.Printf("[AI Agent] Failed to send segment %d: %v", i, err)
+			logger.Printf("[AI Agent] Failed to send segment %d: %v", i, err)
 			return err
 		}
 	}
 
-	log.Printf("[AI Agent] Successfully sent %d segments (tokens: %d, latency: %v)",
+	logger.Printf("[AI Agent] Successfully sent %d segments (tokens: %d, latency: %v)",
 		len(resp.Segments), resp.TokensUsed, resp.Latency)
 	return nil
 }
@@ -997,7 +997,7 @@ func (s *whatsAppService) sendAIResponseSegmented(ctx context.Context, clinicID 
 		var err error
 		clinic, err = s.clinicRepo.GetByID(ctx, clinicID)
 		if err != nil {
-			log.Printf("[WhatsApp] Warning: failed to fetch clinic settings: %v", err)
+			logger.Printf("[WhatsApp] Warning: failed to fetch clinic settings: %v", err)
 		}
 	}
 
@@ -1025,12 +1025,12 @@ func (s *whatsAppService) sendAIResponseSegmented(ctx context.Context, clinicID 
 			ScheduledAt: time.Now().Add(cumulativeDelay),
 		}
 
-		log.Printf("[AI Agent] Segment %d/%d: type=%s, delay=%v, content_preview=\"%s...\"",
+		logger.Printf("[AI Agent] Segment %d/%d: type=%s, delay=%v, content_preview=\"%s...\"",
 			i+1, len(resp.Segments), segment.Type, cumulativeDelay,
 			truncate(segment.Content, 50))
 
 		if err := s.messageQueue.PublishWithDelay(ctx, job, cumulativeDelay); err != nil {
-			log.Printf("[AI Agent] Failed to enqueue segment %d: %v", i, err)
+			logger.Printf("[AI Agent] Failed to enqueue segment %d: %v", i, err)
 			// Continue with next segment - don't fail entirely
 		}
 
@@ -1038,7 +1038,7 @@ func (s *whatsAppService) sendAIResponseSegmented(ctx context.Context, clinicID 
 		cumulativeDelay += segment.DelayAfter
 	}
 
-	log.Printf("[AI Agent] Enqueued %d message segments for %s (tokens: %d, latency: %v)",
+	logger.Printf("[AI Agent] Enqueued %d message segments for %s (tokens: %d, latency: %v)",
 		len(resp.Segments), phone, resp.TokensUsed, resp.Latency)
 	return nil
 }
@@ -1054,7 +1054,7 @@ func (s *whatsAppService) scheduleMessagesForNextBusinessHour(
 	// Get last scheduled message for this clinic
 	lastScheduled, err := s.scheduledMsgRepo.GetLastScheduledForClinic(ctx, clinicID)
 	if err != nil {
-		log.Printf("[WhatsApp] Warning: failed to get last scheduled message: %v", err)
+		logger.Printf("[WhatsApp] Warning: failed to get last scheduled message: %v", err)
 	}
 
 	// Calculate next business hour
@@ -1070,7 +1070,7 @@ func (s *whatsAppService) scheduleMessagesForNextBusinessHour(
 		nextSlot = nextBusinessHour
 	}
 
-	log.Printf("[WhatsApp] Message outside business hours - scheduling %d segments starting at %s",
+	logger.Printf("[WhatsApp] Message outside business hours - scheduling %d segments starting at %s",
 		len(resp.Segments), nextSlot.Format(time.RFC3339))
 
 	// Schedule all segments
@@ -1087,10 +1087,10 @@ func (s *whatsAppService) scheduleMessagesForNextBusinessHour(
 		}
 
 		if err := s.scheduledMsgRepo.Create(ctx, scheduledMsg); err != nil {
-			log.Printf("[WhatsApp] Failed to create scheduled message: %v", err)
+			logger.Printf("[WhatsApp] Failed to create scheduled message: %v", err)
 			// Continue with next segment
 		} else {
-			log.Printf("[WhatsApp] Scheduled message %s for %s at %s",
+			logger.Printf("[WhatsApp] Scheduled message %s for %s at %s",
 				scheduledMsg.ID, phone, nextSlot.Format(time.RFC3339))
 		}
 
@@ -1128,18 +1128,18 @@ func formatPhoneNumber(phone string) string {
 
 // handleScheduleIntent handles a new scheduling request from a patient
 func (s *whatsAppService) handleScheduleIntent(ctx context.Context, clinicID uuid.UUID, msg *model.ParsedIncomingMessage) error {
-	log.Printf("[Schedule] Handling schedule intent for phone=%s clinic=%s", msg.Phone, clinicID)
+	logger.Printf("[Schedule] Handling schedule intent for phone=%s clinic=%s", msg.Phone, clinicID)
 
 	// Check if we have all required dependencies
 	if s.schedulingIntentRepo == nil || s.patientFinderCreator == nil || s.slotFinder == nil {
-		log.Printf("[Schedule] Missing dependencies for scheduling, skipping")
+		logger.Printf("[Schedule] Missing dependencies for scheduling, skipping")
 		return nil
 	}
 
 	// Check if there's already a pending intent for this phone
 	existingIntent, _ := s.schedulingIntentRepo.GetPendingByPhone(ctx, clinicID, msg.Phone)
 	if existingIntent != nil {
-		log.Printf("[Schedule] Found existing pending intent, resending options")
+		logger.Printf("[Schedule] Found existing pending intent, resending options")
 		return s.SendSchedulingOptions(ctx, msg.Instance, msg.Phone, existingIntent)
 	}
 
@@ -1150,7 +1150,7 @@ func (s *whatsAppService) handleScheduleIntent(ctx context.Context, clinicID uui
 	}
 	patient, err := s.patientFinderCreator.FindOrCreateByPhone(ctx, clinicID, msg.Phone, patientName)
 	if err != nil {
-		log.Printf("[Schedule] Failed to find/create patient: %v", err)
+		logger.Printf("[Schedule] Failed to find/create patient: %v", err)
 		return err
 	}
 
@@ -1166,7 +1166,7 @@ func (s *whatsAppService) handleScheduleIntent(ctx context.Context, clinicID uui
 	}
 
 	if len(professionalIDs) == 0 {
-		log.Printf("[Schedule] No professionals available")
+		logger.Printf("[Schedule] No professionals available")
 		_, _ = s.SendTextMessage(ctx, msg.Instance, msg.Phone,
 			"Desculpe, no momento nao temos horarios disponiveis. Por favor, entre em contato com a clinica.")
 		return nil
@@ -1178,7 +1178,7 @@ func (s *whatsAppService) handleScheduleIntent(ctx context.Context, clinicID uui
 		time.Now(), 14, 50, 5, // 50 minutes default, 5 slots max
 	)
 	if err != nil || len(slots) == 0 {
-		log.Printf("[Schedule] No slots available: %v", err)
+		logger.Printf("[Schedule] No slots available: %v", err)
 		_, _ = s.SendTextMessage(ctx, msg.Instance, msg.Phone,
 			"Desculpe, no momento nao temos horarios disponiveis. Por favor, entre em contato com a clinica.")
 		return nil
@@ -1210,7 +1210,7 @@ func (s *whatsAppService) handleScheduleIntent(ctx context.Context, clinicID uui
 	}
 
 	if err := s.schedulingIntentRepo.Create(ctx, intent); err != nil {
-		log.Printf("[Schedule] Failed to create intent: %v", err)
+		logger.Printf("[Schedule] Failed to create intent: %v", err)
 		return err
 	}
 
@@ -1256,7 +1256,7 @@ func (s *whatsAppService) sendSchedulingOptionsSegmented(ctx context.Context, in
 		}
 
 		if err := s.messageQueue.PublishWithDelay(ctx, job, cumulativeDelay); err != nil {
-			log.Printf("[Schedule] Failed to enqueue segment %d: %v", i, err)
+			logger.Printf("[Schedule] Failed to enqueue segment %d: %v", i, err)
 			// Continue with next segment - don't fail entirely
 		}
 
@@ -1264,7 +1264,7 @@ func (s *whatsAppService) sendSchedulingOptionsSegmented(ctx context.Context, in
 		cumulativeDelay += segment.DelayAfter
 	}
 
-	log.Printf("[Schedule] Enqueued %d message segments for %s", len(segments), phone)
+	logger.Printf("[Schedule] Enqueued %d message segments for %s", len(segments), phone)
 	return nil
 }
 
@@ -1288,11 +1288,11 @@ func (s *whatsAppService) sendSchedulingOptionsSimple(ctx context.Context, insta
 	formattedPhone := formatPhoneNumber(phone)
 	_, err := s.client.SendTextMessage(ctx, instance, formattedPhone, sb.String())
 	if err != nil {
-		log.Printf("[Schedule] Failed to send scheduling options: %v", err)
+		logger.Printf("[Schedule] Failed to send scheduling options: %v", err)
 		return err
 	}
 
-	log.Printf("[Schedule] Sent %d slot options to %s", len(intent.SuggestedSlots), phone)
+	logger.Printf("[Schedule] Sent %d slot options to %s", len(intent.SuggestedSlots), phone)
 	return nil
 }
 
@@ -1306,12 +1306,12 @@ func (s *whatsAppService) handleSlotSelection(ctx context.Context, clinicID uuid
 		result, err := s.classifier.MatchSlot(ctx, content, intent.SuggestedSlots)
 		if err == nil && result.Confidence >= s.confidenceThreshold {
 			slotIndex = result.SlotIndex
-			log.Printf("[Schedule] AI matched slot %d with confidence %.2f: %s",
+			logger.Printf("[Schedule] AI matched slot %d with confidence %.2f: %s",
 				slotIndex, result.Confidence, result.Reasoning)
 		} else if err != nil {
-			log.Printf("[Schedule] AI matching failed: %v", err)
+			logger.Printf("[Schedule] AI matching failed: %v", err)
 		} else {
-			log.Printf("[Schedule] AI confidence too low: %.2f < %.2f",
+			logger.Printf("[Schedule] AI confidence too low: %.2f < %.2f",
 				result.Confidence, s.confidenceThreshold)
 		}
 	}
@@ -1321,26 +1321,26 @@ func (s *whatsAppService) handleSlotSelection(ctx context.Context, clinicID uuid
 		if num, err := strconv.Atoi(content); err == nil {
 			if num >= 1 && num <= len(intent.SuggestedSlots) {
 				slotIndex = num - 1
-				log.Printf("[Schedule] Numeric selection: %d", num)
+				logger.Printf("[Schedule] Numeric selection: %d", num)
 			}
 		}
 	}
 
 	// Step 3: If still no match, send helpful message
 	if slotIndex == -1 {
-		log.Printf("[Schedule] Could not parse slot selection from: %q", content)
+		logger.Printf("[Schedule] Could not parse slot selection from: %q", content)
 		_, _ = s.SendTextMessage(ctx, msg.Instance, msg.Phone,
 			"Desculpe, nao consegui entender sua escolha. Voce pode me dizer qual dia/horario prefere, ou responder com o numero da opcao?")
 		return nil
 	}
 
 	selectedSlot := intent.SuggestedSlots[slotIndex]
-	log.Printf("[Schedule] Patient selected slot %d: %s at %s",
+	logger.Printf("[Schedule] Patient selected slot %d: %s at %s",
 		slotIndex+1, selectedSlot.ProfessionalName, selectedSlot.StartTime)
 
 	// Check if we have all required dependencies
 	if s.newAppointmentCreator == nil {
-		log.Printf("[Schedule] Missing appointment creator, cannot create appointment")
+		logger.Printf("[Schedule] Missing appointment creator, cannot create appointment")
 		return nil
 	}
 
@@ -1349,7 +1349,7 @@ func (s *whatsAppService) handleSlotSelection(ctx context.Context, clinicID uuid
 	if intent.PatientID != nil {
 		patientID = *intent.PatientID
 	} else {
-		log.Printf("[Schedule] No patient ID in intent")
+		logger.Printf("[Schedule] No patient ID in intent")
 		return nil
 	}
 
@@ -1358,7 +1358,7 @@ func (s *whatsAppService) handleSlotSelection(ctx context.Context, clinicID uuid
 		selectedSlot.StartTime, 50, // 50 minutes default
 	)
 	if err != nil {
-		log.Printf("[Schedule] Failed to create appointment: %v", err)
+		logger.Printf("[Schedule] Failed to create appointment: %v", err)
 		_, _ = s.SendTextMessage(ctx, msg.Instance, msg.Phone,
 			"Desculpe, ocorreu um erro ao agendar. Por favor, tente novamente.")
 		return err
@@ -1373,7 +1373,7 @@ func (s *whatsAppService) handleSlotSelection(ctx context.Context, clinicID uuid
 	}
 	intent.AppointmentID = &appointment.ID
 	if err := s.schedulingIntentRepo.Update(ctx, intent); err != nil {
-		log.Printf("[Schedule] Failed to update intent status: %v", err)
+		logger.Printf("[Schedule] Failed to update intent status: %v", err)
 	}
 
 	// Send confirmation
@@ -1395,10 +1395,10 @@ func (s *whatsAppService) handleSlotSelection(ctx context.Context, clinicID uuid
 	formattedPhone := formatPhoneNumber(msg.Phone)
 	_, err = s.client.SendTextMessage(ctx, msg.Instance, formattedPhone, message)
 	if err != nil {
-		log.Printf("[Schedule] Failed to send confirmation: %v", err)
+		logger.Printf("[Schedule] Failed to send confirmation: %v", err)
 	}
 
-	log.Printf("[Schedule] Successfully scheduled appointment %s", appointment.ID)
+	logger.Printf("[Schedule] Successfully scheduled appointment %s", appointment.ID)
 	return nil
 }
 

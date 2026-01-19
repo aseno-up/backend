@@ -3,7 +3,7 @@ package redis
 import (
 	"context"
 	"fmt"
-	"log"
+	"github.com/aseno/backend/internal/logger"
 	"strings"
 	"time"
 
@@ -30,12 +30,12 @@ func NewRateLimiter(redisURL string) (*RateLimiter, error) {
 	defer cancel()
 
 	if err := client.Ping(ctx).Err(); err != nil {
-		log.Printf("[Redis] Warning: Failed to connect to Redis: %v (rate limiting will be disabled)", err)
+		logger.Printf("[Redis] Warning: Failed to connect to Redis: %v (rate limiting will be disabled)", err)
 		// Don't return error - we want to continue without Redis
 		return &RateLimiter{client: nil}, nil
 	}
 
-	log.Printf("[Redis] Connected successfully")
+	logger.Printf("[Redis] Connected successfully")
 	return &RateLimiter{client: client}, nil
 }
 
@@ -58,33 +58,33 @@ func (r *RateLimiter) CheckRateLimit(ctx context.Context, clinicID string, phone
 		return 0
 	}
 	if err != nil {
-		log.Printf("[Redis] Error checking rate limit: %v", err)
+		logger.Printf("[Redis] Error checking rate limit: %v", err)
 		return 0 // On error, allow sending
 	}
 
 	// Parse last phone and timestamp
 	lastPhone, lastSentMs, err := parsePhoneAndTimestamp(val)
 	if err != nil {
-		log.Printf("[Redis] Error parsing rate limit data: %v", err)
+		logger.Printf("[Redis] Error parsing rate limit data: %v", err)
 		return 0
 	}
 
 	// If sending to the SAME patient, no delay needed
 	if lastPhone == normalizedPhone {
-		log.Printf("[RateLimiter] Same patient (%s), no delay needed", phone)
+		logger.Printf("[RateLimiter] Same patient (%s), no delay needed", phone)
 		return 0
 	}
 
 	// Sending to DIFFERENT patient - check if enough time has passed
 	elapsed := time.Since(lastSentMs)
 	if elapsed >= minDelay {
-		log.Printf("[RateLimiter] Different patient, but enough time passed (%v >= %v)", elapsed, minDelay)
+		logger.Printf("[RateLimiter] Different patient, but enough time passed (%v >= %v)", elapsed, minDelay)
 		return 0 // Enough time has passed
 	}
 
 	// Need to wait before sending to different patient
 	waitTime := minDelay - elapsed
-	log.Printf("[RateLimiter] Different patient (last: %s, new: %s), need to wait %v", lastPhone, phone, waitTime)
+	logger.Printf("[RateLimiter] Different patient (last: %s, new: %s), need to wait %v", lastPhone, phone, waitTime)
 	return waitTime
 }
 

@@ -2,7 +2,7 @@ package worker
 
 import (
 	"context"
-	"log"
+	"github.com/aseno/backend/internal/logger"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -49,7 +49,7 @@ func (w *ScheduledMessageWorker) Start() {
 	// Each execution processes 1 patient per clinic (up to 100 clinics)
 	pollInterval := time.Duration(w.config.MinDelayBetweenPatientsSeconds) * time.Second
 
-	log.Printf("Starting scheduled message worker (poll interval: %d seconds)",
+	logger.Printf("Starting scheduled message worker (poll interval: %d seconds)",
 		w.config.MinDelayBetweenPatientsSeconds)
 
 	ticker := time.NewTicker(pollInterval)
@@ -63,7 +63,7 @@ func (w *ScheduledMessageWorker) Start() {
 		case <-ticker.C:
 			w.processScheduledMessages()
 		case <-w.stopCh:
-			log.Println("Scheduled message worker stopped")
+			logger.Println("Scheduled message worker stopped")
 			return
 		}
 	}
@@ -83,7 +83,7 @@ func (w *ScheduledMessageWorker) processScheduledMessages() {
 	// Returns ALL messages for those patients
 	messages, err := w.scheduledMsgRepo.GetPendingMessages(ctx, 100)
 	if err != nil {
-		log.Printf("[ScheduledMessageWorker] Error fetching pending messages: %v", err)
+		logger.Printf("[ScheduledMessageWorker] Error fetching pending messages: %v", err)
 		return
 	}
 
@@ -98,7 +98,7 @@ func (w *ScheduledMessageWorker) processScheduledMessages() {
 		patientMessages[key] = append(patientMessages[key], msg)
 	}
 
-	log.Printf("[ScheduledMessageWorker] Processing %d patients (%d total messages)",
+	logger.Printf("[ScheduledMessageWorker] Processing %d patients (%d total messages)",
 		len(patientMessages), len(messages))
 
 	// Process each patient's messages IN PARALLEL (one goroutine per patient)
@@ -115,7 +115,7 @@ func (w *ScheduledMessageWorker) processScheduledMessages() {
 	// Wait for all patients to complete
 	wg.Wait()
 
-	log.Printf("[ScheduledMessageWorker] Batch complete: %d processed, %d failed",
+	logger.Printf("[ScheduledMessageWorker] Batch complete: %d processed, %d failed",
 		atomic.LoadInt64(&w.messagesProcessed), atomic.LoadInt64(&w.messagesFailed))
 }
 
@@ -133,7 +133,7 @@ func (w *ScheduledMessageWorker) processPatientMessages(ctx context.Context, mes
 		}
 	}
 
-	log.Printf("[ScheduledMessageWorker] Sending %d messages to %s (clinic %s)",
+	logger.Printf("[ScheduledMessageWorker] Sending %d messages to %s (clinic %s)",
 		len(messages), messages[0].Phone, messages[0].ClinicID)
 
 	// Send all messages for this patient in sequence with proper delays
@@ -150,30 +150,30 @@ func (w *ScheduledMessageWorker) processPatientMessages(ctx context.Context, mes
 
 // processSingleMessage processes a single scheduled message
 func (w *ScheduledMessageWorker) processSingleMessage(ctx context.Context, msg *whatsapp_model.ScheduledMessage) {
-	log.Printf("[ScheduledMessageWorker] Sending scheduled message %s to %s (scheduled at: %s)",
+	logger.Printf("[ScheduledMessageWorker] Sending scheduled message %s to %s (scheduled at: %s)",
 		msg.ID, msg.Phone, msg.ScheduledAt.Format(time.RFC3339))
 
 	// Send the message via WhatsApp
 	_, err := w.whatsappService.SendTextMessage(ctx, msg.Instance, msg.Phone, msg.Message)
 	if err != nil {
 		atomic.AddInt64(&w.messagesFailed, 1)
-		log.Printf("[ScheduledMessageWorker] Failed to send message %s: %v", msg.ID, err)
+		logger.Printf("[ScheduledMessageWorker] Failed to send message %s: %v", msg.ID, err)
 
 		// Mark as failed (but don't mark as sent, so it can be retried)
 		if markErr := w.scheduledMsgRepo.MarkAsFailed(ctx, msg.ID, err.Error()); markErr != nil {
-			log.Printf("[ScheduledMessageWorker] Failed to mark message as failed: %v", markErr)
+			logger.Printf("[ScheduledMessageWorker] Failed to mark message as failed: %v", markErr)
 		}
 		return
 	}
 
 	// Mark as sent
 	if err := w.scheduledMsgRepo.MarkAsSent(ctx, msg.ID); err != nil {
-		log.Printf("[ScheduledMessageWorker] Failed to mark message as sent: %v", err)
+		logger.Printf("[ScheduledMessageWorker] Failed to mark message as sent: %v", err)
 		return
 	}
 
 	atomic.AddInt64(&w.messagesProcessed, 1)
-	log.Printf("[ScheduledMessageWorker] Successfully sent scheduled message %s to %s", msg.ID, msg.Phone)
+	logger.Printf("[ScheduledMessageWorker] Successfully sent scheduled message %s to %s", msg.ID, msg.Phone)
 }
 
 // GetStats returns current statistics

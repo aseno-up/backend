@@ -3,7 +3,7 @@ package conversation
 import (
 	"context"
 	"fmt"
-	"log"
+	"github.com/aseno/backend/internal/logger"
 	"time"
 
 	"github.com/google/uuid"
@@ -75,7 +75,7 @@ func (m *conversationManager) GetOrCreate(ctx context.Context, clinicID uuid.UUI
 	// Try to get existing active conversation
 	conversation, err := m.repo.GetActiveByPhone(ctx, clinicID, phone)
 	if err == nil && !conversation.IsExpired() {
-		log.Printf("[Conversation Manager] Found active conversation %s for phone %s", conversation.ID, phone)
+		logger.Printf("[Conversation Manager] Found active conversation %s for phone %s", conversation.ID, phone)
 		return conversation, nil
 	}
 
@@ -98,7 +98,7 @@ func (m *conversationManager) GetOrCreate(ctx context.Context, clinicID uuid.UUI
 		return nil, fmt.Errorf("failed to create conversation: %w", err)
 	}
 
-	log.Printf("[Conversation Manager] Created new conversation %s for phone %s", conversation.ID, phone)
+	logger.Printf("[Conversation Manager] Created new conversation %s for phone %s", conversation.ID, phone)
 	return conversation, nil
 }
 
@@ -146,7 +146,7 @@ func (m *conversationManager) UpdateState(ctx context.Context, conversationID uu
 		conversation.Intent = intent
 	}
 
-	log.Printf("[Conversation Manager] Updated conversation %s state to %s (intent: %s)", conversationID, state, intent)
+	logger.Printf("[Conversation Manager] Updated conversation %s state to %s (intent: %s)", conversationID, state, intent)
 
 	return m.repo.Update(ctx, conversation)
 }
@@ -203,7 +203,7 @@ func (m *conversationManager) SetPatientID(ctx context.Context, conversationID u
 
 	conversation.PatientID = &patientID
 
-	log.Printf("[Conversation Manager] Set patient ID %s for conversation %s", patientID, conversationID)
+	logger.Printf("[Conversation Manager] Set patient ID %s for conversation %s", patientID, conversationID)
 
 	return m.repo.Update(ctx, conversation)
 }
@@ -218,7 +218,7 @@ func (m *conversationManager) ExpireConversation(ctx context.Context, conversati
 	conversation.State = ConversationStateExpired
 	conversation.ExpiresAt = time.Now()
 
-	log.Printf("[Conversation Manager] Expired conversation %s", conversationID)
+	logger.Printf("[Conversation Manager] Expired conversation %s", conversationID)
 
 	return m.repo.Update(ctx, conversation)
 }
@@ -232,7 +232,7 @@ func (m *conversationManager) CompleteConversation(ctx context.Context, conversa
 
 	conversation.State = ConversationStateCompleted
 
-	log.Printf("[Conversation Manager] Completed conversation %s", conversationID)
+	logger.Printf("[Conversation Manager] Completed conversation %s", conversationID)
 
 	return m.repo.Update(ctx, conversation)
 }

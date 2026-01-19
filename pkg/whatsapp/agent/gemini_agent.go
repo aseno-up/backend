@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"github.com/aseno/backend/internal/logger"
 	"strings"
 	"time"
 
@@ -61,7 +61,7 @@ func NewGeminiAgent(cfg Config, toolRegistry *tools.Registry, toolExecutor *tool
 		timeout = 30 * time.Second
 	}
 
-	log.Printf("[Gemini Agent] Initialized with model: %s (fallbacks: %v)", model, fallbackModels)
+	logger.Printf("[Gemini Agent] Initialized with model: %s (fallbacks: %v)", model, fallbackModels)
 
 	return &geminiAgent{
 		client:         client,
@@ -93,19 +93,19 @@ func (a *geminiAgent) Generate(ctx context.Context, req *AgentRequest) (*AgentRe
 	// Try with primary model first
 	resp, err := a.generateWithModel(ctx, req, a.model)
 	if err != nil {
-		log.Printf("[Gemini Agent] Primary model (%s) failed: %v", a.model, err)
+		logger.Printf("[Gemini Agent] Primary model (%s) failed: %v", a.model, err)
 
 		// Try each fallback model in sequence
 		for i, fallbackModel := range a.fallbackModels {
-			log.Printf("[Gemini Agent] Trying fallback model %d/%d: %s", i+1, len(a.fallbackModels), fallbackModel)
+			logger.Printf("[Gemini Agent] Trying fallback model %d/%d: %s", i+1, len(a.fallbackModels), fallbackModel)
 			resp, err = a.generateWithModel(ctx, req, fallbackModel)
 			if err == nil {
 				// Success with fallback
-				log.Printf("[Gemini Agent] Success with fallback model: %s", fallbackModel)
+				logger.Printf("[Gemini Agent] Success with fallback model: %s", fallbackModel)
 				resp.Latency = time.Since(start)
 				return resp, nil
 			}
-			log.Printf("[Gemini Agent] Fallback model %s failed: %v", fallbackModel, err)
+			logger.Printf("[Gemini Agent] Fallback model %s failed: %v", fallbackModel, err)
 		}
 
 		// All models failed
@@ -213,7 +213,7 @@ func (a *geminiAgent) generateWithModel(ctx context.Context, req *AgentRequest, 
 
 			if toolErr != nil {
 				toolCall.Error = toolErr.Error()
-				log.Printf("[Gemini Agent] Tool %s failed: %v", fc.Name, toolErr)
+				logger.Printf("[Gemini Agent] Tool %s failed: %v", fc.Name, toolErr)
 			}
 
 			now := time.Now()
@@ -300,7 +300,7 @@ func (a *geminiAgent) generateWithModel(ctx context.Context, req *AgentRequest, 
 		Provider:     "gemini",
 	}
 
-	log.Printf("[Gemini Agent] Generated response with %d tool calls, %d tokens, model: %s",
+	logger.Printf("[Gemini Agent] Generated response with %d tool calls, %d tokens, model: %s",
 		len(allToolCalls), tokensUsed, modelName)
 
 	return agentResp, nil
@@ -308,7 +308,7 @@ func (a *geminiAgent) generateWithModel(ctx context.Context, req *AgentRequest, 
 
 // executeFunctionCall executes a single function call
 func (a *geminiAgent) executeFunctionCall(ctx context.Context, fc *genai.FunctionCall) (interface{}, error) {
-	log.Printf("[Gemini Agent] Executing tool: %s with args: %v", fc.Name, fc.Args)
+	logger.Printf("[Gemini Agent] Executing tool: %s with args: %v", fc.Name, fc.Args)
 
 	// Convert Args (map[string]any) to map[string]interface{}
 	params := make(map[string]interface{})
@@ -322,14 +322,14 @@ func (a *geminiAgent) executeFunctionCall(ctx context.Context, fc *genai.Functio
 	// Execute tool
 	result, err := a.toolExecutor.Execute(a.execContext, fc.Name, params)
 	if err != nil {
-		log.Printf("[Gemini Agent] Tool %s execution error: %v", fc.Name, err)
+		logger.Printf("[Gemini Agent] Tool %s execution error: %v", fc.Name, err)
 		return map[string]interface{}{
 			"success": false,
 			"error":   err.Error(),
 		}, err
 	}
 
-	log.Printf("[Gemini Agent] Tool %s executed successfully", fc.Name)
+	logger.Printf("[Gemini Agent] Tool %s executed successfully", fc.Name)
 	return result, nil
 }
 

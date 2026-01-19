@@ -2,7 +2,7 @@ package migrations
 
 import (
 	"fmt"
-	"log"
+	"github.com/aseno/backend/internal/logger"
 
 	"gorm.io/gorm"
 	"github.com/aseno/backend/pkg/whatsapp/conversation"
@@ -10,7 +10,7 @@ import (
 
 // MigrateConversations runs migrations for conversation-related tables
 func MigrateConversations(db *gorm.DB) error {
-	log.Println("[Migration] Running conversation_contexts and tool_call_logs migrations...")
+	logger.Println("[Migration] Running conversation_contexts and tool_call_logs migrations...")
 
 	// AutoMigrate conversation tables
 	if err := db.AutoMigrate(
@@ -27,7 +27,7 @@ func MigrateConversations(db *gorm.DB) error {
 		ON conversation_contexts(clinic_id, patient_phone, expires_at DESC)
 		WHERE expires_at > NOW()
 	`).Error; err != nil {
-		log.Printf("[Migration] Warning: failed to create idx_active_conversation: %v", err)
+		logger.Printf("[Migration] Warning: failed to create idx_active_conversation: %v", err)
 	}
 
 	// Create trigger for auto-updating updated_at
@@ -40,7 +40,7 @@ func MigrateConversations(db *gorm.DB) error {
 		END;
 		$$ LANGUAGE plpgsql
 	`).Error; err != nil {
-		log.Printf("[Migration] Warning: failed to create update_conversation_updated_at function: %v", err)
+		logger.Printf("[Migration] Warning: failed to create update_conversation_updated_at function: %v", err)
 	}
 
 	if err := db.Exec(`
@@ -50,24 +50,24 @@ func MigrateConversations(db *gorm.DB) error {
 			FOR EACH ROW
 			EXECUTE FUNCTION update_conversation_updated_at()
 	`).Error; err != nil {
-		log.Printf("[Migration] Warning: failed to create trigger_conversation_updated_at: %v", err)
+		logger.Printf("[Migration] Warning: failed to create trigger_conversation_updated_at: %v", err)
 	}
 
-	log.Println("[Migration] Conversation tables migrated successfully")
+	logger.Println("[Migration] Conversation tables migrated successfully")
 	return nil
 }
 
 // RollbackConversations rolls back conversation-related tables
 func RollbackConversations(db *gorm.DB) error {
-	log.Println("[Migration] Rolling back conversation_contexts and tool_call_logs migrations...")
+	logger.Println("[Migration] Rolling back conversation_contexts and tool_call_logs migrations...")
 
 	// Drop trigger and function
 	if err := db.Exec(`DROP TRIGGER IF EXISTS trigger_conversation_updated_at ON conversation_contexts`).Error; err != nil {
-		log.Printf("[Migration] Warning: failed to drop trigger: %v", err)
+		logger.Printf("[Migration] Warning: failed to drop trigger: %v", err)
 	}
 
 	if err := db.Exec(`DROP FUNCTION IF EXISTS update_conversation_updated_at()`).Error; err != nil {
-		log.Printf("[Migration] Warning: failed to drop function: %v", err)
+		logger.Printf("[Migration] Warning: failed to drop function: %v", err)
 	}
 
 	// Drop tables
@@ -75,6 +75,6 @@ func RollbackConversations(db *gorm.DB) error {
 		return fmt.Errorf("failed to drop conversation tables: %w", err)
 	}
 
-	log.Println("[Migration] Conversation tables rolled back successfully")
+	logger.Println("[Migration] Conversation tables rolled back successfully")
 	return nil
 }

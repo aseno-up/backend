@@ -3,7 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
-	"log"
+	"github.com/aseno/backend/internal/logger"
 	"sync"
 	"time"
 )
@@ -50,14 +50,14 @@ func (f *FallbackHandler) RecordSuccess() {
 
 	// Reset failure count on success
 	if f.consecutiveFailures > 0 {
-		log.Printf("[Fallback Handler] AI agent recovered, resetting failure count (was %d)", f.consecutiveFailures)
+		logger.Printf("[Fallback Handler] AI agent recovered, resetting failure count (was %d)", f.consecutiveFailures)
 	}
 
 	f.consecutiveFailures = 0
 
 	// Close circuit breaker if it was open
 	if f.circuitBreakerOpen {
-		log.Println("[Fallback Handler] Circuit breaker closed, AI agent back online")
+		logger.Println("[Fallback Handler] Circuit breaker closed, AI agent back online")
 		f.circuitBreakerOpen = false
 	}
 }
@@ -70,12 +70,12 @@ func (f *FallbackHandler) RecordFailure(err error) {
 	f.consecutiveFailures++
 	f.lastFailureTime = time.Now()
 
-	log.Printf("[Fallback Handler] AI agent failure #%d: %v", f.consecutiveFailures, err)
+	logger.Printf("[Fallback Handler] AI agent failure #%d: %v", f.consecutiveFailures, err)
 
 	// Open circuit breaker if threshold reached
 	if f.consecutiveFailures >= f.maxConsecutiveFailures && !f.circuitBreakerOpen {
 		f.circuitBreakerOpen = true
-		log.Printf("[Fallback Handler] Circuit breaker OPENED after %d consecutive failures. Falling back to traditional handler for %v",
+		logger.Printf("[Fallback Handler] Circuit breaker OPENED after %d consecutive failures. Falling back to traditional handler for %v",
 			f.maxConsecutiveFailures, f.circuitBreakerTimeout)
 	}
 }
@@ -149,7 +149,7 @@ func WithRetry(ctx context.Context, cfg *FallbackConfig, operation func() error)
 			case <-time.After(cfg.RetryDelay):
 			}
 
-			log.Printf("[Fallback] Retrying AI agent (attempt %d/%d)", attempt+1, cfg.MaxRetries+1)
+			logger.Printf("[Fallback] Retrying AI agent (attempt %d/%d)", attempt+1, cfg.MaxRetries+1)
 		}
 
 		err := operation()

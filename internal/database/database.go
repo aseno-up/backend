@@ -8,7 +8,7 @@ import (
 
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
-	"gorm.io/gorm/logger"
+	gormlogger "gorm.io/gorm/logger"
 )
 
 // Database wraps the GORM DB connection
@@ -18,14 +18,14 @@ type Database struct {
 
 // NewDatabase creates a new database connection
 func NewDatabase(dsn string, isDebug bool) (*Database, error) {
-	logLevel := logger.Silent
+	logLevel := gormlogger.Silent
 	if isDebug {
-		logLevel = logger.Info
+		logLevel = gormlogger.Info
 	}
 
-	gormLogger := logger.New(
+	gormLogger := gormlogger.New(
 		log.New(os.Stdout, "\r\n", log.LstdFlags),
-		logger.Config{
+		gormlogger.Config{
 			SlowThreshold:             time.Second,
 			LogLevel:                  logLevel,
 			IgnoreRecordNotFoundError: true,

@@ -3,7 +3,7 @@ package worker
 import (
 	"context"
 	"fmt"
-	"log"
+	"github.com/aseno/backend/internal/logger"
 	"time"
 
 	"github.com/google/uuid"
@@ -39,11 +39,11 @@ func NewReminderWorker(
 // Start starts the reminder worker
 func (w *ReminderWorker) Start() {
 	if !w.config.ReminderWorkerEnabled {
-		log.Println("Reminder worker is disabled")
+		logger.Println("Reminder worker is disabled")
 		return
 	}
 
-	log.Printf("Starting reminder worker (interval: %v)", w.config.ReminderWorkerInterval)
+	logger.Printf("Starting reminder worker (interval: %v)", w.config.ReminderWorkerInterval)
 
 	// Run immediately on start
 	w.processReminders()
@@ -56,7 +56,7 @@ func (w *ReminderWorker) Start() {
 		case <-ticker.C:
 			w.processReminders()
 		case <-w.stopCh:
-			log.Println("Reminder worker stopped")
+			logger.Println("Reminder worker stopped")
 			return
 		}
 	}
@@ -72,7 +72,7 @@ func (w *ReminderWorker) processReminders() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	log.Println("Processing reminders...")
+	logger.Println("Processing reminders...")
 
 	thresholds := w.config.GetReminderThresholds()
 	totalEnqueued := 0
@@ -80,16 +80,16 @@ func (w *ReminderWorker) processReminders() {
 	for _, threshold := range thresholds {
 		count, err := w.processThreshold(ctx, threshold)
 		if err != nil {
-			log.Printf("Error processing %s reminders: %v", threshold.Name, err)
+			logger.Printf("Error processing %s reminders: %v", threshold.Name, err)
 			continue
 		}
 		totalEnqueued += count
 	}
 
 	if totalEnqueued > 0 {
-		log.Printf("Reminder processing completed: %d messages enqueued", totalEnqueued)
+		logger.Printf("Reminder processing completed: %d messages enqueued", totalEnqueued)
 	} else {
-		log.Println("Reminder processing completed: no messages to send")
+		logger.Println("Reminder processing completed: no messages to send")
 	}
 }
 
@@ -112,7 +112,7 @@ func (w *ReminderWorker) processThreshold(ctx context.Context, threshold config.
 	for _, apt := range appointments {
 		// Skip if no patient info
 		if apt.Patient == nil {
-			log.Printf("Skipping appointment %s: no patient info", apt.ID)
+			logger.Printf("Skipping appointment %s: no patient info", apt.ID)
 			continue
 		}
 
@@ -122,7 +122,7 @@ func (w *ReminderWorker) processThreshold(ctx context.Context, threshold config.
 			phone = apt.Patient.Phone
 		}
 		if phone == "" {
-			log.Printf("Skipping appointment %s: no patient phone", apt.ID)
+			logger.Printf("Skipping appointment %s: no patient phone", apt.ID)
 			continue
 		}
 
@@ -156,13 +156,13 @@ func (w *ReminderWorker) processThreshold(ctx context.Context, threshold config.
 
 		// Enqueue the message
 		if err := w.queue.Publish(ctx, job); err != nil {
-			log.Printf("Failed to enqueue reminder for appointment %s: %v", apt.ID, err)
+			logger.Printf("Failed to enqueue reminder for appointment %s: %v", apt.ID, err)
 			continue
 		}
 
 		// Mark reminder as sent
 		if err := w.appointmentRepo.MarkReminderSent(ctx, apt.ID, threshold.Name); err != nil {
-			log.Printf("Failed to mark reminder sent for appointment %s: %v", apt.ID, err)
+			logger.Printf("Failed to mark reminder sent for appointment %s: %v", apt.ID, err)
 		}
 
 		// Set confirmation timeout on first reminder (48h)
@@ -170,7 +170,7 @@ func (w *ReminderWorker) processThreshold(ctx context.Context, threshold config.
 		if threshold.Type == "reminder_48h" && apt.ConfirmationExpiresAt == nil {
 			expiresAt := time.Now().Add(w.config.ConfirmationTimeoutDuration)
 			if err := w.appointmentRepo.SetConfirmationExpiresAt(ctx, apt.ID, expiresAt); err != nil {
-				log.Printf("Failed to set confirmation timeout for appointment %s: %v", apt.ID, err)
+				logger.Printf("Failed to set confirmation timeout for appointment %s: %v", apt.ID, err)
 			}
 		}
 
@@ -178,7 +178,7 @@ func (w *ReminderWorker) processThreshold(ctx context.Context, threshold config.
 	}
 
 	if enqueued > 0 {
-		log.Printf("Enqueued %d %s reminders", enqueued, threshold.Name)
+		logger.Printf("Enqueued %d %s reminders", enqueued, threshold.Name)
 	}
 
 	return enqueued, nil

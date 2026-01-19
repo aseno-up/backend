@@ -1,7 +1,7 @@
 package agent
 
 import (
-	"log"
+	"github.com/aseno/backend/internal/logger"
 	"sync"
 	"time"
 )
@@ -147,19 +147,19 @@ func (m *MetricsCollector) GetMetrics() *Metrics {
 func (m *MetricsCollector) LogMetrics() {
 	metrics := m.GetMetrics()
 
-	log.Println("========== AI Agent Metrics ==========")
-	log.Printf("Conversations: Started=%d, Completed=%d, Abandoned=%d (Avg Turns: %.2f)",
+	logger.Println("========== AI Agent Metrics ==========")
+	logger.Printf("Conversations: Started=%d, Completed=%d, Abandoned=%d (Avg Turns: %.2f)",
 		metrics.ConversationsStarted, metrics.ConversationsCompleted, metrics.ConversationsAbandoned, metrics.AverageConversationTurns)
-	log.Printf("Tool Calls: Total=%d, Success=%d, Failed=%d (Success Rate: %.2f%%)",
+	logger.Printf("Tool Calls: Total=%d, Success=%d, Failed=%d (Success Rate: %.2f%%)",
 		metrics.ToolCallsTotal, metrics.ToolCallsSuccess, metrics.ToolCallsFailed, metrics.ToolSuccessRate*100)
-	log.Printf("Generations: Total=%d, Success=%d, Failed=%d (Success Rate: %.2f%%)",
+	logger.Printf("Generations: Total=%d, Success=%d, Failed=%d (Success Rate: %.2f%%)",
 		metrics.GenerationsTotal, metrics.GenerationsSuccess, metrics.GenerationsFailed, metrics.GenerationSuccessRate*100)
-	log.Printf("Tokens: Total=%d, Cost=R$ %.4f, Avg Cost/Conv=R$ %.4f",
+	logger.Printf("Tokens: Total=%d, Cost=R$ %.4f, Avg Cost/Conv=R$ %.4f",
 		metrics.TotalTokensUsed, metrics.TotalCost, metrics.AverageCostPerConv)
-	log.Printf("Response Latency: p50=%.2fs, p95=%.2fs, p99=%.2fs",
+	logger.Printf("Response Latency: p50=%.2fs, p95=%.2fs, p99=%.2fs",
 		metrics.ResponseLatencyP50.Seconds(), metrics.ResponseLatencyP95.Seconds(), metrics.ResponseLatencyP99.Seconds())
-	log.Printf("Fallback Triggers: %d", metrics.FallbackTriggers)
-	log.Println("======================================")
+	logger.Printf("Fallback Triggers: %d", metrics.FallbackTriggers)
+	logger.Println("======================================")
 }
 
 // Helper methods

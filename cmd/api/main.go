@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
 	"net/http"
 	"os"
 	"os/signal"
@@ -17,6 +16,7 @@ import (
 
 	"github.com/aseno/backend/internal/config"
 	"github.com/aseno/backend/internal/database"
+	"github.com/aseno/backend/internal/logger"
 	"github.com/aseno/backend/internal/queue"
 	redisClient "github.com/aseno/backend/internal/redis"
 	"github.com/aseno/backend/internal/worker"
@@ -104,10 +104,13 @@ import (
 )
 
 func main() {
+	// Initialize colored logger
+	logger.Init()
+
 	// Load configuration
 	cfg := config.NewConfig()
 	if err := cfg.Validate(); err != nil {
-		log.Fatalf("Invalid configuration: %v", err)
+		logger.Fatalf("Invalid configuration: %v", err)
 	}
 
 	// Set Gin mode
@@ -118,17 +121,17 @@ func main() {
 	// Initialize database
 	db, err := database.NewDatabase(cfg.GetDatabaseURL(), cfg.IsDevelopment())
 	if err != nil {
-		log.Fatalf("Failed to connect to database: %v", err)
+		logger.Fatalf("Failed to connect to database: %v", err)
 	}
 	defer func() {
 		if err := db.Close(); err != nil {
-			log.Printf("Error closing database: %v", err)
+			logger.Printf("Error closing database: %v", err)
 		}
 	}()
 
 	// Run migrations
 	if err := runMigrations(db); err != nil {
-		log.Fatalf("Failed to run migrations: %v", err)
+		logger.Fatalf("Failed to run migrations: %v", err)
 	}
 
 	// Initialize repositories
@@ -158,7 +161,7 @@ func main() {
 
 	// Seed default settings (if not exist)
 	if err := settingsRepo.SeedDefaults(context.Background()); err != nil {
-		log.Printf("Warning: Failed to seed default settings: %v", err)
+		logger.Printf("Warning: Failed to seed default settings: %v", err)
 	}
 
 	// Initialize Settings service (used by professional service and public config)
@@ -187,7 +190,7 @@ func main() {
 				BaseURL: cfg.GetWahaAPIURL(),
 				APIKey:  cfg.GetWahaAPIKey(),
 			})
-			log.Println("WhatsApp (WAHA) client initialized")
+			logger.Println("WhatsApp (WAHA) client initialized")
 		}
 	case "evolution":
 		if cfg.GetEvolutionAPIURL() != "" {
@@ -196,7 +199,7 @@ func main() {
 				APIKey:     cfg.GetEvolutionAPIKey(),
 				WebhookURL: cfg.GetWhatsAppWebhookURL(),
 			})
-			log.Println("WhatsApp (Evolution API) client initialized")
+			logger.Println("WhatsApp (Evolution API) client initialized")
 		}
 	default:
 		// Default to Evolution for backwards compatibility
@@ -206,7 +209,7 @@ func main() {
 				APIKey:     cfg.GetEvolutionAPIKey(),
 				WebhookURL: cfg.GetWhatsAppWebhookURL(),
 			})
-			log.Println("WhatsApp (Evolution API) client initialized (default)")
+			logger.Println("WhatsApp (Evolution API) client initialized (default)")
 		}
 	}
 
@@ -218,7 +221,7 @@ func main() {
 			APIKey:    cfg.GetAsaasAPIKey(),
 			IsSandbox: cfg.AsaasSandbox,
 		})
-		log.Println("Asaas payment client initialized")
+		logger.Println("Asaas payment client initialized")
 	}
 
 	// Initialize Google Auth client (for OAuth login)
@@ -229,7 +232,7 @@ func main() {
 			ClientSecret: cfg.GetGoogleClientSecret(),
 			RedirectURL:  cfg.GoogleAuthRedirectURL,
 		})
-		log.Println("Google Auth client initialized")
+		logger.Println("Google Auth client initialized")
 	}
 
 	// Initialize Google Calendar client
@@ -240,7 +243,7 @@ func main() {
 			ClientSecret: cfg.GetGoogleClientSecret(),
 			RedirectURL:  cfg.GoogleRedirectURL,
 		})
-		log.Println("Google Calendar client initialized")
+		logger.Println("Google Calendar client initialized")
 	}
 
 	// Initialize services
@@ -256,9 +259,9 @@ func main() {
 		var err error
 		emailSvc, err = email_service.NewBrevoEmailService()
 		if err != nil {
-			log.Fatalf("Failed to initialize Brevo email service: %v", err)
+			logger.Fatalf("Failed to initialize Brevo email service: %v", err)
 		}
-		log.Println("Brevo email service initialized")
+		logger.Println("Brevo email service initialized")
 	} else if cfg.GetSMTPHost() != "" {
 		emailSvc = email_service.NewSMTPEmailService(email_service.SMTPConfig{
 			Host:        cfg.GetSMTPHost(),
@@ -268,10 +271,10 @@ func main() {
 			From:        cfg.GetSMTPFrom(),
 			FrontendURL: cfg.GetFrontendURL(),
 		})
-		log.Println("SMTP email service initialized")
+		logger.Println("SMTP email service initialized")
 	} else {
 		emailSvc = email_service.NewNoOpEmailService()
-		log.Println("Using no-op email service (no email provider configured)")
+		logger.Println("Using no-op email service (no email provider configured)")
 	}
 
 	// Initialize auth service with or without Google OAuth
@@ -297,7 +300,7 @@ func main() {
 		var err error
 		redis, err = redisClient.NewRedisClient(workerCfg.RedisURL)
 		if err != nil {
-			log.Printf("Warning: Failed to connect to Redis: %v (AI Agent will not be available)", err)
+			logger.Printf("Warning: Failed to connect to Redis: %v (AI Agent will not be available)", err)
 			redis = nil
 		}
 	}
@@ -315,7 +318,7 @@ func main() {
 		whatsappService.SetAppointmentFinder(&appointmentFinderAdapter{appointmentRepo: appointmentRepo})
 		whatsappService.SetSlotSuggester(appointmentService)
 		whatsappService.SetAppointmentCreator(&whatsappAppointmentCreatorAdapter{appointmentService: appointmentService})
-		log.Println("WhatsApp appointment status updater and reschedule connected")
+		logger.Println("WhatsApp appointment status updater and reschedule connected")
 
 		// Wire up scheduling flow adapters for new appointment booking via WhatsApp
 		schedulingIntentRepo := whatsapp_repository.NewSchedulingIntentRepository(db.GetDB())
@@ -324,7 +327,7 @@ func main() {
 		whatsappService.SetProfessionalLister(&professionalListerAdapter{professionalRepo: professionalRepo})
 		whatsappService.SetSlotFinder(&slotFinderAdapter{appointmentService: appointmentService, professionalRepo: professionalRepo})
 		whatsappService.SetNewAppointmentCreator(&newAppointmentCreatorAdapter{appointmentService: appointmentService})
-		log.Println("WhatsApp scheduling flow adapters connected")
+		logger.Println("WhatsApp scheduling flow adapters connected")
 
 		// Initialize AI Classifier for message classification (if enabled)
 		if cfg.AIClassifierEnabled() {
@@ -346,14 +349,14 @@ func main() {
 					Timeout:  time.Duration(cfg.AIClassifierTimeout()) * time.Second,
 				})
 				if err != nil {
-					log.Printf("Warning: Failed to initialize AI classifier: %v", err)
+					logger.Printf("Warning: Failed to initialize AI classifier: %v", err)
 				} else {
 					whatsappService.SetClassifier(aiClassifier, cfg.AIClassifierConfidenceThreshold())
-					log.Printf("AI Classifier initialized: provider=%s model=%s threshold=%.2f",
+					logger.Printf("AI Classifier initialized: provider=%s model=%s threshold=%.2f",
 						cfg.AIClassifierProvider(), cfg.AIClassifierModel(), cfg.AIClassifierConfidenceThreshold())
 				}
 			} else {
-				log.Printf("Warning: AI_CLASSIFIER_ENABLED=true but no API key for provider %s",
+				logger.Printf("Warning: AI_CLASSIFIER_ENABLED=true but no API key for provider %s",
 					cfg.AIClassifierProvider())
 			}
 		}
@@ -375,18 +378,18 @@ func main() {
 				professionalRepo,
 			)
 			if err != nil {
-				log.Printf("Warning: Failed to initialize AI Agent: %v", err)
+				logger.Printf("Warning: Failed to initialize AI Agent: %v", err)
 			} else if aiAgentService != nil {
 				whatsappService.SetAIAgentService(aiAgentService)
 				whatsappService.SetClinicRepo(clinicRepo)
 				whatsappService.SetScheduledMessageRepo(scheduledMsgRepo)
 				whatsappService.SetDefaultDelayBetweenPatients(workerCfg.MinDelayBetweenPatientsSeconds)
-				log.Println("AI Agent service connected to WhatsApp")
+				logger.Println("AI Agent service connected to WhatsApp")
 			}
 		} else if redis == nil {
-			log.Println("AI Agent: Not initialized (requires Redis configuration)")
+			logger.Println("AI Agent: Not initialized (requires Redis configuration)")
 		} else if !workerCfg.AIAgentEnabled {
-			log.Println("AI Agent: Disabled (set AI_AGENT_ENABLED=true to enable)")
+			logger.Println("AI Agent: Disabled (set AI_AGENT_ENABLED=true to enable)")
 		}
 	}
 
@@ -402,7 +405,7 @@ func main() {
 		calendarService = calendar_service.NewCalendarService(googleCalendarClient, calendarIntegrationRepo, calendarSyncRepo, clinicRepo)
 		// Wire calendar service into appointment service for Google Calendar sync
 		appointmentService.SetCalendarService(calendarService)
-		log.Println("Google Calendar sync enabled for appointments")
+		logger.Println("Google Calendar sync enabled for appointments")
 	}
 
 	// Initialize Session Plan service
@@ -457,22 +460,22 @@ func main() {
 
 		// Connect to RabbitMQ - REQUIRED for application to start
 		if err := messageQueue.Connect(context.Background()); err != nil {
-			log.Fatalf("FATAL: Failed to connect to RabbitMQ: %v\nRabbitMQ is required for reminder and message workers. Please ensure RabbitMQ is running.", err)
+			logger.Fatalf("FATAL: Failed to connect to RabbitMQ: %v\nRabbitMQ is required for reminder and message workers. Please ensure RabbitMQ is running.", err)
 		}
 
-		log.Println("RabbitMQ connected successfully")
+		logger.Println("RabbitMQ connected successfully")
 
 		// Initialize Redis rate limiter
 		rateLimiter, err := redisClient.NewRateLimiter(workerCfg.RedisURL)
 		if err != nil {
-			log.Printf("Warning: Failed to initialize Redis rate limiter: %v (rate limiting will use fallback)", err)
+			logger.Printf("Warning: Failed to initialize Redis rate limiter: %v (rate limiting will use fallback)", err)
 			rateLimiter = nil
 		}
 
 		// Wire message queue into WhatsApp service for segmented message delivery
 		if whatsappService != nil {
 			whatsappService.SetMessageQueue(messageQueue)
-			log.Println("WhatsApp message queue configured for segmented delivery")
+			logger.Println("WhatsApp message queue configured for segmented delivery")
 		}
 
 		// Initialize and start Reminder Worker (only if WhatsApp is configured)
@@ -500,7 +503,7 @@ func main() {
 				go timeoutWorker.Start()
 			}
 
-			log.Println("Reminder, Message Sender, and Timeout workers started")
+			logger.Println("Reminder, Message Sender, and Timeout workers started")
 		}
 
 		// Initialize Waitlist service (requires WhatsApp and queue)
@@ -520,15 +523,15 @@ func main() {
 			// Wire waitlist service into whatsapp service for response handling
 			whatsappService.SetWaitlistHandler(waitlistSvc)
 
-			log.Println("Waitlist (encaixe) service initialized")
+			logger.Println("Waitlist (encaixe) service initialized")
 		}
 	} else {
-		log.Fatal("FATAL: RabbitMQ URL not configured in environment variables. Please set RABBITMQ_URL.")
+		logger.Fatalf("FATAL: RabbitMQ URL not configured in environment variables. Please set RABBITMQ_URL.")
 	}
 
 	// Wire patient risk calculator into appointment service (always enabled)
 	appointmentService.SetPatientRiskCalculator(&patientRiskAdapter{patientService: patientService})
-	log.Println("Patient risk calculator connected to appointment service")
+	logger.Println("Patient risk calculator connected to appointment service")
 
 	// Initialize middleware
 	authMiddleware := auth_middleware.NewAuthMiddleware(jwtService)
@@ -649,10 +652,10 @@ func main() {
 
 	// Start server in goroutine
 	go func() {
-		log.Printf("Starting server on port %s", cfg.Port)
-		log.Printf("Environment: %s", cfg.Environment)
+		logger.Printf("Starting server on port %s", cfg.Port)
+		logger.Printf("Environment: %s", cfg.Environment)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("Failed to start server: %v", err)
+			logger.Fatalf("Failed to start server: %v", err)
 		}
 	}()
 
@@ -661,7 +664,7 @@ func main() {
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 
-	log.Println("Shutting down server...")
+	logger.Println("Shutting down server...")
 
 	// Stop workers
 	sessionPlanWorker.Stop()
@@ -682,10 +685,10 @@ func main() {
 	defer cancel()
 
 	if err := srv.Shutdown(ctx); err != nil {
-		log.Fatalf("Server forced to shutdown: %v", err)
+		logger.Fatalf("Server forced to shutdown: %v", err)
 	}
 
-	log.Println("Server exited")
+	logger.Println("Server exited")
 }
 
 func setupRouter(
@@ -897,7 +900,7 @@ func (a *googleAuthAdapter) VerifyIDToken(ctx context.Context, idToken string) (
 }
 
 func runMigrations(db *database.Database) error {
-	log.Println("Running database migrations...")
+	logger.Println("Running database migrations...")
 
 	// Add all models that need migration here
 	// Order matters due to foreign key constraints
@@ -934,7 +937,7 @@ func runMigrations(db *database.Database) error {
 		return err
 	}
 
-	log.Println("Database migrations completed")
+	logger.Println("Database migrations completed")
 	return nil
 }
 
@@ -1090,7 +1093,7 @@ func (a *whatsappAppointmentCreatorAdapter) CreateFromReschedule(ctx context.Con
 	})
 	if err != nil {
 		// Log but don't fail - appointment was created
-		log.Printf("[Reschedule] Failed to auto-confirm appointment: %v", err)
+		logger.Printf("[Reschedule] Failed to auto-confirm appointment: %v", err)
 	}
 
 	// Get names from nested structs
@@ -1268,7 +1271,7 @@ func (a *newAppointmentCreatorAdapter) CreateFromSchedulingIntent(ctx context.Co
 		PatientNotes: "Confirmado automaticamente no agendamento via WhatsApp",
 	})
 	if err != nil {
-		log.Printf("[Schedule] Failed to auto-confirm appointment: %v", err)
+		logger.Printf("[Schedule] Failed to auto-confirm appointment: %v", err)
 	}
 
 	patientName := ""
@@ -1308,11 +1311,11 @@ func initializeAIAgent(
 	// Check if AI agent is enabled
 	workerCfg := config.NewWorkerConfig()
 	if !workerCfg.AIAgentEnabled {
-		log.Println("AI Agent is disabled (AI_AGENT_ENABLED=false)")
+		logger.Println("AI Agent is disabled (AI_AGENT_ENABLED=false)")
 		return nil, nil, nil, nil
 	}
 
-	log.Println("Initializing AI Agent for WhatsApp...")
+	logger.Println("Initializing AI Agent for WhatsApp...")
 
 	// 1. Create conversation repository
 	conversationRepo := conversation.NewRepository(
@@ -1410,8 +1413,8 @@ func initializeAIAgent(
 		workerCfg.MinDelayBetweenMessagesSeconds,
 	)
 
-	log.Printf("AI Agent initialized: provider=%s model=%s", workerCfg.AIAgentProvider, workerCfg.AIAgentModel)
-	log.Printf("AI Agent features: scheduling=%v confirm=%v cancel=%v reminders=%v",
+	logger.Printf("AI Agent initialized: provider=%s model=%s", workerCfg.AIAgentProvider, workerCfg.AIAgentModel)
+	logger.Printf("AI Agent features: scheduling=%v confirm=%v cancel=%v reminders=%v",
 		workerCfg.AIAgentSchedulingEnabled,
 		workerCfg.AIAgentConfirmEnabled,
 		workerCfg.AIAgentCancelEnabled,

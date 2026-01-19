@@ -3,7 +3,7 @@ package worker
 import (
 	"context"
 	"fmt"
-	"log"
+	"github.com/aseno/backend/internal/logger"
 	"sync/atomic"
 	"time"
 
@@ -51,7 +51,7 @@ func NewMessageSenderWorker(
 
 // Start starts the message sender worker
 func (w *MessageSenderWorker) Start() {
-	log.Printf("Starting message sender worker (rate limit: 1 msg per %d seconds)", w.config.MessageRateLimitSeconds)
+	logger.Printf("Starting message sender worker (rate limit: 1 msg per %d seconds)", w.config.MessageRateLimitSeconds)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -65,10 +65,10 @@ func (w *MessageSenderWorker) Start() {
 	// Start consuming messages
 	err := w.queue.Consume(ctx, w.processMessage)
 	if err != nil && ctx.Err() == nil {
-		log.Printf("Message sender worker error: %v", err)
+		logger.Printf("Message sender worker error: %v", err)
 	}
 
-	log.Println("Message sender worker stopped")
+	logger.Println("Message sender worker stopped")
 }
 
 // Stop stops the message sender worker
@@ -86,11 +86,11 @@ func (w *MessageSenderWorker) processMessage(job *queue.MessageJob) error {
 	if w.clinicRepo != nil {
 		clinicID, err := uuid.Parse(job.ClinicID)
 		if err != nil {
-			log.Printf("[MessageSender] Warning: invalid clinic ID format: %v", err)
+			logger.Printf("[MessageSender] Warning: invalid clinic ID format: %v", err)
 		} else if clinic, err := w.clinicRepo.GetByID(ctx, clinicID); err == nil {
 			minDelaySeconds = clinic.GetMinDelayBetweenPatients(w.config.MinDelayBetweenPatientsSeconds)
 		} else {
-			log.Printf("[MessageSender] Warning: failed to fetch clinic settings, using default delay: %v", err)
+			logger.Printf("[MessageSender] Warning: failed to fetch clinic settings, using default delay: %v", err)
 		}
 	}
 
@@ -100,25 +100,25 @@ func (w *MessageSenderWorker) processMessage(job *queue.MessageJob) error {
 		delayNeeded := w.rateLimiter.CheckRateLimit(ctx, job.ClinicID, job.Phone, minDelay)
 
 		if delayNeeded > 0 {
-			log.Printf("[MessageSender] Rate limit: waiting %v before sending to different patient %s", delayNeeded, job.Phone)
+			logger.Printf("[MessageSender] Rate limit: waiting %v before sending to different patient %s", delayNeeded, job.Phone)
 
 			// Republish with delay
 			if err := w.queue.PublishWithDelay(ctx, job, delayNeeded); err != nil {
-				log.Printf("[MessageSender] Failed to republish with delay: %v", err)
+				logger.Printf("[MessageSender] Failed to republish with delay: %v", err)
 				// Continue anyway - don't fail the job
 			} else {
 				// Successfully republished with delay, don't process now
-				log.Printf("[MessageSender] Message for %s rescheduled with %v delay", job.Phone, delayNeeded)
+				logger.Printf("[MessageSender] Message for %s rescheduled with %v delay", job.Phone, delayNeeded)
 				return nil
 			}
 		} else {
-			log.Printf("[MessageSender] Rate limit OK for %s (no delay needed)", job.Phone)
+			logger.Printf("[MessageSender] Rate limit OK for %s (no delay needed)", job.Phone)
 		}
 	} else {
 		if w.rateLimiter == nil {
-			log.Printf("[MessageSender] Rate limiter is nil - Redis not initialized")
+			logger.Printf("[MessageSender] Rate limiter is nil - Redis not initialized")
 		} else if !w.rateLimiter.IsAvailable() {
-			log.Printf("[MessageSender] Rate limiter not available - Redis not connected")
+			logger.Printf("[MessageSender] Rate limiter not available - Redis not connected")
 		}
 	}
 
@@ -128,10 +128,10 @@ func (w *MessageSenderWorker) processMessage(job *queue.MessageJob) error {
 	// Log retry info if this is a retry attempt
 	if job.Attempts > 0 {
 		atomic.AddInt64(&w.messagesRetried, 1)
-		log.Printf("Retrying %s message to %s (attempt %d/%d, last error: %s)",
+		logger.Printf("Retrying %s message to %s (attempt %d/%d, last error: %s)",
 			job.MessageType, job.Phone, job.Attempts+1, job.MaxAttempts, job.LastError)
 	} else {
-		log.Printf("Sending %s message to %s (appointment: %s)", job.MessageType, job.Phone, job.AppointmentID)
+		logger.Printf("Sending %s message to %s (appointment: %s)", job.MessageType, job.Phone, job.AppointmentID)
 	}
 
 	// Step 3: Send the message via WhatsApp
@@ -146,16 +146,16 @@ func (w *MessageSenderWorker) processMessage(job *queue.MessageJob) error {
 	if w.rateLimiter != nil && w.rateLimiter.IsAvailable() {
 		ttl := time.Duration(minDelaySeconds*2) * time.Second
 		if err := w.rateLimiter.RecordMessageSent(ctx, job.ClinicID, job.Phone, ttl); err != nil {
-			log.Printf("[MessageSender] Warning: Failed to record rate limit: %v", err)
+			logger.Printf("[MessageSender] Warning: Failed to record rate limit: %v", err)
 			// Don't fail the job due to Redis error
 		}
 	}
 
 	atomic.AddInt64(&w.messagesSent, 1)
 	if job.Attempts > 0 {
-		log.Printf("Successfully sent %s message to %s after %d retries", job.MessageType, job.Phone, job.Attempts)
+		logger.Printf("Successfully sent %s message to %s after %d retries", job.MessageType, job.Phone, job.Attempts)
 	} else {
-		log.Printf("Successfully sent %s message to %s", job.MessageType, job.Phone)
+		logger.Printf("Successfully sent %s message to %s", job.MessageType, job.Phone)
 	}
 
 	return nil

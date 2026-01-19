@@ -3,7 +3,7 @@ package redis
 import (
 	"context"
 	"fmt"
-	"log"
+	"github.com/aseno/backend/internal/logger"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -32,7 +32,7 @@ func NewRedisClient(redisURL string) (*RedisClient, error) {
 		return nil, fmt.Errorf("failed to connect to Redis: %w", err)
 	}
 
-	log.Println("[Redis] Connected successfully")
+	logger.Println("[Redis] Connected successfully")
 	return &RedisClient{client: client}, nil
 }
 

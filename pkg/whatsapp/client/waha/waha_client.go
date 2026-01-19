@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
+	"github.com/aseno/backend/internal/logger"
 	"net/http"
 	"time"
 
@@ -69,11 +69,11 @@ func (c *wahaClient) CreateInstance(ctx context.Context, instance string) (*mode
 	}
 
 	if err := json.Unmarshal(respBody, &result); err != nil {
-		log.Printf("[WAHA] Failed to unmarshal CreateInstance response: %v. Body: %s", err, string(respBody))
+		logger.Printf("[WAHA] Failed to unmarshal CreateInstance response: %v. Body: %s", err, string(respBody))
 		return nil, errors.ErrInternalInstance.WithError(err)
 	}
 
-	log.Printf("[WAHA] Session created with status: %s", result.Status)
+	logger.Printf("[WAHA] Session created with status: %s", result.Status)
 
 	// If status is SCAN_QR_CODE, try to get QR code
 	if result.Status == "SCAN_QR_CODE" {
@@ -202,25 +202,25 @@ func (c *wahaClient) GetQRCode(ctx context.Context, instance string) (*model.QRC
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("X-Api-Key", c.config.APIKey)
 
-	log.Printf("[WAHA] Request: GET %s", req.URL.String())
+	logger.Printf("[WAHA] Request: GET %s", req.URL.String())
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		log.Printf("[WAHA] Connection Error: %v", err)
+		logger.Printf("[WAHA] Connection Error: %v", err)
 		return nil, errors.ErrWhatsAppConnectionInstance.WithError(err)
 	}
 	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		log.Printf("[WAHA] Error reading response body: %v", err)
+		logger.Printf("[WAHA] Error reading response body: %v", err)
 		return nil, errors.ErrInternalInstance.WithError(err)
 	}
 
-	log.Printf("[WAHA] Response Status: %d", resp.StatusCode)
+	logger.Printf("[WAHA] Response Status: %d", resp.StatusCode)
 
 	if resp.StatusCode >= 400 {
-		log.Printf("[WAHA] Error Response Body: %s", string(respBody))
+		logger.Printf("[WAHA] Error Response Body: %s", string(respBody))
 		return nil, errors.ErrWhatsAppSendFailedInstance.WithMessage(fmt.Sprintf("WAHA API error: %d", resp.StatusCode))
 	}
 
@@ -231,16 +231,16 @@ func (c *wahaClient) GetQRCode(ctx context.Context, instance string) (*model.QRC
 	}
 
 	if err := json.Unmarshal(respBody, &result); err != nil {
-		log.Printf("[WAHA] Failed to unmarshal QR response: %v. Body: %s", err, string(respBody))
+		logger.Printf("[WAHA] Failed to unmarshal QR response: %v. Body: %s", err, string(respBody))
 		return nil, errors.ErrInternalInstance.WithError(err)
 	}
 
 	if result.Base64 == "" && result.Value == "" {
-		log.Printf("[WAHA] No QR code available for session %s", sessionName)
+		logger.Printf("[WAHA] No QR code available for session %s", sessionName)
 		return nil, nil
 	}
 
-	log.Printf("[WAHA] Success Response Body: %s", string(respBody)[:min(len(respBody), 200)])
+	logger.Printf("[WAHA] Success Response Body: %s", string(respBody)[:min(len(respBody), 200)])
 
 	return &model.QRCodeData{
 		Instance: instance, // Return original instance name for tracking
@@ -275,7 +275,7 @@ func (c *wahaClient) doRequest(ctx context.Context, method, path string, body in
 	}
 
 	url := c.config.BaseURL + path
-	log.Printf("[WAHA] Request: %s %s", method, url)
+	logger.Printf("[WAHA] Request: %s %s", method, url)
 
 	req, err := http.NewRequestWithContext(ctx, method, url, reqBody)
 	if err != nil {
@@ -287,21 +287,21 @@ func (c *wahaClient) doRequest(ctx context.Context, method, path string, body in
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		log.Printf("[WAHA] Connection Error: %v", err)
+		logger.Printf("[WAHA] Connection Error: %v", err)
 		return nil, errors.ErrWhatsAppConnectionInstance.WithError(err)
 	}
 	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		log.Printf("[WAHA] Error reading response body: %v", err)
+		logger.Printf("[WAHA] Error reading response body: %v", err)
 		return nil, errors.ErrInternalInstance.WithError(err)
 	}
 
-	log.Printf("[WAHA] Response Status: %d", resp.StatusCode)
+	logger.Printf("[WAHA] Response Status: %d", resp.StatusCode)
 
 	if resp.StatusCode >= 400 {
-		log.Printf("[WAHA] Error Response Body: %s", string(respBody))
+		logger.Printf("[WAHA] Error Response Body: %s", string(respBody))
 
 		var errResp struct {
 			Message string `json:"message"`
@@ -325,7 +325,7 @@ func (c *wahaClient) doRequest(ctx context.Context, method, path string, body in
 	if len(logBody) > 500 {
 		logBody = logBody[:500] + "..."
 	}
-	log.Printf("[WAHA] Success Response Body: %s", logBody)
+	logger.Printf("[WAHA] Success Response Body: %s", logBody)
 
 	return respBody, nil
 }
