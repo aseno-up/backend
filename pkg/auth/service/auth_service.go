@@ -199,6 +199,7 @@ func (s *authService) Register(ctx context.Context, req *model.RegisterRequest) 
 
 	return &model.AuthResponse{
 		User:         user.ToResponse(),
+		Clinic:       clinic.ToResponse(),
 		AccessToken:  tokenPair.AccessToken,
 		RefreshToken: tokenPair.RefreshToken,
 		ExpiresIn:    tokenPair.ExpiresIn,
@@ -254,6 +255,7 @@ func (s *authService) Login(ctx context.Context, req *model.LoginRequest) (*mode
 
 	return &model.AuthResponse{
 		User:         user.ToResponse(),
+		Clinic:       clinic.ToResponse(),
 		AccessToken:  tokenPair.AccessToken,
 		RefreshToken: tokenPair.RefreshToken,
 		ExpiresIn:    tokenPair.ExpiresIn,
@@ -373,8 +375,15 @@ func (s *authService) GoogleLogin(ctx context.Context, req *model.GoogleLoginReq
 		// Non-critical error, just log it
 	}
 
+	// Get clinic for response
+	clinic, err := s.clinicRepo.GetByID(ctx, user.ClinicID)
+	if err != nil {
+		return nil, err
+	}
+
 	return &model.AuthResponse{
 		User:         user.ToResponse(),
+		Clinic:       clinic.ToResponse(),
 		AccessToken:  tokenPair.AccessToken,
 		RefreshToken: tokenPair.RefreshToken,
 		ExpiresIn:    tokenPair.ExpiresIn,
@@ -416,8 +425,15 @@ func (s *authService) RefreshToken(ctx context.Context, refreshToken string) (*m
 		return nil, err
 	}
 
+	// Get clinic for response
+	clinic, err := s.clinicRepo.GetByID(ctx, user.ClinicID)
+	if err != nil {
+		return nil, err
+	}
+
 	return &model.AuthResponse{
 		User:         user.ToResponse(),
+		Clinic:       clinic.ToResponse(),
 		AccessToken:  tokenPair.AccessToken,
 		RefreshToken: tokenPair.RefreshToken,
 		ExpiresIn:    tokenPair.ExpiresIn,

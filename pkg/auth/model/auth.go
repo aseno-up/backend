@@ -79,10 +79,11 @@ type GoogleUserInfo struct {
 
 // AuthResponse represents the authentication response
 type AuthResponse struct {
-	User         *user_model.UserResponse `json:"user"`
-	AccessToken  string                   `json:"access_token"`
-	RefreshToken string                   `json:"refresh_token"`
-	ExpiresIn    int                      `json:"expires_in"` // seconds
+	User         *user_model.UserResponse     `json:"user"`
+	Clinic       *clinic_model.ClinicResponse `json:"clinic"`
+	AccessToken  string                       `json:"access_token"`
+	RefreshToken string                       `json:"refresh_token"`
+	ExpiresIn    int                          `json:"expires_in"` // seconds
 }
 
 // ChangePasswordRequest represents the change password request
