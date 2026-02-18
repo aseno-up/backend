@@ -4,10 +4,10 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/gin-gonic/gin"
-	"github.com/google/uuid"
 	"github.com/aseno/backend/internal/errors"
 	"github.com/aseno/backend/pkg/dashboard/service"
+	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 )
 
 type DashboardHandler struct {

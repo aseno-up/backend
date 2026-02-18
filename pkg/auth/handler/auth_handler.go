@@ -168,7 +168,7 @@ func (h *authHandler) GoogleLogin(c *gin.Context) {
 // @Router /auth/refresh [post]
 func (h *authHandler) RefreshToken(c *gin.Context) {
 	var req model.RefreshRequest
-	
+
 	// Check cookie first
 	cookieToken, err := c.Cookie("refresh_token")
 	if err == nil && cookieToken != "" {

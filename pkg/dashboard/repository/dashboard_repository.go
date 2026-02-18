@@ -44,15 +44,14 @@ func (r *dashboardRepository) GetProfessionals(ctx context.Context, clinicID uui
 	return profs, err
 }
 
-
 type AppointmentStats struct {
-	TotalCount       int
-	CompletedCount   int
-	ConfirmedCount   int
-	NoShowCount      int
-	TotalRevenue     float64
-	LostRevenue      float64
-	AutoConfirmed    int
+	TotalCount     int
+	CompletedCount int
+	ConfirmedCount int
+	NoShowCount    int
+	TotalRevenue   float64
+	LostRevenue    float64
+	AutoConfirmed  int
 }
 
 func (r *dashboardRepository) GetAppointmentStats(ctx context.Context, clinicID uuid.UUID, start, end time.Time) (*AppointmentStats, error) {
@@ -61,7 +60,7 @@ func (r *dashboardRepository) GetAppointmentStats(ctx context.Context, clinicID 
 	// We can do this in a single query or multiple. Single query is better.
 	// We assume 'appointments' table exists.
 	// status: 'completed', 'confirmed', 'no_show', 'canceled'
-	// confirmed_at: not null and status = 'confirmed' or 'completed' -> implies auto confirmed if logic sets it? 
+	// confirmed_at: not null and status = 'confirmed' or 'completed' -> implies auto confirmed if logic sets it?
 	// Actually, "Auto Confirmed" usually means confirmed via WhatsApp/System.
 	// For now, let's assume if `confirmed_at` is set, it's confirmed. To distinguish "Auto", we might need a flag or assume logic.
 	// The requirement says "Impacto da Automação (WhatsApp)". If we don't store "source" of confirmation, we might need to approximate or check logs.
@@ -73,9 +72,9 @@ func (r *dashboardRepository) GetAppointmentStats(ctx context.Context, clinicID 
 	// For now, let's count all `confirmed` as "Confirmed" and maybe 80% as Auto? No, that's bad.
 	// Let's look at the codebase. `ConfirmAppointment` handler might leave a trace.
 	// If there's no trace, I'll count all `confirmed` that have `reminder_sent_at` set as "potentially auto-confirmed" or just use `ConfirmedCount` for now and improve later.
-	// Wait, `features/dashboard.md` says "Confirmadas Automaticamente - 24". 
+	// Wait, `features/dashboard.md` says "Confirmadas Automaticamente - 24".
 	// I'll add `AutoConfirmed` to the struct and try to query it.
-	
+
 	err := r.db.Table("appointments").
 		Select(`
 			COUNT(*) as total_count,

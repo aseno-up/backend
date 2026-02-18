@@ -3,8 +3,8 @@ package model
 import (
 	"time"
 
-	"github.com/google/uuid"
 	user_model "github.com/aseno/backend/pkg/user/model"
+	"github.com/google/uuid"
 )
 
 // InviteStatus represents the status of an invitation
@@ -93,14 +93,14 @@ type AcceptInviteRequest struct {
 
 // InviteDetailsResponse is returned when fetching invite details by token
 type InviteDetailsResponse struct {
-	ID         uuid.UUID           `json:"id"`
-	Email      string              `json:"email"`
-	Role       user_model.UserRole `json:"role"`
-	ClinicName string              `json:"clinic_name"`
-	InviterName string             `json:"inviter_name"`
-	ExpiresAt  time.Time           `json:"expires_at"`
-	IsValid    bool                `json:"is_valid"`
-	IsExpired  bool                `json:"is_expired"`
+	ID          uuid.UUID           `json:"id"`
+	Email       string              `json:"email"`
+	Role        user_model.UserRole `json:"role"`
+	ClinicName  string              `json:"clinic_name"`
+	InviterName string              `json:"inviter_name"`
+	ExpiresAt   time.Time           `json:"expires_at"`
+	IsValid     bool                `json:"is_valid"`
+	IsExpired   bool                `json:"is_expired"`
 }
 
 // InviteListResponse represents a paginated list of invites

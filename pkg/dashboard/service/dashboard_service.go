@@ -6,12 +6,12 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/google/uuid"
-	"github.com/aseno/backend/pkg/dashboard/model"
-	"github.com/aseno/backend/pkg/dashboard/repository"
 	clinic_model "github.com/aseno/backend/pkg/clinic/model"
 	clinic_repository "github.com/aseno/backend/pkg/clinic/repository"
+	"github.com/aseno/backend/pkg/dashboard/model"
+	"github.com/aseno/backend/pkg/dashboard/repository"
 	profModel "github.com/aseno/backend/pkg/professional/model"
+	"github.com/google/uuid"
 )
 
 type DashboardService interface {
@@ -74,11 +74,11 @@ func (s *dashboardService) GetMetrics(ctx context.Context, clinicID uuid.UUID, s
 
 	// Estimate 50 mins per appointment for MVP
 	occupiedMins := stats.TotalCount * 50
-	
+
 	occupancy := 0.0
 	openSlots := 0
 	potentialRevenue := 0.0
-	
+
 	// Average price
 	avgPrice := 0.0
 	completedAndConfirmed := stats.CompletedCount + stats.ConfirmedCount
@@ -97,13 +97,13 @@ func (s *dashboardService) GetMetrics(ctx context.Context, clinicID uuid.UUID, s
 		if occupancy > 100 {
 			occupancy = 100
 		}
-		
+
 		remainingMins := totalCapacityMins - occupiedMins
 		if remainingMins < 0 {
 			remainingMins = 0
 		}
 		openSlots = remainingMins / 50 // Assuming 50 min slots
-		
+
 		potentialRevenue = float64(openSlots) * avgPrice
 	}
 
@@ -192,7 +192,7 @@ func (s *dashboardService) GetMetrics(ctx context.Context, clinicID uuid.UUID, s
 func (s *dashboardService) calculateCapacity(wh profModel.WorkingHours, start, end time.Time) int {
 	totalMins := 0
 	current := start
-	
+
 	// Avoid infinite loop if start > end
 	if start.After(end) {
 		return 0

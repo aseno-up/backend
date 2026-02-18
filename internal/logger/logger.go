@@ -37,15 +37,15 @@ var (
 		"Patient":     color.New(color.FgGreen),
 
 		// Services
-		"EMAIL":      color.New(color.FgCyan),
-		"BREVO":      color.New(color.FgCyan),
-		"WhatsApp":   color.New(color.FgGreen),
-		"AUTH":       color.New(color.FgMagenta),
-		"Settings":   color.New(color.FgBlue),
-		"Calendar":   color.New(color.FgBlue),
-		"Payment":    color.New(color.FgYellow),
-		"Analytics":  color.New(color.FgCyan),
-		"Waitlist":   color.New(color.FgYellow),
+		"EMAIL":     color.New(color.FgCyan),
+		"BREVO":     color.New(color.FgCyan),
+		"WhatsApp":  color.New(color.FgGreen),
+		"AUTH":      color.New(color.FgMagenta),
+		"Settings":  color.New(color.FgBlue),
+		"Calendar":  color.New(color.FgBlue),
+		"Payment":   color.New(color.FgYellow),
+		"Analytics": color.New(color.FgCyan),
+		"Waitlist":  color.New(color.FgYellow),
 
 		// Error/Warning/Success indicators
 		"ERROR":   color.New(color.FgRed, color.Bold),

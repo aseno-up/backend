@@ -13,21 +13,21 @@ import (
 
 // RabbitMQConfig holds RabbitMQ configuration
 type RabbitMQConfig struct {
-	URL           string
-	QueueName     string
-	DLQName       string
+	URL            string
+	QueueName      string
+	DLQName        string
 	DelayQueueName string // Queue for delayed retries
-	PrefetchCount int
+	PrefetchCount  int
 }
 
 // rabbitMQ implements Queue interface using RabbitMQ
 type rabbitMQ struct {
-	config     RabbitMQConfig
-	conn       *amqp.Connection
-	channel    *amqp.Channel
-	mu         sync.RWMutex
-	connected  bool
-	closeCh    chan struct{}
+	config      RabbitMQConfig
+	conn        *amqp.Connection
+	channel     *amqp.Channel
+	mu          sync.RWMutex
+	connected   bool
+	closeCh     chan struct{}
 	reconnectCh chan struct{}
 }
 
@@ -125,9 +125,9 @@ func (r *rabbitMQ) declareDelayQueue() error {
 		false, // exclusive
 		false, // noWait
 		amqp.Table{
-			"x-dead-letter-exchange":    "",                   // Default exchange
-			"x-dead-letter-routing-key": r.config.QueueName,   // Route to main queue
-			"x-message-ttl":             int32(600000),        // Max 10 min default TTL (per-message TTL takes precedence)
+			"x-dead-letter-exchange":    "",                 // Default exchange
+			"x-dead-letter-routing-key": r.config.QueueName, // Route to main queue
+			"x-message-ttl":             int32(600000),      // Max 10 min default TTL (per-message TTL takes precedence)
 		},
 	)
 	return err
@@ -210,10 +210,10 @@ func (r *rabbitMQ) Publish(ctx context.Context, job *MessageJob) error {
 
 	return r.channel.PublishWithContext(
 		ctx,
-		"",                  // exchange
-		r.config.QueueName,  // routing key
-		false,               // mandatory
-		false,               // immediate
+		"",                 // exchange
+		r.config.QueueName, // routing key
+		false,              // mandatory
+		false,              // immediate
 		amqp.Publishing{
 			DeliveryMode: amqp.Persistent,
 			ContentType:  "application/json",
@@ -252,10 +252,10 @@ func (r *rabbitMQ) PublishWithDelay(ctx context.Context, job *MessageJob, delay 
 
 	return r.channel.PublishWithContext(
 		ctx,
-		"",                       // exchange
-		r.config.DelayQueueName,  // routing key (delay queue)
-		false,                    // mandatory
-		false,                    // immediate
+		"",                      // exchange
+		r.config.DelayQueueName, // routing key (delay queue)
+		false,                   // mandatory
+		false,                   // immediate
 		amqp.Publishing{
 			DeliveryMode: amqp.Persistent,
 			ContentType:  "application/json",

@@ -6,8 +6,8 @@ import (
 	"github.com/aseno/backend/internal/logger"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/aseno/backend/pkg/whatsapp/model"
+	"github.com/google/uuid"
 )
 
 // Manager handles conversation lifecycle and state management
@@ -51,10 +51,10 @@ type Manager interface {
 
 // conversationManager implements Manager
 type conversationManager struct {
-	repo            Repository
-	defaultTTL      time.Duration
-	extendedTTL     time.Duration
-	maxTurns        int
+	repo        Repository
+	defaultTTL  time.Duration
+	extendedTTL time.Duration
+	maxTurns    int
 }
 
 // NewManager creates a new conversation manager

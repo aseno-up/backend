@@ -27,21 +27,21 @@ const (
 
 // Patient represents a patient in the clinic
 type Patient struct {
-	ID          uuid.UUID  `json:"id" gorm:"type:uuid;primary_key;default:gen_random_uuid()"`
-	ClinicID    uuid.UUID  `json:"clinic_id" gorm:"type:uuid;not null;index"`
-	Name        string     `json:"name" gorm:"not null"`
-	Email       string     `json:"email" gorm:"index"`
-	Phone       string     `json:"phone" gorm:"index"`
-	WhatsApp    string     `json:"whatsapp" gorm:"column:whatsapp"` // May differ from phone
-	Document    string     `json:"document"`                        // CPF
-	BirthDate   *time.Time `json:"birth_date"`
-	Gender      Gender     `json:"gender"`
-	Address     string     `json:"address"`
-	City        string     `json:"city"`
-	State       string     `json:"state"`
-	ZipCode     string     `json:"zip_code"`
-	Notes       string     `json:"notes"` // General notes
-	IsActive    bool       `json:"is_active" gorm:"default:true"`
+	ID        uuid.UUID  `json:"id" gorm:"type:uuid;primary_key;default:gen_random_uuid()"`
+	ClinicID  uuid.UUID  `json:"clinic_id" gorm:"type:uuid;not null;index"`
+	Name      string     `json:"name" gorm:"not null"`
+	Email     string     `json:"email" gorm:"index"`
+	Phone     string     `json:"phone" gorm:"index"`
+	WhatsApp  string     `json:"whatsapp" gorm:"column:whatsapp"` // May differ from phone
+	Document  string     `json:"document"`                        // CPF
+	BirthDate *time.Time `json:"birth_date"`
+	Gender    Gender     `json:"gender"`
+	Address   string     `json:"address"`
+	City      string     `json:"city"`
+	State     string     `json:"state"`
+	ZipCode   string     `json:"zip_code"`
+	Notes     string     `json:"notes"` // General notes
+	IsActive  bool       `json:"is_active" gorm:"default:true"`
 	// Risk assessment fields
 	NoShowRisk        NoShowRisk `json:"no_show_risk" gorm:"default:'unknown'"`
 	TotalAppointments int        `json:"total_appointments" gorm:"default:0"`

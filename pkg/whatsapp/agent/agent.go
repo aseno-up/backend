@@ -18,13 +18,13 @@ type AgentRequest struct {
 
 // AgentResponse represents the agent's response
 type AgentResponse struct {
-	Content       string                  // Generated message content
-	ToolCalls     []conversation.ToolCall // Tools called during this turn
-	FinishReason  string                  // Why the generation stopped
-	TokensUsed    int                     // Total tokens consumed
-	Latency       time.Duration           // Time taken to generate
-	Model         string                  // Model used
-	Provider      string                  // Provider (gemini, claude, openai)
+	Content      string                  // Generated message content
+	ToolCalls    []conversation.ToolCall // Tools called during this turn
+	FinishReason string                  // Why the generation stopped
+	TokensUsed   int                     // Total tokens consumed
+	Latency      time.Duration           // Time taken to generate
+	Model        string                  // Model used
+	Provider     string                  // Provider (gemini, claude, openai)
 }
 
 // Agent defines the interface for AI agents
@@ -41,11 +41,11 @@ type Agent interface {
 
 // Config holds agent configuration
 type Config struct {
-	Provider         string        // gemini, claude, openai
-	APIKey           string        // API key for the provider
-	Model            string        // Primary model name
-	FallbackModels   []string      // List of fallback models to try in order if primary fails
-	MaxTokens        int           // Max tokens to generate
-	Temperature      float32       // Temperature for generation (0.0-1.0)
-	Timeout          time.Duration // Request timeout
+	Provider       string        // gemini, claude, openai
+	APIKey         string        // API key for the provider
+	Model          string        // Primary model name
+	FallbackModels []string      // List of fallback models to try in order if primary fails
+	MaxTokens      int           // Max tokens to generate
+	Temperature    float32       // Temperature for generation (0.0-1.0)
+	Timeout        time.Duration // Request timeout
 }

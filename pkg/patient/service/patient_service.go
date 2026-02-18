@@ -127,7 +127,7 @@ func (s *patientService) List(ctx context.Context, clinicID uuid.UUID, page, per
 	}
 
 	data := make([]*model.PatientResponse, len(patients))
-	
+
 	// Check plan once for the list
 	allowed, _ := s.checkPlanForRiskData(ctx, clinicID)
 
@@ -167,7 +167,7 @@ func (s *patientService) Search(ctx context.Context, clinicID uuid.UUID, query s
 	}
 
 	data := make([]*model.PatientResponse, len(patients))
-	
+
 	// Check plan once for the list
 	allowed, _ := s.checkPlanForRiskData(ctx, clinicID)
 

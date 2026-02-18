@@ -2,8 +2,8 @@ package handler
 
 import (
 	"encoding/json"
-	"io"
 	"github.com/aseno/backend/internal/logger"
+	"io"
 	"net/http"
 	"strconv"
 	"time"

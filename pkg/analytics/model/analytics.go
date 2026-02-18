@@ -4,8 +4,8 @@ import "github.com/google/uuid"
 
 // TimeSlotStats holds statistics for a specific time slot
 type TimeSlotStats struct {
-	DayOfWeek      int     `json:"day_of_week"`      // 0=Sunday, 1=Monday...
-	HourStart      int     `json:"hour_start"`       // 8, 9, 10...
+	DayOfWeek      int     `json:"day_of_week"` // 0=Sunday, 1=Monday...
+	HourStart      int     `json:"hour_start"`  // 8, 9, 10...
 	TotalScheduled int     `json:"total_scheduled"`
 	Completed      int     `json:"completed"`
 	NoShows        int     `json:"no_shows"`
@@ -36,14 +36,14 @@ type AnalyticsResponse struct {
 
 // AnalyticsSummary provides overall statistics
 type AnalyticsSummary struct {
-	TotalAppointments   int     `json:"total_appointments"`
-	TotalCompleted      int     `json:"total_completed"`
-	TotalNoShows        int     `json:"total_no_shows"`
-	OverallAttendance   float64 `json:"overall_attendance_rate"`
-	BestDay             string  `json:"best_day"`
-	WorstDay            string  `json:"worst_day"`
-	BestHour            int     `json:"best_hour"`
-	WorstHour           int     `json:"worst_hour"`
+	TotalAppointments int     `json:"total_appointments"`
+	TotalCompleted    int     `json:"total_completed"`
+	TotalNoShows      int     `json:"total_no_shows"`
+	OverallAttendance float64 `json:"overall_attendance_rate"`
+	BestDay           string  `json:"best_day"`
+	WorstDay          string  `json:"worst_day"`
+	BestHour          int     `json:"best_hour"`
+	WorstHour         int     `json:"worst_hour"`
 }
 
 // AnalyticsFilter represents filter parameters for analytics queries

@@ -6,8 +6,8 @@ import (
 	"errors"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/aseno/backend/pkg/whatsapp/model"
+	"github.com/google/uuid"
 )
 
 // ConversationState represents the current state in the conversation flow
@@ -28,9 +28,9 @@ const (
 
 // ToolCall represents a function/tool call made by the AI agent
 type ToolCall struct {
-	ID         string                 `json:"id"`          // Unique ID for this tool call
-	Name       string                 `json:"name"`        // Tool name (e.g., "get_available_slots")
-	Arguments  map[string]interface{} `json:"arguments"`   // Tool arguments
+	ID         string                 `json:"id"`               // Unique ID for this tool call
+	Name       string                 `json:"name"`             // Tool name (e.g., "get_available_slots")
+	Arguments  map[string]interface{} `json:"arguments"`        // Tool arguments
 	Result     interface{}            `json:"result,omitempty"` // Tool execution result
 	Error      string                 `json:"error,omitempty"`  // Error if tool execution failed
 	ExecutedAt *time.Time             `json:"executed_at,omitempty"`
@@ -38,10 +38,10 @@ type ToolCall struct {
 
 // ConversationTurn represents a single turn in the conversation
 type ConversationTurn struct {
-	Role      string     `json:"role"`      // "user" or "assistant"
-	Content   string     `json:"content"`   // Message content
+	Role      string     `json:"role"`                 // "user" or "assistant"
+	Content   string     `json:"content"`              // Message content
 	ToolCalls []ToolCall `json:"tool_calls,omitempty"` // Tool calls made in this turn
-	Timestamp time.Time  `json:"timestamp"` // When this turn occurred
+	Timestamp time.Time  `json:"timestamp"`            // When this turn occurred
 }
 
 // ConversationHistory is a slice of conversation turns

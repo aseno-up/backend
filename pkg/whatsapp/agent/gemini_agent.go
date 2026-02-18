@@ -235,7 +235,7 @@ func (a *geminiAgent) generateWithModel(ctx context.Context, req *AgentRequest, 
 			}
 
 			functionResponse := genai.FunctionResponse{
-				Name:     fc.Name,
+				Name: fc.Name,
 				Response: map[string]interface{}{
 					"result": resultData,
 					"error":  toolCall.Error,

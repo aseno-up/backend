@@ -10,12 +10,12 @@ import (
 type AppointmentStatus string
 
 const (
-	AppointmentStatusPending    AppointmentStatus = "pending"     // Awaiting confirmation
-	AppointmentStatusConfirmed  AppointmentStatus = "confirmed"   // Confirmed by patient
-	AppointmentStatusCanceled   AppointmentStatus = "canceled"    // Canceled
-	AppointmentStatusNoShow     AppointmentStatus = "no_show"     // Patient didn't show up
-	AppointmentStatusNoResponse AppointmentStatus = "no_response" // Patient didn't respond to confirmation
-	AppointmentStatusCompleted  AppointmentStatus = "completed"   // Appointment finished
+	AppointmentStatusPending     AppointmentStatus = "pending"     // Awaiting confirmation
+	AppointmentStatusConfirmed   AppointmentStatus = "confirmed"   // Confirmed by patient
+	AppointmentStatusCanceled    AppointmentStatus = "canceled"    // Canceled
+	AppointmentStatusNoShow      AppointmentStatus = "no_show"     // Patient didn't show up
+	AppointmentStatusNoResponse  AppointmentStatus = "no_response" // Patient didn't respond to confirmation
+	AppointmentStatusCompleted   AppointmentStatus = "completed"   // Appointment finished
 	AppointmentStatusRescheduled AppointmentStatus = "rescheduled" // Rescheduled to another time
 )
 
@@ -30,22 +30,22 @@ const (
 
 // Appointment represents an appointment/consultation
 type Appointment struct {
-	ID              uuid.UUID         `json:"id" gorm:"type:uuid;primary_key;default:gen_random_uuid()"`
-	ClinicID        uuid.UUID         `json:"clinic_id" gorm:"type:uuid;not null;index"`
-	PatientID       uuid.UUID         `json:"patient_id" gorm:"type:uuid;not null;index"`
-	ProfessionalID  uuid.UUID         `json:"professional_id" gorm:"type:uuid;not null;index"`
-	SessionPlanID   *uuid.UUID        `json:"session_plan_id,omitempty" gorm:"type:uuid;index"` // If part of a session plan
-	StartTime       time.Time         `json:"start_time" gorm:"not null;index"`
-	EndTime         time.Time         `json:"end_time" gorm:"not null"`
-	Status          AppointmentStatus `json:"status" gorm:"not null;default:'pending';index"`
-	Type            AppointmentType   `json:"type" gorm:"not null;default:'regular'"`
-	Title           string            `json:"title"`                                 // Optional custom title
-	Notes           string            `json:"notes"`                                 // Internal notes
-	PatientNotes    string            `json:"patient_notes"`                         // Notes from patient
-	Price           float64           `json:"price" gorm:"type:decimal(10,2)"`       // Price for this appointment
-	ConfirmedAt     *time.Time        `json:"confirmed_at,omitempty"`
-	CanceledAt      *time.Time        `json:"canceled_at,omitempty"`
-	CancelReason    string            `json:"cancel_reason"`
+	ID             uuid.UUID         `json:"id" gorm:"type:uuid;primary_key;default:gen_random_uuid()"`
+	ClinicID       uuid.UUID         `json:"clinic_id" gorm:"type:uuid;not null;index"`
+	PatientID      uuid.UUID         `json:"patient_id" gorm:"type:uuid;not null;index"`
+	ProfessionalID uuid.UUID         `json:"professional_id" gorm:"type:uuid;not null;index"`
+	SessionPlanID  *uuid.UUID        `json:"session_plan_id,omitempty" gorm:"type:uuid;index"` // If part of a session plan
+	StartTime      time.Time         `json:"start_time" gorm:"not null;index"`
+	EndTime        time.Time         `json:"end_time" gorm:"not null"`
+	Status         AppointmentStatus `json:"status" gorm:"not null;default:'pending';index"`
+	Type           AppointmentType   `json:"type" gorm:"not null;default:'regular'"`
+	Title          string            `json:"title"`                           // Optional custom title
+	Notes          string            `json:"notes"`                           // Internal notes
+	PatientNotes   string            `json:"patient_notes"`                   // Notes from patient
+	Price          float64           `json:"price" gorm:"type:decimal(10,2)"` // Price for this appointment
+	ConfirmedAt    *time.Time        `json:"confirmed_at,omitempty"`
+	CanceledAt     *time.Time        `json:"canceled_at,omitempty"`
+	CancelReason   string            `json:"cancel_reason"`
 	// Reminder tracking fields
 	Reminder48hSentAt *time.Time `json:"reminder_48h_sent_at,omitempty"`
 	Reminder24hSentAt *time.Time `json:"reminder_24h_sent_at,omitempty"`
@@ -54,11 +54,11 @@ type Appointment struct {
 	ConfirmationExpiresAt *time.Time `json:"confirmation_expires_at,omitempty" gorm:"index"`
 
 	// Legacy field (deprecated, use specific reminder fields)
-	ReminderSentAt  *time.Time        `json:"reminder_sent_at,omitempty"`
-	GoogleEventID   string            `json:"-"`                                     // Google Calendar event ID
-	CreatedAt       time.Time         `json:"created_at"`
-	UpdatedAt       time.Time         `json:"updated_at"`
-	DeletedAt       *time.Time        `json:"deleted_at,omitempty" gorm:"index"`
+	ReminderSentAt *time.Time `json:"reminder_sent_at,omitempty"`
+	GoogleEventID  string     `json:"-"` // Google Calendar event ID
+	CreatedAt      time.Time  `json:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at"`
+	DeletedAt      *time.Time `json:"deleted_at,omitempty" gorm:"index"`
 
 	// Relationships (for preloading)
 	Patient      *PatientInfo      `json:"patient,omitempty" gorm:"foreignKey:PatientID;references:ID"`
@@ -152,30 +152,30 @@ func (a *Appointment) DurationMinutes() int {
 
 // CreateAppointmentRequest represents the request to create an appointment
 type CreateAppointmentRequest struct {
-	PatientID       uuid.UUID `json:"patient_id" binding:"required"`
-	ProfessionalID  uuid.UUID `json:"professional_id" binding:"required"`
-	StartTime       time.Time `json:"start_time" binding:"required"`
-	DurationMinutes int       `json:"duration_minutes" binding:"required,min=5,max=480"`
-	Title           string    `json:"title"`
-	Notes           string    `json:"notes"`
-	Price           float64   `json:"price"`
-	Type            AppointmentType `json:"type"`
-	WantsAnticipation bool `json:"wants_anticipation"` // If true, adds to waitlist for earlier slot
+	PatientID         uuid.UUID       `json:"patient_id" binding:"required"`
+	ProfessionalID    uuid.UUID       `json:"professional_id" binding:"required"`
+	StartTime         time.Time       `json:"start_time" binding:"required"`
+	DurationMinutes   int             `json:"duration_minutes" binding:"required,min=5,max=480"`
+	Title             string          `json:"title"`
+	Notes             string          `json:"notes"`
+	Price             float64         `json:"price"`
+	Type              AppointmentType `json:"type"`
+	WantsAnticipation bool            `json:"wants_anticipation"` // If true, adds to waitlist for earlier slot
 }
 
 // UpdateAppointmentRequest represents the request to update an appointment
 type UpdateAppointmentRequest struct {
-	PatientID       *uuid.UUID        `json:"patient_id"`
-	ProfessionalID  *uuid.UUID        `json:"professional_id"`
-	StartTime       *time.Time        `json:"start_time"`
-	DurationMinutes *int              `json:"duration_minutes" binding:"omitempty,min=5,max=480"`
-	Status          AppointmentStatus `json:"status"`
-	Title           string            `json:"title"`
-	Notes           string            `json:"notes"`
-	PatientNotes    string            `json:"patient_notes"`
-	Price           *float64          `json:"price"`
-	CancelReason    string            `json:"cancel_reason"`
-	WantsAnticipation *bool `json:"wants_anticipation"` // Update anticipation preference
+	PatientID         *uuid.UUID        `json:"patient_id"`
+	ProfessionalID    *uuid.UUID        `json:"professional_id"`
+	StartTime         *time.Time        `json:"start_time"`
+	DurationMinutes   *int              `json:"duration_minutes" binding:"omitempty,min=5,max=480"`
+	Status            AppointmentStatus `json:"status"`
+	Title             string            `json:"title"`
+	Notes             string            `json:"notes"`
+	PatientNotes      string            `json:"patient_notes"`
+	Price             *float64          `json:"price"`
+	CancelReason      string            `json:"cancel_reason"`
+	WantsAnticipation *bool             `json:"wants_anticipation"` // Update anticipation preference
 }
 
 // AppointmentListResponse represents a list of appointments

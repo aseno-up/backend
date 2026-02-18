@@ -4,8 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"io"
 	"github.com/aseno/backend/internal/logger"
+	"io"
 	"net/http"
 	"regexp"
 	"strings"
@@ -183,7 +183,7 @@ func (h *whatsAppHandler) Connect(c *gin.Context) {
 		if len(safeClinicName) > 30 {
 			safeClinicName = safeClinicName[:30]
 		}
-		
+
 		clinic.WhatsAppInstance = fmt.Sprintf("%s-%s", safeClinicName, clinic.ID.String()[:8])
 
 		if err := h.clinicRepo.UpdateWhatsAppInstance(c.Request.Context(), clinic.ID, clinic.WhatsAppInstance); err != nil {

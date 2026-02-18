@@ -10,25 +10,25 @@ import (
 
 // ExecutionContext holds the context needed to execute tools
 type ExecutionContext struct {
-	Context          context.Context
-	ClinicID         uuid.UUID
-	PatientPhone     string
-	PatientID        *uuid.UUID
-	PatientName      string
-	ConversationID   uuid.UUID
+	Context        context.Context
+	ClinicID       uuid.UUID
+	PatientPhone   string
+	PatientID      *uuid.UUID
+	PatientName    string
+	ConversationID uuid.UUID
 
 	// Service dependencies (injected from WhatsApp service)
-	ProfessionalLister    ProfessionalLister
-	SlotFinder            SlotFinder
-	AppointmentCreator    AppointmentCreator
-	AppointmentFinder     AppointmentFinder
-	AppointmentConfirmer  AppointmentConfirmer
-	AppointmentCanceller  AppointmentCanceller
-	AppointmentRescheduler AppointmentRescheduler
-	ClinicInfoProvider    ClinicInfoProvider
+	ProfessionalLister       ProfessionalLister
+	SlotFinder               SlotFinder
+	AppointmentCreator       AppointmentCreator
+	AppointmentFinder        AppointmentFinder
+	AppointmentConfirmer     AppointmentConfirmer
+	AppointmentCanceller     AppointmentCanceller
+	AppointmentRescheduler   AppointmentRescheduler
+	ClinicInfoProvider       ClinicInfoProvider
 	ProfessionalInfoProvider ProfessionalInfoProvider
-	PatientInfoProvider   PatientInfoProvider
-	PatientFinderCreator  PatientFinderCreator
+	PatientInfoProvider      PatientInfoProvider
+	PatientFinderCreator     PatientFinderCreator
 }
 
 // Service interfaces that tools will call
@@ -381,8 +381,8 @@ func (e *Executor) confirmAppointment(execCtx *ExecutionContext, params map[stri
 
 		if len(appointments) > 1 {
 			return map[string]interface{}{
-				"success": false,
-				"message": "Múltiplos agendamentos pendentes. Por favor, especifique qual deseja confirmar.",
+				"success":      false,
+				"message":      "Múltiplos agendamentos pendentes. Por favor, especifique qual deseja confirmar.",
 				"appointments": appointments,
 			}, nil
 		}
@@ -451,8 +451,8 @@ func (e *Executor) cancelAppointment(execCtx *ExecutionContext, params map[strin
 
 		if len(futureApts) > 1 {
 			return map[string]interface{}{
-				"success": false,
-				"message": "Múltiplos agendamentos futuros. Por favor, especifique qual deseja cancelar.",
+				"success":      false,
+				"message":      "Múltiplos agendamentos futuros. Por favor, especifique qual deseja cancelar.",
 				"appointments": futureApts,
 			}, nil
 		}

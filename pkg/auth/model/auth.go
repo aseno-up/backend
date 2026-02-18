@@ -51,6 +51,11 @@ type RegisterRequest struct {
 	Password   string `json:"password" binding:"required,min=8"`
 	Name       string `json:"name" binding:"required,min=2,max=100"`
 	Phone      string `json:"phone"`
+	// Optional: Plan selection from landing page
+	Plan    string `json:"plan"`    // trial, basic, professional, advanced
+	Billing string `json:"billing"` // monthly, annually
+	// Optional: Payment info for paid plans
+	Document string `json:"document"` // CPF or CNPJ for Asaas
 }
 
 // RefreshRequest represents the refresh token request body

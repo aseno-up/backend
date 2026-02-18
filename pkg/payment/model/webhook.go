@@ -2,7 +2,7 @@ package model
 
 // AsaasWebhookPayload represents a webhook payload from Asaas
 type AsaasWebhookPayload struct {
-	Event   WebhookEvent   `json:"event"`
+	Event   WebhookEvent    `json:"event"`
 	Payment *WebhookPayment `json:"payment,omitempty"`
 }
 

@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"github.com/aseno/backend/internal/logger"
 
-	"gorm.io/gorm"
 	"github.com/aseno/backend/pkg/whatsapp/conversation"
+	"gorm.io/gorm"
 )
 
 // MigrateConversations runs migrations for conversation-related tables

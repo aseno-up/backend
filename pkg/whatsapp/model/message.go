@@ -62,9 +62,9 @@ func (Message) TableName() string {
 
 // SendMessageRequest represents a request to send a message
 type SendMessageRequest struct {
-	Phone   string            `json:"phone" binding:"required"`
-	Message string            `json:"message" binding:"required"`
-	Buttons []MessageButton   `json:"buttons,omitempty"`
+	Phone   string              `json:"phone" binding:"required"`
+	Message string              `json:"message" binding:"required"`
+	Buttons []MessageButton     `json:"buttons,omitempty"`
 	Options *SendMessageOptions `json:"options,omitempty"`
 }
 
@@ -124,14 +124,14 @@ type ReminderMessage struct {
 type SegmentType string
 
 const (
-	SegmentTypeGreeting  SegmentType = "greeting"
-	SegmentTypeContent   SegmentType = "content"
-	SegmentTypeQuestion  SegmentType = "question"
+	SegmentTypeGreeting SegmentType = "greeting"
+	SegmentTypeContent  SegmentType = "content"
+	SegmentTypeQuestion SegmentType = "question"
 )
 
 // MessageSegment represents a single segment of a multi-part message
 type MessageSegment struct {
-	Content     string        `json:"content"`      // Content of the message
-	Type        SegmentType   `json:"type"`         // greeting, content, question
-	DelayAfter  time.Duration `json:"delay_after"`  // Delay after sending this segment
+	Content    string        `json:"content"`     // Content of the message
+	Type       SegmentType   `json:"type"`        // greeting, content, question
+	DelayAfter time.Duration `json:"delay_after"` // Delay after sending this segment
 }

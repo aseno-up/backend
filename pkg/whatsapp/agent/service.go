@@ -48,13 +48,13 @@ type MessageResponse struct {
 
 // aiAgentService implements Service
 type aiAgentService struct {
-	agent                        Agent
-	conversationMgr              conversation.Manager
-	toolRegistry                 *tools.Registry
-	toolExecutor                 *tools.Executor
-	executionContext             *tools.ExecutionContext
-	featureFlags                 *FeatureFlags
-	clinicRepo                   clinic_repository.ClinicRepository
+	agent                          Agent
+	conversationMgr                conversation.Manager
+	toolRegistry                   *tools.Registry
+	toolExecutor                   *tools.Executor
+	executionContext               *tools.ExecutionContext
+	featureFlags                   *FeatureFlags
+	clinicRepo                     clinic_repository.ClinicRepository
 	defaultMinDelayBetweenMessages int
 }
 
@@ -78,13 +78,13 @@ func NewService(
 	defaultMinDelayBetweenMessages int,
 ) Service {
 	return &aiAgentService{
-		agent:                        agent,
-		conversationMgr:              conversationMgr,
-		toolRegistry:                 toolRegistry,
-		toolExecutor:                 toolExecutor,
-		executionContext:             executionContext,
-		featureFlags:                 featureFlags,
-		clinicRepo:                   clinicRepo,
+		agent:                          agent,
+		conversationMgr:                conversationMgr,
+		toolRegistry:                   toolRegistry,
+		toolExecutor:                   toolExecutor,
+		executionContext:               executionContext,
+		featureFlags:                   featureFlags,
+		clinicRepo:                     clinicRepo,
 		defaultMinDelayBetweenMessages: defaultMinDelayBetweenMessages,
 	}
 }

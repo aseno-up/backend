@@ -39,19 +39,19 @@ type Payment struct {
 type PaymentStatus string
 
 const (
-	PaymentStatusPending             PaymentStatus = "PENDING"
-	PaymentStatusReceived            PaymentStatus = "RECEIVED"
-	PaymentStatusConfirmed           PaymentStatus = "CONFIRMED"
-	PaymentStatusOverdue             PaymentStatus = "OVERDUE"
-	PaymentStatusRefunded            PaymentStatus = "REFUNDED"
-	PaymentStatusReceivedInCash      PaymentStatus = "RECEIVED_IN_CASH"
-	PaymentStatusRefundRequested     PaymentStatus = "REFUND_REQUESTED"
-	PaymentStatusRefundInProgress    PaymentStatus = "REFUND_IN_PROGRESS"
-	PaymentStatusChargebackRequested PaymentStatus = "CHARGEBACK_REQUESTED"
-	PaymentStatusChargebackDispute   PaymentStatus = "CHARGEBACK_DISPUTE"
-	PaymentStatusAwaitingChargeback  PaymentStatus = "AWAITING_CHARGEBACK_REVERSAL"
-	PaymentStatusDunningRequested    PaymentStatus = "DUNNING_REQUESTED"
-	PaymentStatusDunningReceived     PaymentStatus = "DUNNING_RECEIVED"
+	PaymentStatusPending              PaymentStatus = "PENDING"
+	PaymentStatusReceived             PaymentStatus = "RECEIVED"
+	PaymentStatusConfirmed            PaymentStatus = "CONFIRMED"
+	PaymentStatusOverdue              PaymentStatus = "OVERDUE"
+	PaymentStatusRefunded             PaymentStatus = "REFUNDED"
+	PaymentStatusReceivedInCash       PaymentStatus = "RECEIVED_IN_CASH"
+	PaymentStatusRefundRequested      PaymentStatus = "REFUND_REQUESTED"
+	PaymentStatusRefundInProgress     PaymentStatus = "REFUND_IN_PROGRESS"
+	PaymentStatusChargebackRequested  PaymentStatus = "CHARGEBACK_REQUESTED"
+	PaymentStatusChargebackDispute    PaymentStatus = "CHARGEBACK_DISPUTE"
+	PaymentStatusAwaitingChargeback   PaymentStatus = "AWAITING_CHARGEBACK_REVERSAL"
+	PaymentStatusDunningRequested     PaymentStatus = "DUNNING_REQUESTED"
+	PaymentStatusDunningReceived      PaymentStatus = "DUNNING_RECEIVED"
 	PaymentStatusAwaitingRiskAnalysis PaymentStatus = "AWAITING_RISK_ANALYSIS"
 )
 
@@ -68,13 +68,13 @@ const (
 
 // CreatePaymentRequest represents a request to create a payment in Asaas
 type CreatePaymentRequest struct {
-	CustomerID      string      `json:"customer" binding:"required"`
-	BillingType     BillingType `json:"billingType" binding:"required"`
-	Value           float64     `json:"value" binding:"required"`
-	DueDate         string      `json:"dueDate" binding:"required"` // Format: YYYY-MM-DD
-	Description     string      `json:"description"`
-	ExternalRef     string      `json:"externalReference"`
-	PostalService   bool        `json:"postalService,omitempty"`
+	CustomerID    string      `json:"customer" binding:"required"`
+	BillingType   BillingType `json:"billingType" binding:"required"`
+	Value         float64     `json:"value" binding:"required"`
+	DueDate       string      `json:"dueDate" binding:"required"` // Format: YYYY-MM-DD
+	Description   string      `json:"description"`
+	ExternalRef   string      `json:"externalReference"`
+	PostalService bool        `json:"postalService,omitempty"`
 }
 
 // AsaasPaymentResponse represents the response from Asaas API when creating/getting a payment
@@ -98,8 +98,8 @@ type AsaasPaymentResponse struct {
 
 // AsaasPixQRCodeResponse represents the PIX QR Code response
 type AsaasPixQRCodeResponse struct {
-	EncodedImage string `json:"encodedImage"`
-	Payload      string `json:"payload"`
+	EncodedImage   string `json:"encodedImage"`
+	Payload        string `json:"payload"`
 	ExpirationDate string `json:"expirationDate"`
 }
 

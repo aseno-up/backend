@@ -29,24 +29,24 @@ type Config struct {
 	GoogleAuthRedirectURL string // For authentication
 
 	// WhatsApp Provider Selection
-	whatsappProvider      string // "evolution" or "waha"
+	whatsappProvider string // "evolution" or "waha"
 
 	// Evolution API / WhatsApp (private - sensitive)
-	evolutionAPIURL       string
-	evolutionAPIKey       string
+	evolutionAPIURL string
+	evolutionAPIKey string
 
 	// WAHA (WhatsApp HTTP API) (private - sensitive)
-	wahaAPIURL            string
-	wahaAPIKey            string
+	wahaAPIURL string
+	wahaAPIKey string
 
 	whatsappWebhookSecret string
 	whatsappWebhookURL    string
 
 	// Asaas Payment (private - sensitive)
-	asaasAPIURL       string
-	asaasAPIKey       string
+	asaasAPIURL        string
+	asaasAPIKey        string
 	asaasWebhookSecret string
-	AsaasSandbox      bool
+	AsaasSandbox       bool
 
 	// CORS
 	AllowedOrigins []string
@@ -82,12 +82,12 @@ func NewConfig() *Config {
 	_ = godotenv.Load()
 
 	return &Config{
-		Port:               getEnv("PORT", "4901"),
-		Environment:        getEnv("ENVIRONMENT", "development"),
-		databaseURL:        getEnv("DATABASE_URL", ""),
-		jwtSecret:          getEnv("JWT_SECRET", ""),
-		JWTAccessTokenTTL:  getEnvAsInt("JWT_ACCESS_TOKEN_TTL", 15),
-		JWTRefreshTokenTTL: getEnvAsInt("JWT_REFRESH_TOKEN_TTL", 7),
+		Port:                  getEnv("PORT", "4901"),
+		Environment:           getEnv("ENVIRONMENT", "development"),
+		databaseURL:           getEnv("DATABASE_URL", ""),
+		jwtSecret:             getEnv("JWT_SECRET", ""),
+		JWTAccessTokenTTL:     getEnvAsInt("JWT_ACCESS_TOKEN_TTL", 15),
+		JWTRefreshTokenTTL:    getEnvAsInt("JWT_REFRESH_TOKEN_TTL", 7),
 		googleClientID:        getEnv("GOOGLE_CLIENT_ID", ""),
 		googleClientSecret:    getEnv("GOOGLE_CLIENT_SECRET", ""),
 		GoogleRedirectURL:     getEnv("GOOGLE_REDIRECT_URL", ""),
@@ -99,18 +99,18 @@ func NewConfig() *Config {
 		wahaAPIKey:            getEnv("WAHA_API_KEY", ""),
 		whatsappWebhookSecret: getEnv("WHATSAPP_WEBHOOK_SECRET", ""),
 		whatsappWebhookURL:    getEnv("WHATSAPP_WEBHOOK_URL", ""),
-		asaasAPIURL:        getEnv("ASAAS_API_URL", "https://sandbox.asaas.com/api/v3"),
-		asaasAPIKey:        getEnv("ASAAS_API_KEY", ""),
-		asaasWebhookSecret: getEnv("ASAAS_WEBHOOK_SECRET", ""),
-		AsaasSandbox:       getEnvAsBool("ASAAS_SANDBOX", true),
-		AllowedOrigins:     getEnvAsSlice("ALLOWED_ORIGINS", []string{"http://localhost:3000"}),
-		LogLevel:           getEnv("LOG_LEVEL", "info"),
-		smtpHost:           getEnv("SMTP_HOST", ""),
-		smtpPort:           getEnvAsInt("SMTP_PORT", 587),
-		smtpUser:           getEnv("SMTP_USER", ""),
-		smtpPassword:       getEnv("SMTP_PASSWORD", ""),
-		smtpFrom:           getEnv("SMTP_FROM", ""),
-		frontendURL:        getEnv("FRONTEND_URL", "http://localhost:3000"),
+		asaasAPIURL:           getEnv("ASAAS_API_URL", "https://sandbox.asaas.com/api/v3"),
+		asaasAPIKey:           getEnv("ASAAS_API_KEY", ""),
+		asaasWebhookSecret:    getEnv("ASAAS_WEBHOOK_SECRET", ""),
+		AsaasSandbox:          getEnvAsBool("ASAAS_SANDBOX", true),
+		AllowedOrigins:        getEnvAsSlice("ALLOWED_ORIGINS", []string{"http://localhost:3000"}),
+		LogLevel:              getEnv("LOG_LEVEL", "info"),
+		smtpHost:              getEnv("SMTP_HOST", ""),
+		smtpPort:              getEnvAsInt("SMTP_PORT", 587),
+		smtpUser:              getEnv("SMTP_USER", ""),
+		smtpPassword:          getEnv("SMTP_PASSWORD", ""),
+		smtpFrom:              getEnv("SMTP_FROM", ""),
+		frontendURL:           getEnv("FRONTEND_URL", "http://localhost:3000"),
 
 		// AI Classifier defaults
 		aiClassifierEnabled:             getEnvAsBool("AI_CLASSIFIER_ENABLED", false),

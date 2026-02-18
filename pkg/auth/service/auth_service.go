@@ -18,6 +18,7 @@ import (
 	clinic_model "github.com/aseno/backend/pkg/clinic/model"
 	clinic_repository "github.com/aseno/backend/pkg/clinic/repository"
 	email_service "github.com/aseno/backend/pkg/email/service"
+	payment_model "github.com/aseno/backend/pkg/payment/model"
 	user_model "github.com/aseno/backend/pkg/user/model"
 	user_repository "github.com/aseno/backend/pkg/user/repository"
 )
@@ -37,11 +38,19 @@ type AuthService interface {
 	SendVerificationEmail(ctx context.Context, userID uuid.UUID) error
 	VerifyEmail(ctx context.Context, token string) error
 	ResendVerificationEmail(ctx context.Context, email string) error
+	// Payment service injection (for creating Asaas subscriptions during registration)
+	SetPaymentService(paymentService PaymentService)
 }
 
 // GoogleAuthClient defines the interface for Google authentication
 type GoogleAuthClient interface {
 	VerifyIDToken(ctx context.Context, idToken string) (*GoogleUserInfo, error)
+}
+
+// PaymentService defines minimal interface for payment operations during registration
+type PaymentService interface {
+	CreateCustomerForClinic(ctx context.Context, clinicID uuid.UUID, req *payment_model.CreateCustomerRequest) error
+	CreateSubscriptionForClinic(ctx context.Context, clinicID uuid.UUID, plan string, billing string) error
 }
 
 // GoogleUserInfo represents user information from Google
@@ -64,6 +73,7 @@ type authService struct {
 	jwtService            JWTService
 	googleClient          GoogleAuthClient
 	emailService          email_service.EmailService
+	paymentService        PaymentService // Optional: for creating Asaas subscriptions during registration
 }
 
 // NewAuthService creates a new auth service
@@ -77,7 +87,7 @@ func NewAuthService(
 ) AuthService {
 	return &authService{
 		userRepo:              userRepo,
-		clinicRepo:           clinicRepo,
+		clinicRepo:            clinicRepo,
 		passwordResetRepo:     passwordResetRepo,
 		emailVerificationRepo: emailVerificationRepo,
 		jwtService:            jwtService,
@@ -97,13 +107,18 @@ func NewAuthServiceWithGoogle(
 ) AuthService {
 	return &authService{
 		userRepo:              userRepo,
-		clinicRepo:           clinicRepo,
+		clinicRepo:            clinicRepo,
 		passwordResetRepo:     passwordResetRepo,
 		emailVerificationRepo: emailVerificationRepo,
 		jwtService:            jwtService,
 		googleClient:          googleClient,
 		emailService:          emailService,
 	}
+}
+
+// SetPaymentService sets the payment service (used to avoid circular dependency)
+func (s *authService) SetPaymentService(paymentService PaymentService) {
+	s.paymentService = paymentService
 }
 
 // Register creates a new clinic and owner user
@@ -129,8 +144,32 @@ func (s *authService) Register(ctx context.Context, req *model.RegisterRequest) 
 		slug = slug + "-" + generateShortID()
 	}
 
-	// Calculate trial end date (14 days from now)
-	trialEndsAt := time.Now().AddDate(0, 0, 14)
+	// Determine plan and subscription status based on request
+	var planType clinic_model.PlanType
+	var subscriptionStatus clinic_model.SubscriptionStatus
+	var trialEndsAt *time.Time
+
+	// Set plan based on selection
+	switch req.Plan {
+	case "basic":
+		planType = clinic_model.PlanTypeBasic
+	case "professional":
+		planType = clinic_model.PlanTypeProfessional
+	case "advanced":
+		planType = clinic_model.PlanTypeAdvanced
+	default: // "trial" or empty - defaults to professional with trial
+		planType = clinic_model.PlanTypeProfessional
+	}
+
+	// If document provided, set as active (will create Asaas subscription)
+	// Otherwise, give 14-day trial period regardless of plan selected
+	if req.Document != "" && req.Plan != "" && req.Plan != "trial" {
+		subscriptionStatus = clinic_model.SubscriptionStatusActive
+	} else {
+		subscriptionStatus = clinic_model.SubscriptionStatusTrial
+		trial := time.Now().AddDate(0, 0, 14)
+		trialEndsAt = &trial
+	}
 
 	// Create clinic
 	clinic := &clinic_model.Clinic{
@@ -138,9 +177,9 @@ func (s *authService) Register(ctx context.Context, req *model.RegisterRequest) 
 		Slug:               slug,
 		Email:              req.Email,
 		Phone:              req.Phone,
-		Plan:               clinic_model.PlanTypeProfessional,
-		SubscriptionStatus: clinic_model.SubscriptionStatusTrial,
-		TrialEndsAt:        &trialEndsAt,
+		Plan:               planType,
+		SubscriptionStatus: subscriptionStatus,
+		TrialEndsAt:        trialEndsAt,
 		Settings: clinic_model.ClinicSettings{
 			Timezone:                  "America/Sao_Paulo",
 			DefaultAppointmentMinutes: 30,
@@ -187,6 +226,30 @@ func (s *authService) Register(ctx context.Context, req *model.RegisterRequest) 
 	// Update last login
 	if err := s.userRepo.UpdateLastLogin(ctx, user.ID); err != nil {
 		// Non-critical error, just log it
+	}
+
+	// Create Asaas customer and subscription if document provided and not trial
+	if s.paymentService != nil && req.Document != "" && req.Plan != "" && req.Plan != "trial" {
+		// Create customer in Asaas
+		customerReq := &payment_model.CreateCustomerRequest{
+			Name:     req.Name,
+			Email:    req.Email,
+			Phone:    req.Phone,
+			Document: req.Document,
+		}
+
+		if err := s.paymentService.CreateCustomerForClinic(ctx, clinic.ID, customerReq); err != nil {
+			// Log error but don't fail registration - user can set up payment later
+			fmt.Printf("[AUTH] Failed to create Asaas customer for clinic %s: %v\n", clinic.ID, err)
+		} else {
+			// Customer created successfully, now create subscription
+			if err := s.paymentService.CreateSubscriptionForClinic(ctx, clinic.ID, req.Plan, req.Billing); err != nil {
+				// Log error but don't fail registration
+				fmt.Printf("[AUTH] Failed to create Asaas subscription for clinic %s: %v\n", clinic.ID, err)
+			} else {
+				fmt.Printf("[AUTH] Successfully created Asaas subscription for clinic %s (plan: %s, billing: %s)\n", clinic.ID, req.Plan, req.Billing)
+			}
+		}
 	}
 
 	// Send verification email (non-blocking, errors are logged but not returned)
@@ -515,7 +578,7 @@ func (s *authService) RequestPasswordReset(ctx context.Context, req *model.Reque
 	// Ideally: tokenHash := hash(token) -> save tokenHash. Email token.
 	// When resetting: hash(tokenFromEmail) == tokenHash.
 	// Simplification for MVP: Save token directly as "TokenHash" field.
-	
+
 	// Create reset record
 	reset := &model.PasswordReset{
 		UserID:    user.ID,

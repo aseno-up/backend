@@ -23,10 +23,10 @@ type MetricsCollector struct {
 	toolLatencies    map[string][]time.Duration // tool name -> latencies
 
 	// AI metrics
-	totalTokensUsed int64
-	totalCost       float64 // in currency
+	totalTokensUsed   int64
+	totalCost         float64 // in currency
 	responseLatencies []time.Duration
-	fallbackTriggers int64
+	fallbackTriggers  int64
 
 	// Response generation
 	generationsTotal   int64
@@ -37,7 +37,7 @@ type MetricsCollector struct {
 // NewMetricsCollector creates a new metrics collector
 func NewMetricsCollector() *MetricsCollector {
 	return &MetricsCollector{
-		toolLatencies: make(map[string][]time.Duration),
+		toolLatencies:     make(map[string][]time.Duration),
 		responseLatencies: make([]time.Duration, 0, 1000),
 	}
 }
@@ -117,9 +117,9 @@ func (m *MetricsCollector) GetMetrics() *Metrics {
 	defer m.mu.RUnlock()
 
 	return &Metrics{
-		ConversationsStarted:   m.conversationsStarted,
-		ConversationsCompleted: m.conversationsCompleted,
-		ConversationsAbandoned: m.conversationsAbandoned,
+		ConversationsStarted:     m.conversationsStarted,
+		ConversationsCompleted:   m.conversationsCompleted,
+		ConversationsAbandoned:   m.conversationsAbandoned,
 		AverageConversationTurns: m.calculateAverageConversationTurns(),
 
 		ToolCallsTotal:   m.toolCallsTotal,
@@ -127,16 +127,16 @@ func (m *MetricsCollector) GetMetrics() *Metrics {
 		ToolCallsFailed:  m.toolCallsFailed,
 		ToolSuccessRate:  m.calculateToolSuccessRate(),
 
-		TotalTokensUsed:       m.totalTokensUsed,
-		TotalCost:             m.totalCost,
-		AverageCostPerConv:    m.calculateAverageCostPerConversation(),
-		ResponseLatencyP50:    m.calculatePercentile(m.responseLatencies, 0.50),
-		ResponseLatencyP95:    m.calculatePercentile(m.responseLatencies, 0.95),
-		ResponseLatencyP99:    m.calculatePercentile(m.responseLatencies, 0.99),
+		TotalTokensUsed:    m.totalTokensUsed,
+		TotalCost:          m.totalCost,
+		AverageCostPerConv: m.calculateAverageCostPerConversation(),
+		ResponseLatencyP50: m.calculatePercentile(m.responseLatencies, 0.50),
+		ResponseLatencyP95: m.calculatePercentile(m.responseLatencies, 0.95),
+		ResponseLatencyP99: m.calculatePercentile(m.responseLatencies, 0.99),
 
-		GenerationsTotal:   m.generationsTotal,
-		GenerationsSuccess: m.generationsSuccess,
-		GenerationsFailed:  m.generationsFailed,
+		GenerationsTotal:      m.generationsTotal,
+		GenerationsSuccess:    m.generationsSuccess,
+		GenerationsFailed:     m.generationsFailed,
 		GenerationSuccessRate: m.calculateGenerationSuccessRate(),
 
 		FallbackTriggers: m.fallbackTriggers,

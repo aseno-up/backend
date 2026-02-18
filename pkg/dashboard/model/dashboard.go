@@ -36,7 +36,7 @@ type PatientAbsentee struct {
 
 // TimePatternStats represents no-show statistics by time period
 type TimePatternStats struct {
-	Period      string  `json:"period"`       // "morning", "afternoon", "evening" or day name
+	Period      string  `json:"period"` // "morning", "afternoon", "evening" or day name
 	NoShowCount int     `json:"no_show_count"`
 	TotalCount  int     `json:"total_count"`
 	NoShowRate  float64 `json:"no_show_rate"` // percentage
@@ -46,7 +46,7 @@ type TimePatternStats struct {
 type PatientTimePattern struct {
 	PatientID   string  `json:"patient_id"`
 	PatientName string  `json:"patient_name"`
-	Period      string  `json:"period"`       // "morning", "afternoon", "evening"
+	Period      string  `json:"period"` // "morning", "afternoon", "evening"
 	NoShowCount int     `json:"no_show_count"`
 	TotalCount  int     `json:"total_count"`
 	NoShowRate  float64 `json:"no_show_rate"`

@@ -68,11 +68,11 @@ type ProfessionalInfoProvider interface {
 
 // appointmentService implements AppointmentService
 type appointmentService struct {
-	repo              repository.AppointmentRepository
-	profRepo          ProfessionalInfoProvider
-	waitlistService   WaitlistService
-	riskCalculator    PatientRiskCalculator
-	calendarService   calendar_service.CalendarService
+	repo            repository.AppointmentRepository
+	profRepo        ProfessionalInfoProvider
+	waitlistService WaitlistService
+	riskCalculator  PatientRiskCalculator
+	calendarService calendar_service.CalendarService
 }
 
 // NewAppointmentService creates a new appointment service
@@ -106,7 +106,7 @@ func (s *appointmentService) Reschedule(ctx context.Context, appointmentID, clin
 	appointment.StartTime = startTime
 	appointment.EndTime = endTime
 	appointment.Status = model.AppointmentStatusConfirmed // Auto-confirm for anticipation
-	
+
 	// Add note about rescheduling
 	now := time.Now()
 	appointment.UpdatedAt = now
@@ -230,7 +230,7 @@ func (s *appointmentService) SuggestSmartSlots(ctx context.Context, clinicID, pr
 
 	// 3. Generate Slots
 	var suggestions []*model.SmartSlotSuggestion
-	
+
 	// Normalize start date to beginning of day
 	currentDate := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, date.Location())
 	endDate := currentDate.AddDate(0, 0, days)
@@ -273,7 +273,7 @@ func (s *appointmentService) SuggestSmartSlots(ctx context.Context, clinicID, pr
 
 			// Generate chunks of 'durationMinutes'
 			for curr := slotStart; curr.Add(time.Duration(durationMinutes)*time.Minute).Before(slotEnd) || curr.Add(time.Duration(durationMinutes)*time.Minute).Equal(slotEnd); curr = curr.Add(time.Duration(durationMinutes) * time.Minute) {
-				
+
 				candStart := curr
 				candEnd := curr.Add(time.Duration(durationMinutes) * time.Minute)
 
@@ -286,7 +286,7 @@ func (s *appointmentService) SuggestSmartSlots(ctx context.Context, clinicID, pr
 				isConflict := false
 				for _, apt := range existingAppointments {
 					// Check overlap
-					if (apt.StartTime.Before(candEnd) && apt.EndTime.After(candStart)) {
+					if apt.StartTime.Before(candEnd) && apt.EndTime.After(candStart) {
 						isConflict = true
 						break
 					}
@@ -298,10 +298,10 @@ func (s *appointmentService) SuggestSmartSlots(ctx context.Context, clinicID, pr
 				// Calculate Score
 				score := 5.0 // Base score
 				reason := "Horário disponível"
-				
+
 				dow := int(weekday)
 				hour := candStart.Hour()
-				
+
 				if dayStats, ok := statMap[dow]; ok {
 					if rate, ok := dayStats[hour]; ok {
 						if rate >= 0.9 {

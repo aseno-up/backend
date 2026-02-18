@@ -14,8 +14,8 @@ import (
 )
 
 const (
-	googleOAuthURL   = "https://accounts.google.com/o/oauth2/v2/auth"
-	googleTokenURL   = "https://oauth2.googleapis.com/token"
+	googleOAuthURL    = "https://accounts.google.com/o/oauth2/v2/auth"
+	googleTokenURL    = "https://oauth2.googleapis.com/token"
 	googleCalendarAPI = "https://www.googleapis.com/calendar/v3"
 )
 

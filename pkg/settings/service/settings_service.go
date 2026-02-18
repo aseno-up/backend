@@ -29,11 +29,11 @@ type SettingsService interface {
 
 // settingsService implements SettingsService with in-memory cache
 type settingsService struct {
-	repo       repository.SettingsRepository
-	cache      map[string]string
-	cacheMu    sync.RWMutex
-	cacheTime  time.Time
-	cacheTTL   time.Duration
+	repo      repository.SettingsRepository
+	cache     map[string]string
+	cacheMu   sync.RWMutex
+	cacheTime time.Time
+	cacheTTL  time.Duration
 }
 
 // NewSettingsService creates a new settings service

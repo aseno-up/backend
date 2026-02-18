@@ -10,9 +10,9 @@ import (
 
 // SystemPromptBuilder builds system prompts for the AI agent
 type SystemPromptBuilder struct {
-	clinicName string
+	clinicName  string
 	patientName string
-	context    *conversation.ConversationContext
+	context     *conversation.ConversationContext
 }
 
 // NewSystemPromptBuilder creates a new system prompt builder

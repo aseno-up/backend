@@ -39,15 +39,15 @@ type SettingDetail struct {
 
 // Default setting keys
 const (
-	SettingPlanBasicLimit        = "plan_basic_limit"
-	SettingPlanProLimit          = "plan_pro_limit"
-	SettingPlanAdvancedLimit     = "plan_advanced_limit"
-	SettingPlanExcessPrice       = "plan_excess_price"
-	SettingExcessBillingEnabled  = "excess_billing_enabled"
-	SettingPlanBasicPrice        = "plan_basic_price"
-	SettingPlanProPrice          = "plan_pro_price"
-	SettingPlanAdvancedPrice     = "plan_advanced_price"
-	SettingTrialDays             = "trial_days"
+	SettingPlanBasicLimit       = "plan_basic_limit"
+	SettingPlanProLimit         = "plan_pro_limit"
+	SettingPlanAdvancedLimit    = "plan_advanced_limit"
+	SettingPlanExcessPrice      = "plan_excess_price"
+	SettingExcessBillingEnabled = "excess_billing_enabled"
+	SettingPlanBasicPrice       = "plan_basic_price"
+	SettingPlanProPrice         = "plan_pro_price"
+	SettingPlanAdvancedPrice    = "plan_advanced_price"
+	SettingTrialDays            = "trial_days"
 
 	// WhatsApp Rate Limiting & Message Segmentation
 	SettingWhatsAppMinDelayBetweenPatients = "whatsapp_min_delay_between_patients"
