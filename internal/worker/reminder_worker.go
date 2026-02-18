@@ -3,8 +3,9 @@ package worker
 import (
 	"context"
 	"fmt"
-	"github.com/aseno/backend/internal/logger"
 	"time"
+
+	"github.com/aseno/backend/internal/logger"
 
 	"github.com/google/uuid"
 
@@ -110,6 +111,25 @@ func (w *ReminderWorker) processThreshold(ctx context.Context, threshold config.
 
 	enqueued := 0
 	for _, apt := range appointments {
+		// Skip 48h reminder if appointment is within the next 2 days (tomorrow or day after tomorrow).
+		// In these cases, the 24h reminder is sufficient. This prevents awkward early reminders,
+		// e.g., sending a reminder on Monday for a Wednesday appointment requested on Sunday.
+		if threshold.Type == "reminder_48h" {
+			loc, err := time.LoadLocation("America/Sao_Paulo")
+			if err != nil {
+				logger.Printf("Failed to load location: %v", err)
+				continue
+			}
+
+			nowLocal := time.Now().In(loc)
+			aptLocal := apt.StartTime.In(loc)
+			todayStart := time.Date(nowLocal.Year(), nowLocal.Month(), nowLocal.Day(), 0, 0, 0, 0, loc)
+			dayAfterTomorrowEnd := todayStart.AddDate(0, 0, 3) // start of 3 days from now
+			if aptLocal.Before(dayAfterTomorrowEnd) {
+				continue
+			}
+		}
+
 		// Skip if no patient info
 		if apt.Patient == nil {
 			logger.Printf("Skipping appointment %s: no patient info", apt.ID)

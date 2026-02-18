@@ -1576,6 +1576,23 @@ func (a *aiAgentAppointmentCreatorAdapter) CreateFromSchedulingIntent(ctx contex
 		return nil, err
 	}
 
+	// Auto-confirm appointments for next day or later
+	// so the patient doesn't receive an unnecessary confirmation message
+	loc, _ := time.LoadLocation("America/Sao_Paulo")
+	now := time.Now().In(loc)
+	aptDate := startTime.In(loc)
+	tomorrow := time.Date(now.Year(), now.Month(), now.Day()+1, 0, 0, 0, 0, loc)
+	if !aptDate.Before(tomorrow) {
+		_, confirmErr := a.appointmentService.Confirm(ctx, apt.ID, clinicID, &appointment_model.ConfirmAppointmentRequest{
+			PatientNotes: "Confirmado automaticamente - agendamento via IA",
+		})
+		if confirmErr != nil {
+			logger.Printf("[AI Agent] Failed to auto-confirm appointment %s: %v", apt.ID, confirmErr)
+		} else {
+			apt.Status = "confirmed"
+		}
+	}
+
 	return &tools.AppointmentInfo{
 		ID:             apt.ID,
 		PatientID:      apt.PatientID,
