@@ -208,13 +208,58 @@ func (c *ConversationContext) GetLastUserMessage() string {
 	return ""
 }
 
+// ToolCallResult is a custom type for JSONB tool result
+type ToolCallResult struct {
+	data interface{}
+}
+
+// NewToolCallResult wraps a result value for JSONB storage
+func NewToolCallResult(v interface{}) ToolCallResult {
+	return ToolCallResult{data: v}
+}
+
+// Value implements driver.Valuer — serializa para JSON antes de inserir no PostgreSQL
+func (r ToolCallResult) Value() (driver.Value, error) {
+	if r.data == nil {
+		return "null", nil
+	}
+	b, err := json.Marshal(r.data)
+	if err != nil {
+		return nil, err
+	}
+	return string(b), nil
+}
+
+// Scan implements sql.Scanner
+func (r *ToolCallResult) Scan(value interface{}) error {
+	if value == nil {
+		r.data = nil
+		return nil
+	}
+	var data []byte
+	switch v := value.(type) {
+	case []byte:
+		data = v
+	case string:
+		data = []byte(v)
+	default:
+		return errors.New("invalid type for ToolCallResult")
+	}
+	return json.Unmarshal(data, &r.data)
+}
+
+// MarshalJSON implements json.Marshaler
+func (r ToolCallResult) MarshalJSON() ([]byte, error) {
+	return json.Marshal(r.data)
+}
+
 // ToolCallLog represents a log of tool execution for monitoring
 type ToolCallLog struct {
 	ID             uuid.UUID              `json:"id" gorm:"type:uuid;primary_key;default:gen_random_uuid()"`
 	ConversationID uuid.UUID              `json:"conversation_id" gorm:"type:uuid;not null;index"`
 	ToolName       string                 `json:"tool_name" gorm:"type:varchar(100);not null;index"`
 	Parameters     map[string]interface{} `json:"parameters" gorm:"type:jsonb"`
-	Result         interface{}            `json:"result" gorm:"type:jsonb"`
+	Result         ToolCallResult         `json:"result" gorm:"type:jsonb"`
 	Error          string                 `json:"error" gorm:"type:text"`
 	DurationMS     int                    `json:"duration_ms" gorm:"type:int"`
 	CreatedAt      time.Time              `json:"created_at" gorm:"index"`

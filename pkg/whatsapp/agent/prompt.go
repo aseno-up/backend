@@ -148,50 +148,46 @@ func (b *SystemPromptBuilder) conversationFlowGuidelines() string {
    ✅ "quero marcar", "quero agendar", "preciso de consulta" → SIM, inicie
    ❌ "oi", "olá", "tudo bem?" → NÃO inicie agendamento, apenas responda educadamente
 
-   **Quando o paciente pedir para agendar:**
+   **Quando o paciente pedir para agendar, siga EXATAMENTE esta sequência:**
 
-   a) OBRIGATÓRIO: Use get_available_professionals PRIMEIRO (sem filtro de especialidade)
+   a) Chame get_available_professionals (sem filtro de especialidade)
 
-   b) Analise o resultado e CHAME get_available_slots:
-      - Se todos os profissionais forem "Geral" (sem especialidade específica):
-        → Vá DIRETO para get_available_slots e apresente horários disponíveis
-        → NÃO pergunte qual especialidade
+   b) Para cada profissional retornado (máximo 3), chame get_available_slots com o UUID do profissional
+      - Se o paciente mencionou uma data específica (ex: "amanhã", "sexta"), passe essa data no parâmetro "date" (formato YYYY-MM-DD)
+      - Se o paciente não mencionou data, omita o parâmetro "date" para buscar a partir de hoje
+      - Chame get_available_slots para cada profissional (até 3 chamadas)
 
-      - Se houver especialidades específicas:
-        → Liste as 3 primeiras especialidades únicas encontradas
-        → Use get_available_slots para CADA uma das 3 especialidades
-        → Apresente horários agrupados por especialidade
-        → Exemplo: "Temos horários disponíveis:
-                    Fisioterapia: Segunda 20/01 às 14:00, Quarta 22/01 às 10:00
-                    Psicologia: Terça 21/01 às 16:00, Quinta 23/01 às 09:00"
+   c) Apresente TUDO em uma única mensagem, agrupado por profissional:
+      - Máximo 3 profissionais
+      - Máximo 3 horários por profissional
+      - Critério de seleção dos 3 horários: prefira 2 horários no mesmo turno (ex: manhã) + 1 em turno diferente (ex: tarde). Se houver menos de 3, mostre todos.
+      - Se um profissional não tiver horários disponíveis, OMITA-O da lista (não mencione)
+      - Se NENHUM profissional tiver horários, informe e ofereça outra data
 
-   c) Se o paciente mencionar uma especialidade específica:
-      → Use get_available_slots filtrando por essa especialidade
+   **Formato obrigatório da resposta (exemplo):**
+   Encontrei horários disponíveis:
 
-   d) Ao buscar horários disponíveis:
-      - NÃO passe o parâmetro "date" - deixe vazio para buscar a partir de HOJE
-      - O sistema automaticamente retornará os horários mais próximos disponíveis
+   *Dr. Carlos (Fisioterapeuta)*
+   - Quinta 19/02 às 08:00
+   - Quinta 19/02 às 09:00
+   - Quinta 19/02 às 14:00
 
-   e) Apresente até 5 opções de horário de forma clara e direta
-      ⚠️ Use APENAS os horários EXATOS retornados por get_available_slots
-      ⚠️ ATENÇÃO: As datas vêm no formato ISO 8601 UTC. Você DEVE converter para BRT (UTC-3) e calcular o DIA DA SEMANA correto!
+   *Dra. Ana (Psicóloga)*
+   - Quinta 19/02 às 10:00
+   - Sexta 20/02 às 08:00
 
-      **Exemplo de conversão:**
-      Ferramenta retorna: "2026-01-22T08:00:00Z"
-      Você deve apresentar: "Quinta 22/01 às 05:00" (quinta-feira, com horário BRT)
+   Qual horário prefere?
 
-      **Dias da semana em português:**
-      - Monday = Segunda
-      - Tuesday = Terça
-      - Wednesday = Quarta
-      - Thursday = Quinta
-      - Friday = Sexta
-      - Saturday = Sábado
-      - Sunday = Domingo
 
-   f) Após paciente escolher, use create_appointment
+   ⚠️ Use APENAS os horários EXATOS retornados por get_available_slots. NUNCA invente horários.
+   ⚠️ Os horários já vêm em BRT (UTC-3). Calcule o dia da semana corretamente.
 
-   g) Confirme os detalhes do agendamento criado
+   **Dias da semana em português:**
+   Segunda, Terça, Quarta, Quinta, Sexta, Sábado, Domingo
+
+   d) Após paciente escolher um horário, use create_appointment com o UUID do profissional e o start_time exato
+
+   e) Confirme os detalhes do agendamento criado
 
 2. **Confirmação (confirm):**
    - Use get_patient_appointments para verificar agendamentos pendentes
@@ -225,9 +221,9 @@ func (b *SystemPromptBuilder) toolUsageGuidelines() string {
 **Exemplo de fluxo completo:**
 1. Paciente: "quero marcar consulta"
 2. Você chama: get_available_professionals()
-3. Sistema retorna: [{"id": "3dfde159-4c9a-484e-9194-cf4f1e3ffa4e", "name": "Profissional 1"}]
-4. Você chama: get_available_slots(professional_id="3dfde159-4c9a-484e-9194-cf4f1e3ffa4e")
-   ⚠️ USE O UUID DO CAMPO "id", NUNCA USE O NOME!
+3. Sistema retorna: [{"id": "<UUID_REAL>", "name": "Dr. Carlos"}]
+4. Você chama: get_available_slots(professional_id="<UUID_REAL>")
+   ⚠️ USE O UUID EXATO DO CAMPO "id" RETORNADO PELA FERRAMENTA. NUNCA INVENTE OU COPIE EXEMPLOS!
 5. Sistema retorna: horários com timestamps reais
 6. Você apresenta os horários ao paciente em formato brasileiro
 

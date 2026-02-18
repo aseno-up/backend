@@ -1343,7 +1343,7 @@ func initializeAIAgent(
 	execContext := &tools.ExecutionContext{
 		// Service dependencies - wrapped with adapters
 		ProfessionalLister:       &aiAgentProfessionalListerAdapter{professionalService: professionalService},
-		SlotFinder:               &aiAgentSlotFinderAdapter{bookingService: bookingService, clinicRepo: clinicRepo, professionalRepo: professionalRepo},
+		SlotFinder:               &aiAgentSlotFinderAdapter{appointmentService: appointmentService, clinicRepo: clinicRepo, professionalRepo: professionalRepo},
 		AppointmentCreator:       &aiAgentAppointmentCreatorAdapter{appointmentService: appointmentService},
 		AppointmentFinder:        &aiAgentAppointmentFinderAdapter{appointmentService: appointmentService},
 		AppointmentConfirmer:     &aiAgentAppointmentConfirmerAdapter{appointmentService: appointmentService},
@@ -1464,33 +1464,44 @@ func (a *aiAgentProfessionalListerAdapter) ListAvailable(ctx context.Context, cl
 }
 
 type aiAgentSlotFinderAdapter struct {
-	bookingService   booking_service.BookingService
-	clinicRepo       clinic_repository.ClinicRepository
-	professionalRepo professional_repository.ProfessionalRepository
+	appointmentService appointment_service.AppointmentService
+	clinicRepo         clinic_repository.ClinicRepository
+	professionalRepo   professional_repository.ProfessionalRepository
+}
+
+// checkSubscription verifica se a assinatura da clínica está ativa.
+// Se inativa, o agente não deve operar para evitar custos desnecessários.
+func (a *aiAgentSlotFinderAdapter) checkSubscription(ctx context.Context, clinicID uuid.UUID) error {
+	clinic, err := a.clinicRepo.GetByID(ctx, clinicID)
+	if err != nil {
+		return fmt.Errorf("failed to get clinic: %w", err)
+	}
+	if !clinic.IsSubscriptionActive() {
+		return fmt.Errorf("clinica com assinatura inativa")
+	}
+	return nil
 }
 
 func (a *aiAgentSlotFinderAdapter) GetAvailableSlots(ctx context.Context, clinicID uuid.UUID, professionalID uuid.UUID, date time.Time, durationMinutes int) ([]*tools.AvailableSlot, error) {
-	// Get clinic to get slug
-	clinic, err := a.clinicRepo.GetByID(ctx, clinicID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get clinic: %w", err)
+	// INV-001: clinicID sempre presente; verificar assinatura ativa
+	if err := a.checkSubscription(ctx, clinicID); err != nil {
+		return nil, err
 	}
 
-	// Get professional info
+	// Get professional info (INV-001: filtra por clinicID)
 	professional, err := a.professionalRepo.GetByID(ctx, professionalID, clinicID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get professional: %w", err)
 	}
 
-	// Call booking service with slug
-	response, err := a.bookingService.GetAvailableSlots(ctx, clinic.Slug, professionalID, date)
+	// Usar SuggestSmartSlots diretamente — sem verificação de AllowOnlineBooking
+	slots, err := a.appointmentService.SuggestSmartSlots(ctx, clinicID, professionalID, date, 1, durationMinutes)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get available slots: %w", err)
 	}
 
-	// Convert to tools.AvailableSlot format
-	result := make([]*tools.AvailableSlot, len(response.Slots))
-	for i, slot := range response.Slots {
+	result := make([]*tools.AvailableSlot, len(slots))
+	for i, slot := range slots {
 		result[i] = &tools.AvailableSlot{
 			ProfessionalID:   professionalID,
 			ProfessionalName: professional.Name,
@@ -1503,13 +1514,12 @@ func (a *aiAgentSlotFinderAdapter) GetAvailableSlots(ctx context.Context, clinic
 }
 
 func (a *aiAgentSlotFinderAdapter) GetAvailableSlotsMultipleProfessionals(ctx context.Context, clinicID uuid.UUID, professionalIDs []uuid.UUID, date time.Time, days int, durationMinutes int, limit int) ([]*tools.AvailableSlot, error) {
-	// Get clinic to get slug
-	clinic, err := a.clinicRepo.GetByID(ctx, clinicID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get clinic: %w", err)
+	// INV-001: clinicID sempre presente; verificar assinatura ativa
+	if err := a.checkSubscription(ctx, clinicID); err != nil {
+		return nil, err
 	}
 
-	// If no specific professionals, get all active ones
+	// Se nenhum profissional especificado, buscar todos ativos da clínica (INV-001)
 	if len(professionalIDs) == 0 {
 		professionals, _, err := a.professionalRepo.GetByClinicID(ctx, clinicID, true, 100, 0)
 		if err != nil {
@@ -1520,26 +1530,25 @@ func (a *aiAgentSlotFinderAdapter) GetAvailableSlotsMultipleProfessionals(ctx co
 		}
 	}
 
-	// Collect slots from all professionals across multiple days
+	// Coletar slots de todos os profissionais nos dias solicitados
 	var allSlots []*tools.AvailableSlot
 	for day := 0; day < days; day++ {
 		currentDate := date.AddDate(0, 0, day)
 
 		for _, profID := range professionalIDs {
-			// Get professional info
+			// INV-001: GetByID filtra por clinicID
 			professional, err := a.professionalRepo.GetByID(ctx, profID, clinicID)
 			if err != nil {
-				continue // Skip if professional not found
+				continue
 			}
 
-			// Get slots for this professional on this day
-			response, err := a.bookingService.GetAvailableSlots(ctx, clinic.Slug, profID, currentDate)
+			// Usar SuggestSmartSlots diretamente — sem AllowOnlineBooking
+			slots, err := a.appointmentService.SuggestSmartSlots(ctx, clinicID, profID, currentDate, 1, durationMinutes)
 			if err != nil {
-				continue // Skip if error getting slots
+				continue
 			}
 
-			// Convert and add to results
-			for _, slot := range response.Slots {
+			for _, slot := range slots {
 				allSlots = append(allSlots, &tools.AvailableSlot{
 					ProfessionalID:   profID,
 					ProfessionalName: professional.Name,
@@ -1547,7 +1556,6 @@ func (a *aiAgentSlotFinderAdapter) GetAvailableSlotsMultipleProfessionals(ctx co
 					EndTime:          slot.EndTime,
 				})
 
-				// Stop if we hit the limit
 				if len(allSlots) >= limit {
 					return allSlots[:limit], nil
 				}
