@@ -129,6 +129,9 @@ func (s *clinicService) Update(ctx context.Context, id uuid.UUID, req *model.Upd
 		if req.Settings.EmailRemindersEnabled != nil {
 			clinic.Settings.EmailRemindersEnabled = *req.Settings.EmailRemindersEnabled
 		}
+		if req.Settings.AIAgentEnabled != nil {
+			clinic.Settings.AIAgentEnabled = *req.Settings.AIAgentEnabled
+		}
 
 		// AI/WhatsApp settings
 		if req.Settings.AIMinDelayBetweenMessages != nil {
