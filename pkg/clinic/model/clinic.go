@@ -95,6 +95,7 @@ type ClinicSettings struct {
 	EmailRemindersEnabled    bool `json:"email_reminders_enabled"`
 
 	// AI/WhatsApp settings
+	AIAgentEnabled            bool                 `json:"ai_agent_enabled"`
 	AIMinDelayBetweenMessages *int                 `json:"ai_min_delay_between_messages,omitempty"`
 	AIMinDelayBetweenPatients *int                 `json:"ai_min_delay_between_patients,omitempty"`
 	AIBusinessHours           *BusinessHoursConfig `json:"ai_business_hours,omitempty"`
@@ -186,6 +187,7 @@ type UpdateClinicSettingsRequest struct {
 	EmailRemindersEnabled     *bool  `json:"email_reminders_enabled,omitempty"`
 
 	// AI/WhatsApp settings
+	AIAgentEnabled            *bool                `json:"ai_agent_enabled,omitempty"`
 	AIMinDelayBetweenMessages *int                 `json:"ai_min_delay_between_messages,omitempty"`
 	AIMinDelayBetweenPatients *int                 `json:"ai_min_delay_between_patients,omitempty"`
 	AIBusinessHours           *BusinessHoursConfig `json:"ai_business_hours,omitempty"`

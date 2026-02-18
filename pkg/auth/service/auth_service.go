@@ -186,6 +186,7 @@ func (s *authService) Register(ctx context.Context, req *model.RegisterRequest) 
 			ReminderHoursBefore:       24,
 			AllowOnlineBooking:        false,
 			RequireConfirmation:       true,
+			AIAgentEnabled:            true,
 		},
 	}
 
@@ -372,6 +373,7 @@ func (s *authService) GoogleLogin(ctx context.Context, req *model.GoogleLoginReq
 				ReminderHoursBefore:       24,
 				AllowOnlineBooking:        false,
 				RequireConfirmation:       true,
+				AIAgentEnabled:            true,
 			},
 		}
 

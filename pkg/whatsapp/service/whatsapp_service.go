@@ -3,12 +3,13 @@ package service
 import (
 	"context"
 	"fmt"
-	"github.com/aseno/backend/internal/logger"
 	"regexp"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/aseno/backend/internal/logger"
 
 	"github.com/google/uuid"
 
@@ -935,6 +936,17 @@ func (s *whatsAppService) handleWithAIAgent(ctx context.Context, clinicID uuid.U
 	if s.aiAgentService == nil {
 		logger.Printf("[AI Agent] Service is nil, falling back to traditional flow")
 		return nil
+	}
+
+	// Check if AI agent is enabled for this clinic
+	if s.clinicRepo != nil {
+		clinic, err := s.clinicRepo.GetByID(ctx, clinicID)
+		if err != nil {
+			logger.Printf("[AI Agent] Warning: failed to fetch clinic settings: %v", err)
+		} else if !clinic.Settings.AIAgentEnabled {
+			logger.Printf("[AI Agent] Clinic %s has AIAgentEnabled=false, AI agent will not respond", clinicID)
+			return nil
+		}
 	}
 
 	// Removed business hours check - messages are processed and scheduled if outside hours
