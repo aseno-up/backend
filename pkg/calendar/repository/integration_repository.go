@@ -78,8 +78,8 @@ func (r *integrationRepository) Delete(ctx context.Context, clinicID uuid.UUID) 
 // UpdateTokens updates OAuth tokens for an integration
 func (r *integrationRepository) UpdateTokens(ctx context.Context, clinicID uuid.UUID, accessToken, refreshToken string, expiry time.Time) error {
 	updates := map[string]interface{}{
-		"access_token":  accessToken,
-		"token_expiry":  expiry,
+		"access_token": accessToken,
+		"token_expiry": expiry,
 	}
 	if refreshToken != "" {
 		updates["refresh_token"] = refreshToken

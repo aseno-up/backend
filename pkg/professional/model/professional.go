@@ -8,22 +8,22 @@ import (
 
 // Professional represents a healthcare professional in the clinic
 type Professional struct {
-	ID              uuid.UUID  `json:"id" gorm:"type:uuid;primary_key;default:gen_random_uuid()"`
-	ClinicID        uuid.UUID  `json:"clinic_id" gorm:"type:uuid;not null;index"`
-	UserID          *uuid.UUID `json:"user_id,omitempty" gorm:"type:uuid;index"` // Optional link to user account
-	Name            string     `json:"name" gorm:"not null"`
-	Email           string     `json:"email"`
-	Phone           string     `json:"phone"`
-	Specialty       string     `json:"specialty"`                          // e.g., "Psicólogo", "Fisioterapeuta", "Dentista"
-	RegistrationNum string     `json:"registration_num"`                   // CRP, CREFITO, CRO, etc.
-	AvatarURL       string     `json:"avatar_url"`
-	Bio             string     `json:"bio"`
-	Color           string     `json:"color" gorm:"default:'#7C3AED'"`     // Color for calendar display
-	IsActive        bool       `json:"is_active" gorm:"default:true"`
+	ID              uuid.UUID    `json:"id" gorm:"type:uuid;primary_key;default:gen_random_uuid()"`
+	ClinicID        uuid.UUID    `json:"clinic_id" gorm:"type:uuid;not null;index"`
+	UserID          *uuid.UUID   `json:"user_id,omitempty" gorm:"type:uuid;index"` // Optional link to user account
+	Name            string       `json:"name" gorm:"not null"`
+	Email           string       `json:"email"`
+	Phone           string       `json:"phone"`
+	Specialty       string       `json:"specialty"`        // e.g., "Psicólogo", "Fisioterapeuta", "Dentista"
+	RegistrationNum string       `json:"registration_num"` // CRP, CREFITO, CRO, etc.
+	AvatarURL       string       `json:"avatar_url"`
+	Bio             string       `json:"bio"`
+	Color           string       `json:"color" gorm:"default:'#7C3AED'"` // Color for calendar display
+	IsActive        bool         `json:"is_active" gorm:"default:true"`
 	WorkingHours    WorkingHours `json:"working_hours" gorm:"serializer:json"`
-	CreatedAt       time.Time  `json:"created_at"`
-	UpdatedAt       time.Time  `json:"updated_at"`
-	DeletedAt       *time.Time `json:"deleted_at,omitempty" gorm:"index"`
+	CreatedAt       time.Time    `json:"created_at"`
+	UpdatedAt       time.Time    `json:"updated_at"`
+	DeletedAt       *time.Time   `json:"deleted_at,omitempty" gorm:"index"`
 }
 
 // WorkingHours defines the professional's available hours

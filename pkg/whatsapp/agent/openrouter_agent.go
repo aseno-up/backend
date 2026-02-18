@@ -5,8 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"github.com/aseno/backend/internal/logger"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -120,24 +120,24 @@ func (a *openRouterAgent) Generate(ctx context.Context, req *AgentRequest) (*Age
 
 // OpenRouter API types
 type openRouterRequest struct {
-	Model       string                   `json:"model"`
-	Messages    []openRouterMessage      `json:"messages"`
-	Tools       []tools.OpenRouterTool   `json:"tools,omitempty"`
-	Temperature float32                  `json:"temperature,omitempty"`
-	MaxTokens   int                      `json:"max_tokens,omitempty"`
+	Model       string                 `json:"model"`
+	Messages    []openRouterMessage    `json:"messages"`
+	Tools       []tools.OpenRouterTool `json:"tools,omitempty"`
+	Temperature float32                `json:"temperature,omitempty"`
+	MaxTokens   int                    `json:"max_tokens,omitempty"`
 }
 
 type openRouterMessage struct {
-	Role       string                `json:"role"`
-	Content    string                `json:"content,omitempty"`
-	ToolCalls  []openRouterToolCall  `json:"tool_calls,omitempty"`
-	ToolCallID string                `json:"tool_call_id,omitempty"`
+	Role       string               `json:"role"`
+	Content    string               `json:"content,omitempty"`
+	ToolCalls  []openRouterToolCall `json:"tool_calls,omitempty"`
+	ToolCallID string               `json:"tool_call_id,omitempty"`
 }
 
 type openRouterToolCall struct {
-	ID       string                    `json:"id"`
-	Type     string                    `json:"type"`
-	Function openRouterFunctionCall    `json:"function"`
+	ID       string                 `json:"id"`
+	Type     string                 `json:"type"`
+	Function openRouterFunctionCall `json:"function"`
 }
 
 type openRouterFunctionCall struct {
@@ -146,17 +146,17 @@ type openRouterFunctionCall struct {
 }
 
 type openRouterResponse struct {
-	ID      string                  `json:"id"`
-	Model   string                  `json:"model"`
-	Choices []openRouterChoice      `json:"choices"`
-	Usage   openRouterUsage         `json:"usage"`
-	Error   *openRouterError        `json:"error,omitempty"`
+	ID      string             `json:"id"`
+	Model   string             `json:"model"`
+	Choices []openRouterChoice `json:"choices"`
+	Usage   openRouterUsage    `json:"usage"`
+	Error   *openRouterError   `json:"error,omitempty"`
 }
 
 type openRouterChoice struct {
-	Index        int                 `json:"index"`
-	Message      openRouterMessage   `json:"message"`
-	FinishReason string              `json:"finish_reason"`
+	Index        int               `json:"index"`
+	Message      openRouterMessage `json:"message"`
+	FinishReason string            `json:"finish_reason"`
 }
 
 type openRouterUsage struct {
@@ -166,9 +166,9 @@ type openRouterUsage struct {
 }
 
 type openRouterError struct {
-	Message string                 `json:"message"`
-	Type    string                 `json:"type"`
-	Code    string                 `json:"code"`
+	Message string `json:"message"`
+	Type    string `json:"type"`
+	Code    string `json:"code"`
 }
 
 // generateWithModel generates a response using a specific model

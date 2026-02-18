@@ -21,19 +21,19 @@ const (
 
 // EvolutionWebhookPayload represents the Evolution API webhook payload
 type EvolutionWebhookPayload struct {
-	Event    string                 `json:"event"`
-	Instance string                 `json:"instance"`
-	Data     EvolutionWebhookData   `json:"data"`
+	Event    string               `json:"event"`
+	Instance string               `json:"instance"`
+	Data     EvolutionWebhookData `json:"data"`
 }
 
 // EvolutionWebhookData represents the data in Evolution webhook
 type EvolutionWebhookData struct {
-	Key               EvolutionMessageKey    `json:"key"`
-	PushName          string                 `json:"pushName"`
-	Message           EvolutionMessageContent `json:"message"`
-	MessageType       string                 `json:"messageType"`
-	MessageTimestamp  int64                  `json:"messageTimestamp"`
-	Status            string                 `json:"status,omitempty"`
+	Key              EvolutionMessageKey     `json:"key"`
+	PushName         string                  `json:"pushName"`
+	Message          EvolutionMessageContent `json:"message"`
+	MessageType      string                  `json:"messageType"`
+	MessageTimestamp int64                   `json:"messageTimestamp"`
+	Status           string                  `json:"status,omitempty"`
 }
 
 // EvolutionMessageKey represents the message key
@@ -45,8 +45,8 @@ type EvolutionMessageKey struct {
 
 // EvolutionMessageContent represents the message content
 type EvolutionMessageContent struct {
-	Conversation       string                      `json:"conversation,omitempty"`
-	ExtendedTextMessage *EvolutionExtendedText     `json:"extendedTextMessage,omitempty"`
+	Conversation           string                   `json:"conversation,omitempty"`
+	ExtendedTextMessage    *EvolutionExtendedText   `json:"extendedTextMessage,omitempty"`
 	ButtonsResponseMessage *EvolutionButtonResponse `json:"buttonsResponseMessage,omitempty"`
 	ListResponseMessage    *EvolutionListResponse   `json:"listResponseMessage,omitempty"`
 }
@@ -71,14 +71,14 @@ type EvolutionListResponse struct {
 
 // ParsedIncomingMessage represents a parsed incoming message
 type ParsedIncomingMessage struct {
-	Phone       string    `json:"phone"`
-	SenderName  string    `json:"sender_name"`
-	MessageID   string    `json:"message_id"`
-	Content     string    `json:"content"`
-	ButtonID    string    `json:"button_id,omitempty"`
-	IsFromMe    bool      `json:"is_from_me"`
-	Timestamp   time.Time `json:"timestamp"`
-	Instance    string    `json:"instance"`
+	Phone      string    `json:"phone"`
+	SenderName string    `json:"sender_name"`
+	MessageID  string    `json:"message_id"`
+	Content    string    `json:"content"`
+	ButtonID   string    `json:"button_id,omitempty"`
+	IsFromMe   bool      `json:"is_from_me"`
+	Timestamp  time.Time `json:"timestamp"`
+	Instance   string    `json:"instance"`
 }
 
 // MessageIntent represents the classified intent of an incoming message
@@ -95,7 +95,7 @@ const (
 
 // ScheduleIntentData contains extracted data for schedule intents
 type ScheduleIntentData struct {
-	Type      string `json:"tipo"`         // "avaliacao", "retorno", "consulta", "exame"
+	Type      string `json:"tipo"`          // "avaliacao", "retorno", "consulta", "exame"
 	Specialty string `json:"especialidade"` // "fisioterapia", "psicologia", etc (optional)
 	Urgency   string `json:"urgencia"`      // "normal", "urgente"
 }

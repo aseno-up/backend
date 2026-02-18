@@ -84,6 +84,10 @@ type PaymentService interface {
 	GetSubscription(ctx context.Context, clinicID uuid.UUID) (*model.Subscription, error)
 	CancelSubscription(ctx context.Context, clinicID uuid.UUID) error
 
+	// Helper methods for registration flow
+	CreateCustomerForClinic(ctx context.Context, clinicID uuid.UUID, req *model.CreateCustomerRequest) error
+	CreateSubscriptionForClinic(ctx context.Context, clinicID uuid.UUID, plan string, billing string) error
+
 	// Webhook handling
 	HandleWebhook(ctx context.Context, payload *model.AsaasWebhookPayload) error
 }
@@ -402,4 +406,104 @@ func (s *paymentService) HandleWebhook(ctx context.Context, payload *model.Asaas
 	}
 
 	return nil
+}
+
+// CreateCustomerForClinic creates an Asaas customer for a clinic during registration
+func (s *paymentService) CreateCustomerForClinic(ctx context.Context, clinicID uuid.UUID, req *model.CreateCustomerRequest) error {
+	// Check if customer already exists
+	existing, _ := s.customerRepo.GetByClinicID(ctx, clinicID)
+	if existing != nil {
+		return nil // Customer already exists, nothing to do
+	}
+
+	// Create customer in Asaas
+	asaasCustomer, err := s.client.CreateCustomer(ctx, req)
+	if err != nil {
+		return err
+	}
+
+	// Save customer in database
+	customer := &model.Customer{
+		ClinicID:        clinicID,
+		AsaasCustomerID: asaasCustomer.ID,
+		Name:            asaasCustomer.Name,
+		Email:           asaasCustomer.Email,
+		Phone:           asaasCustomer.Phone,
+		Document:        asaasCustomer.Document,
+		PostalCode:      asaasCustomer.PostalCode,
+		Address:         asaasCustomer.Address,
+		AddressNumber:   asaasCustomer.AddressNumber,
+		Province:        asaasCustomer.Province,
+		City:            asaasCustomer.City,
+		State:           asaasCustomer.State,
+	}
+
+	return s.customerRepo.Create(ctx, customer)
+}
+
+// CreateSubscriptionForClinic creates an Asaas subscription for a clinic during registration
+func (s *paymentService) CreateSubscriptionForClinic(ctx context.Context, clinicID uuid.UUID, plan string, billing string) error {
+	// Get customer
+	customer, err := s.customerRepo.GetByClinicID(ctx, clinicID)
+	if err != nil {
+		return errors.ErrNotFoundInstance.WithMessage("Customer not found")
+	}
+
+	// Map plan to price (you should get this from config/database)
+	var value float64
+	switch plan {
+	case "basic":
+		value = 99.00
+	case "professional":
+		value = 199.00
+	case "advanced":
+		value = 349.00
+	default:
+		return errors.ErrBadRequestInstance.WithMessage("Invalid plan")
+	}
+
+	// Adjust for billing cycle
+	var cycle model.BillingCycle
+	if billing == "annually" {
+		cycle = model.BillingCycleYearly
+		value = value * 10 // 2 months free on annual billing
+	} else {
+		cycle = model.BillingCycleMonthly
+	}
+
+	// Calculate next due date (immediate charge)
+	nextDueDate := time.Now().Format("2006-01-02")
+
+	// Create subscription in Asaas
+	asaasReq := &model.CreateSubscriptionRequest{
+		CustomerID:  customer.AsaasCustomerID,
+		BillingType: model.BillingTypePix, // Default to PIX, user can change later
+		Value:       value,
+		NextDueDate: nextDueDate,
+		Cycle:       cycle,
+		Description: "Assinatura " + plan,
+	}
+
+	asaasSubscription, err := s.client.CreateSubscription(ctx, asaasReq)
+	if err != nil {
+		return err
+	}
+
+	// Parse next due date
+	nextDue, _ := time.Parse("2006-01-02", asaasSubscription.NextDueDate)
+
+	// Save subscription in database
+	subscription := &model.Subscription{
+		ClinicID:            clinicID,
+		CustomerID:          customer.ID,
+		AsaasSubscriptionID: asaasSubscription.ID,
+		Status:              model.SubscriptionStatus(asaasSubscription.Status),
+		BillingType:         model.BillingType(asaasSubscription.BillingType),
+		Value:               asaasSubscription.Value,
+		NextDueDate:         nextDue,
+		Cycle:               model.BillingCycle(asaasSubscription.Cycle),
+		Description:         asaasSubscription.Description,
+	}
+
+	return s.subscriptionRepo.Create(ctx, subscription)
 }

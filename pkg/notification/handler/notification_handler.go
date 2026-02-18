@@ -8,8 +8,8 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 
-	auth_service "github.com/aseno/backend/pkg/auth/service"
 	"github.com/aseno/backend/internal/errors"
+	auth_service "github.com/aseno/backend/pkg/auth/service"
 	"github.com/aseno/backend/pkg/notification/model"
 	"github.com/aseno/backend/pkg/notification/service"
 	"github.com/aseno/backend/pkg/notification/sse"

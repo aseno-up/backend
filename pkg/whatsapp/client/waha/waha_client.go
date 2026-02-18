@@ -5,8 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"github.com/aseno/backend/internal/logger"
+	"io"
 	"net/http"
 	"time"
 
@@ -364,9 +364,9 @@ func ParseWebhookPayload(data []byte) (*model.ParsedIncomingMessage, error) {
 		Payload struct {
 			ID        string `json:"id"`
 			Timestamp int64  `json:"timestamp"`
-			From      string `json:"from"`      // e.g. "5511999999999@c.us"
-			To        string `json:"to"`        // e.g. "5511999999999@c.us"
-			Body      string `json:"body"`      // Message text
+			From      string `json:"from"` // e.g. "5511999999999@c.us"
+			To        string `json:"to"`   // e.g. "5511999999999@c.us"
+			Body      string `json:"body"` // Message text
 			FromMe    bool   `json:"fromMe"`
 			HasMedia  bool   `json:"hasMedia"`
 			ReplyTo   string `json:"replyTo"`

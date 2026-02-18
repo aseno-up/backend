@@ -12,9 +12,9 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/aseno/backend/internal/queue"
 	aptModel "github.com/aseno/backend/pkg/appointment/model"
 	clinic_model "github.com/aseno/backend/pkg/clinic/model"
-	"github.com/aseno/backend/internal/queue"
 	"github.com/aseno/backend/pkg/whatsapp/agent"
 	"github.com/aseno/backend/pkg/whatsapp/classifier"
 	"github.com/aseno/backend/pkg/whatsapp/model"
@@ -177,31 +177,31 @@ type WhatsAppService interface {
 
 // whatsAppService implements WhatsAppService
 type whatsAppService struct {
-	client                   WhatsAppClient
-	messageRepo              MessageRepository
-	messageLogService        MessageLogService
-	appointmentUpdater       AppointmentStatusUpdater
-	appointmentFinder        AppointmentFinder
-	waitlistHandler          WaitlistResponseHandler
-	slotSuggester            SlotSuggester
-	appointmentCreator       AppointmentCreator
-	rescheduleCache          *rescheduleCache
-	classifier               classifier.MessageClassifier
-	confidenceThreshold      float64
+	client              WhatsAppClient
+	messageRepo         MessageRepository
+	messageLogService   MessageLogService
+	appointmentUpdater  AppointmentStatusUpdater
+	appointmentFinder   AppointmentFinder
+	waitlistHandler     WaitlistResponseHandler
+	slotSuggester       SlotSuggester
+	appointmentCreator  AppointmentCreator
+	rescheduleCache     *rescheduleCache
+	classifier          classifier.MessageClassifier
+	confidenceThreshold float64
 	// New scheduling dependencies
-	schedulingIntentRepo     SchedulingIntentRepository
-	patientFinderCreator     PatientFinderCreator
-	professionalLister       ProfessionalLister
-	slotFinder               SlotFinder
-	newAppointmentCreator    NewAppointmentCreator
+	schedulingIntentRepo  SchedulingIntentRepository
+	patientFinderCreator  PatientFinderCreator
+	professionalLister    ProfessionalLister
+	slotFinder            SlotFinder
+	newAppointmentCreator NewAppointmentCreator
 	// Message queue for segmented delivery
-	messageQueue             MessageQueue
+	messageQueue MessageQueue
 	// AI Agent service for dynamic conversations
-	aiAgentService           agent.Service
+	aiAgentService agent.Service
 	// Clinic repository for fetching clinic settings
-	clinicRepo               ClinicRepository
+	clinicRepo ClinicRepository
 	// Scheduled message repository for outside business hours
-	scheduledMsgRepo         ScheduledMessageRepository
+	scheduledMsgRepo ScheduledMessageRepository
 	// Default delay between patients from config
 	defaultDelayBetweenPatients int
 }
@@ -452,7 +452,7 @@ func (s *whatsAppService) SendTextMessage(ctx context.Context, instance, phone, 
 func (s *whatsAppService) SendConfirmationFeedback(ctx context.Context, instance, phone string, apt *AppointmentInfo) error {
 	dateStr := apt.StartTime.Format("02/01/2006")
 	timeStr := apt.StartTime.Format("15:04")
-	
+
 	message := fmt.Sprintf(
 		"✅ Confirmado! Te aguardamos no dia %s as %s com %s.\n\nAte la! 😊",
 		dateStr,
@@ -478,7 +478,7 @@ func (s *whatsAppService) SendRescheduleOptions(ctx context.Context, instance, p
 
 	// Build message with options
 	message := fmt.Sprintf(
-		"❌ Seu agendamento com %s foi cancelado.\n\n" +
+		"❌ Seu agendamento com %s foi cancelado.\n\n"+
 			"Deseja reagendar? Escolha um novo horario:\n\n",
 		apt.Professional,
 	)
@@ -557,12 +557,12 @@ func (s *whatsAppService) SendConfirmationMessage(ctx context.Context, instance 
 
 	// Build confirmation message with buttons
 	message := fmt.Sprintf(
-		"%s\n\n" +
-			"Sua consulta foi agendada:\n\n" +
-			"📅 Data: %s\n" +
-			"🕐 Horario: %s\n" +
-			"👨‍⚕️ Profissional: %s\n" +
-			"🏥 Local: %s\n\n" +
+		"%s\n\n"+
+			"Sua consulta foi agendada:\n\n"+
+			"📅 Data: %s\n"+
+			"🕐 Horario: %s\n"+
+			"👨‍⚕️ Profissional: %s\n"+
+			"🏥 Local: %s\n\n"+
 			"Por favor, confirme sua presenca:",
 		greeting,
 		dateStr,
@@ -615,12 +615,12 @@ func (s *whatsAppService) SendReminderMessage(ctx context.Context, instance stri
 	greeting := s.buildGreeting(msg.PatientName)
 
 	message := fmt.Sprintf(
-		"🔔 %s\n\n" +
-			"%s\n\n" +
-			"📅 Data: %s\n" +
-			"🕐 Horario: %s\n" +
-			"👨‍⚕️ Profissional: %s\n" +
-			"🏥 Local: %s\n\n" +
+		"🔔 %s\n\n"+
+			"%s\n\n"+
+			"📅 Data: %s\n"+
+			"🕐 Horario: %s\n"+
+			"👨‍⚕️ Profissional: %s\n"+
+			"🏥 Local: %s\n\n"+
 			"Caso precise remarcar ou cancelar, responda esta mensagem.",
 		reminderText,
 		greeting,
@@ -1382,10 +1382,10 @@ func (s *whatsAppService) handleSlotSelection(ctx context.Context, clinicID uuid
 	timeStr := selectedSlot.StartTime.Format("15:04")
 
 	message := fmt.Sprintf(
-		"Consulta agendada com sucesso!\n\n" +
-			"%s Data: %s %s\n" +
-			"%s Horario: %s\n" +
-			"%s Profissional: %s\n\n" +
+		"Consulta agendada com sucesso!\n\n"+
+			"%s Data: %s %s\n"+
+			"%s Horario: %s\n"+
+			"%s Profissional: %s\n\n"+
 			"Te aguardamos!",
 		"📅", weekday, dateStr,
 		"🕐", timeStr,

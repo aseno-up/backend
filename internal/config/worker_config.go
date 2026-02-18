@@ -48,7 +48,7 @@ type WorkerConfig struct {
 
 	// AI Agent Configuration
 	AIAgentEnabled          bool
-	AIAgentProvider         string  // gemini, claude, openai
+	AIAgentProvider         string // gemini, claude, openai
 	AIAgentModel            string
 	AIAgentFallbackModels   []string // List of fallback models to try in order
 	AIAgentMaxTokens        int
@@ -59,10 +59,10 @@ type WorkerConfig struct {
 	ConversationPostgresTTL time.Duration
 
 	// AI Agent Feature Flags (gradual rollout)
-	AIAgentSchedulingEnabled  bool
-	AIAgentConfirmEnabled     bool
-	AIAgentCancelEnabled      bool
-	AIAgentRemindersEnabled   bool
+	AIAgentSchedulingEnabled bool
+	AIAgentConfirmEnabled    bool
+	AIAgentCancelEnabled     bool
+	AIAgentRemindersEnabled  bool
 }
 
 // NewWorkerConfig creates a new worker configuration from environment variables

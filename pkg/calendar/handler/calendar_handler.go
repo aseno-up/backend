@@ -127,15 +127,15 @@ func (h *calendarHandler) GetIntegration(c *gin.Context) {
 
 	// Don't expose tokens in response
 	c.JSON(http.StatusOK, gin.H{
-		"id":             integration.ID,
-		"provider":       integration.Provider,
-		"email":          integration.Email,
-		"calendar_id":    integration.CalendarID,
-		"sync_enabled":   integration.SyncEnabled,
-		"sync_direction": integration.SyncDirection,
-		"last_sync_at":   integration.LastSyncAt,
+		"id":              integration.ID,
+		"provider":        integration.Provider,
+		"email":           integration.Email,
+		"calendar_id":     integration.CalendarID,
+		"sync_enabled":    integration.SyncEnabled,
+		"sync_direction":  integration.SyncDirection,
+		"last_sync_at":    integration.LastSyncAt,
 		"last_sync_error": integration.LastSyncError,
-		"connected":      true,
+		"connected":       true,
 	})
 }
 
@@ -192,7 +192,7 @@ func (h *calendarHandler) SetCalendar(c *gin.Context) {
 
 // UpdateSettingsRequest represents the request to update sync settings
 type UpdateSettingsRequest struct {
-	SyncEnabled   bool                 `json:"sync_enabled"`
+	SyncEnabled   bool                `json:"sync_enabled"`
 	SyncDirection model.SyncDirection `json:"sync_direction"`
 }
 

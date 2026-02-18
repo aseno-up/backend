@@ -204,11 +204,11 @@ func (r *patientRepository) UpdateRiskScore(ctx context.Context, patientID, clin
 		Model(&model.Patient{}).
 		Where("id = ? AND clinic_id = ? AND deleted_at IS NULL", patientID, clinicID).
 		Updates(map[string]interface{}{
-			"no_show_risk":        risk,
-			"total_appointments":  stats.TotalAppointments,
-			"no_show_count":       stats.NoShowCount,
-			"attendance_rate":     attendanceRate,
-			"risk_updated_at":     gorm.Expr("NOW()"),
+			"no_show_risk":       risk,
+			"total_appointments": stats.TotalAppointments,
+			"no_show_count":      stats.NoShowCount,
+			"attendance_rate":    attendanceRate,
+			"risk_updated_at":    gorm.Expr("NOW()"),
 		})
 
 	if result.Error != nil {

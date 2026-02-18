@@ -10,11 +10,11 @@ import (
 
 // FallbackHandler handles graceful degradation when AI agent fails
 type FallbackHandler struct {
-	mu                    sync.RWMutex
-	consecutiveFailures   int
-	lastFailureTime       time.Time
-	circuitBreakerOpen    bool
-	circuitBreakerTimeout time.Duration
+	mu                     sync.RWMutex
+	consecutiveFailures    int
+	lastFailureTime        time.Time
+	circuitBreakerOpen     bool
+	circuitBreakerTimeout  time.Duration
 	maxConsecutiveFailures int
 }
 
@@ -86,11 +86,11 @@ func (f *FallbackHandler) GetStatus() *FallbackStatus {
 	defer f.mu.RUnlock()
 
 	return &FallbackStatus{
-		ConsecutiveFailures:    f.consecutiveFailures,
-		LastFailureTime:        f.lastFailureTime,
-		CircuitBreakerOpen:     f.circuitBreakerOpen,
-		TimeSinceLastFailure:   time.Since(f.lastFailureTime),
-		TimeUntilCircuitClose:  f.calculateTimeUntilCircuitClose(),
+		ConsecutiveFailures:   f.consecutiveFailures,
+		LastFailureTime:       f.lastFailureTime,
+		CircuitBreakerOpen:    f.circuitBreakerOpen,
+		TimeSinceLastFailure:  time.Since(f.lastFailureTime),
+		TimeUntilCircuitClose: f.calculateTimeUntilCircuitClose(),
 	}
 }
 

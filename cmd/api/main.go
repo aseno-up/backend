@@ -20,6 +20,9 @@ import (
 	"github.com/aseno/backend/internal/queue"
 	redisClient "github.com/aseno/backend/internal/redis"
 	"github.com/aseno/backend/internal/worker"
+	analytics_handler "github.com/aseno/backend/pkg/analytics/handler"
+	analytics_repository "github.com/aseno/backend/pkg/analytics/repository"
+	analytics_service "github.com/aseno/backend/pkg/analytics/service"
 	appointment_handler "github.com/aseno/backend/pkg/appointment/handler"
 	appointment_model "github.com/aseno/backend/pkg/appointment/model"
 	appointment_repository "github.com/aseno/backend/pkg/appointment/repository"
@@ -30,6 +33,8 @@ import (
 	auth_model "github.com/aseno/backend/pkg/auth/model"
 	auth_repository "github.com/aseno/backend/pkg/auth/repository"
 	auth_service "github.com/aseno/backend/pkg/auth/service"
+	booking_handler "github.com/aseno/backend/pkg/booking/handler"
+	booking_service "github.com/aseno/backend/pkg/booking/service"
 	calendar_google "github.com/aseno/backend/pkg/calendar/client/google"
 	calendar_handler "github.com/aseno/backend/pkg/calendar/handler"
 	calendar_model "github.com/aseno/backend/pkg/calendar/model"
@@ -48,6 +53,10 @@ import (
 	invite_model "github.com/aseno/backend/pkg/invite/model"
 	invite_repository "github.com/aseno/backend/pkg/invite/repository"
 	invite_service "github.com/aseno/backend/pkg/invite/service"
+	notification_handler "github.com/aseno/backend/pkg/notification/handler"
+	notification_model "github.com/aseno/backend/pkg/notification/model"
+	notification_repository "github.com/aseno/backend/pkg/notification/repository"
+	notification_service "github.com/aseno/backend/pkg/notification/service"
 	patient_handler "github.com/aseno/backend/pkg/patient/handler"
 	patient_model "github.com/aseno/backend/pkg/patient/model"
 	patient_repository "github.com/aseno/backend/pkg/patient/repository"
@@ -65,10 +74,15 @@ import (
 	professional_model "github.com/aseno/backend/pkg/professional/model"
 	professional_repository "github.com/aseno/backend/pkg/professional/repository"
 	professional_service "github.com/aseno/backend/pkg/professional/service"
+	public_handler "github.com/aseno/backend/pkg/public/handler"
 	sessionplan_handler "github.com/aseno/backend/pkg/sessionplan/handler"
 	sessionplan_model "github.com/aseno/backend/pkg/sessionplan/model"
 	sessionplan_repository "github.com/aseno/backend/pkg/sessionplan/repository"
 	sessionplan_service "github.com/aseno/backend/pkg/sessionplan/service"
+	settings_handler "github.com/aseno/backend/pkg/settings/handler"
+	settings_model "github.com/aseno/backend/pkg/settings/model"
+	settings_repository "github.com/aseno/backend/pkg/settings/repository"
+	settings_service "github.com/aseno/backend/pkg/settings/service"
 	user_handler "github.com/aseno/backend/pkg/user/handler"
 	user_model "github.com/aseno/backend/pkg/user/model"
 	user_repository "github.com/aseno/backend/pkg/user/repository"
@@ -77,30 +91,16 @@ import (
 	waitlist_model "github.com/aseno/backend/pkg/waitlist/model"
 	waitlist_repository "github.com/aseno/backend/pkg/waitlist/repository"
 	waitlist_service "github.com/aseno/backend/pkg/waitlist/service"
+	"github.com/aseno/backend/pkg/whatsapp/agent"
 	whatsapp_classifier "github.com/aseno/backend/pkg/whatsapp/classifier"
 	whatsapp_evolution "github.com/aseno/backend/pkg/whatsapp/client/evolution"
 	whatsapp_waha "github.com/aseno/backend/pkg/whatsapp/client/waha"
+	"github.com/aseno/backend/pkg/whatsapp/conversation"
 	whatsapp_handler "github.com/aseno/backend/pkg/whatsapp/handler"
 	whatsapp_model "github.com/aseno/backend/pkg/whatsapp/model"
 	whatsapp_repository "github.com/aseno/backend/pkg/whatsapp/repository"
 	whatsapp_service "github.com/aseno/backend/pkg/whatsapp/service"
-	"github.com/aseno/backend/pkg/whatsapp/conversation"
-	"github.com/aseno/backend/pkg/whatsapp/agent"
 	"github.com/aseno/backend/pkg/whatsapp/tools"
-	analytics_handler "github.com/aseno/backend/pkg/analytics/handler"
-	analytics_repository "github.com/aseno/backend/pkg/analytics/repository"
-	analytics_service "github.com/aseno/backend/pkg/analytics/service"
-	notification_handler "github.com/aseno/backend/pkg/notification/handler"
-	notification_model "github.com/aseno/backend/pkg/notification/model"
-	notification_repository "github.com/aseno/backend/pkg/notification/repository"
-	notification_service "github.com/aseno/backend/pkg/notification/service"
-	public_handler "github.com/aseno/backend/pkg/public/handler"
-	settings_handler "github.com/aseno/backend/pkg/settings/handler"
-	booking_handler "github.com/aseno/backend/pkg/booking/handler"
-	booking_service "github.com/aseno/backend/pkg/booking/service"
-	settings_model "github.com/aseno/backend/pkg/settings/model"
-	settings_repository "github.com/aseno/backend/pkg/settings/repository"
-	settings_service "github.com/aseno/backend/pkg/settings/service"
 )
 
 func main() {
@@ -397,6 +397,9 @@ func main() {
 	var paymentService payment_service.PaymentService
 	if asaasClient != nil {
 		paymentService = payment_service.NewPaymentService(asaasClient, customerRepo, paymentRepo, subscriptionRepo)
+
+		// Inject payment service into auth service for subscription creation during registration
+		authService.SetPaymentService(paymentService)
 	}
 
 	// Initialize Calendar service (if Google client is configured)
@@ -954,9 +957,9 @@ func (a *clinicInfoAdapter) GetClinicInfo(ctx context.Context, clinicID uuid.UUI
 		return nil, err
 	}
 	return &waitlist_service.ClinicInfo{
-		ID:               clinic.ID,
-		Name:             clinic.Name,
-		WhatsAppInstance: clinic.WhatsAppInstance,
+		ID:                clinic.ID,
+		Name:              clinic.Name,
+		WhatsAppInstance:  clinic.WhatsAppInstance,
 		WhatsAppConnected: clinic.WhatsAppConnected,
 	}, nil
 }

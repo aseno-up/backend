@@ -25,9 +25,9 @@ type ClinicInfoProvider interface {
 
 // ClinicInfo contains clinic information needed for waitlist operations
 type ClinicInfo struct {
-	ID               uuid.UUID
-	Name             string
-	WhatsAppInstance string
+	ID                uuid.UUID
+	Name              string
+	WhatsAppInstance  string
 	WhatsAppConnected bool
 }
 
@@ -64,13 +64,13 @@ type WaitlistService interface {
 
 // waitlistService implements WaitlistService
 type waitlistService struct {
-	repo                repository.WaitlistRepository
-	clinicProvider      ClinicInfoProvider
+	repo                 repository.WaitlistRepository
+	clinicProvider       ClinicInfoProvider
 	professionalProvider ProfessionalInfoProvider
-	appointmentCreator  AppointmentCreator
-	messageQueue        queue.Queue
-	defaultDuration     int // Default appointment duration in minutes
-	clinicRepo          clinic_repository.ClinicRepository
+	appointmentCreator   AppointmentCreator
+	messageQueue         queue.Queue
+	defaultDuration      int // Default appointment duration in minutes
+	clinicRepo           clinic_repository.ClinicRepository
 }
 
 // NewWaitlistService creates a new waitlist service
@@ -83,13 +83,13 @@ func NewWaitlistService(
 	clinicRepo clinic_repository.ClinicRepository,
 ) WaitlistService {
 	return &waitlistService{
-		repo:                repo,
-		clinicProvider:      clinicProvider,
+		repo:                 repo,
+		clinicProvider:       clinicProvider,
 		professionalProvider: professionalProvider,
-		appointmentCreator:  appointmentCreator,
-		messageQueue:        messageQueue,
-		defaultDuration:     50, // Default 50 minutes
-		clinicRepo:          clinicRepo,
+		appointmentCreator:   appointmentCreator,
+		messageQueue:         messageQueue,
+		defaultDuration:      50, // Default 50 minutes
+		clinicRepo:           clinicRepo,
 	}
 }
 
@@ -372,12 +372,12 @@ func (s *waitlistService) HandlePatientResponse(ctx context.Context, clinicID uu
 			if err != nil {
 				logger.Printf("[Waitlist] Error processing acceptance (%s): %v", action, err)
 				// Still mark as scheduled? No, maybe kept as notified or failed?
-				// For now, let's keep it simple and mark as scheduled but log error, 
+				// For now, let's keep it simple and mark as scheduled but log error,
 				// or maybe we should send a message saying "sorry, slot taken"?
 				// Ideally we should handle this failure gracefully.
 			} else {
 				logger.Printf("[Waitlist] Successfully %s appointment for entry %s", action, entry.ID)
-				
+
 				// Mark entry as scheduled only if successful
 				err = s.repo.UpdateStatus(ctx, entry.ID, model.WaitlistStatusScheduled, nil, nil, nil)
 				if err != nil {

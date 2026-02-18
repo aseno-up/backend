@@ -75,11 +75,11 @@ func (s *onboardingService) GetStatus(ctx context.Context, clinicID uuid.UUID) (
 
 	// Calculate progress (5 steps, each worth 20%)
 	steps := []bool{
-		clinicInfoComplete,        // Step 1: Clinic info
-		profCount > 0,             // Step 2: At least one professional
-		hasSchedule,               // Step 3: Schedule configured
-		clinic.WhatsAppConnected,  // Step 4: WhatsApp connected
-		aptCount > 0,              // Step 5: At least one appointment
+		clinicInfoComplete,       // Step 1: Clinic info
+		profCount > 0,            // Step 2: At least one professional
+		hasSchedule,              // Step 3: Schedule configured
+		clinic.WhatsAppConnected, // Step 4: WhatsApp connected
+		aptCount > 0,             // Step 5: At least one appointment
 	}
 
 	completed := 0

@@ -41,19 +41,19 @@ const (
 
 // CreateCustomerRequest represents a request to create a customer in Asaas
 type CreateCustomerRequest struct {
-	Name             string       `json:"name" binding:"required"`
-	Email            string       `json:"email" binding:"required,email"`
-	Phone            string       `json:"phone"`
-	Document         string       `json:"cpfCnpj" binding:"required"`
-	PostalCode       string       `json:"postalCode"`
-	Address          string       `json:"address"`
-	AddressNumber    string       `json:"addressNumber"`
-	Complement       string       `json:"complement"`
-	Province         string       `json:"province"`
-	City             string       `json:"city,omitempty"`
-	State            string       `json:"state,omitempty"`
-	ExternalRef      string       `json:"externalReference"`
-	AdditionalEmails string       `json:"additionalEmails,omitempty"`
+	Name             string `json:"name" binding:"required"`
+	Email            string `json:"email" binding:"required,email"`
+	Phone            string `json:"phone"`
+	Document         string `json:"cpfCnpj" binding:"required"`
+	PostalCode       string `json:"postalCode"`
+	Address          string `json:"address"`
+	AddressNumber    string `json:"addressNumber"`
+	Complement       string `json:"complement"`
+	Province         string `json:"province"`
+	City             string `json:"city,omitempty"`
+	State            string `json:"state,omitempty"`
+	ExternalRef      string `json:"externalReference"`
+	AdditionalEmails string `json:"additionalEmails,omitempty"`
 }
 
 // AsaasCustomerResponse represents the response from Asaas API when creating/getting a customer

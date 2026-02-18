@@ -23,10 +23,10 @@ type PreferredDays []string
 
 // WaitlistEntry represents a patient waiting for an appointment slot
 type WaitlistEntry struct {
-	ID             uuid.UUID      `json:"id" gorm:"type:uuid;primary_key;default:gen_random_uuid()"`
-	ClinicID       uuid.UUID      `json:"clinic_id" gorm:"type:uuid;not null;index"`
-	PatientID      uuid.UUID      `json:"patient_id" gorm:"type:uuid;not null;index"`
-	ProfessionalID *uuid.UUID     `json:"professional_id" gorm:"type:uuid;index"` // nil = qualquer profissional
+	ID                    uuid.UUID  `json:"id" gorm:"type:uuid;primary_key;default:gen_random_uuid()"`
+	ClinicID              uuid.UUID  `json:"clinic_id" gorm:"type:uuid;not null;index"`
+	PatientID             uuid.UUID  `json:"patient_id" gorm:"type:uuid;not null;index"`
+	ProfessionalID        *uuid.UUID `json:"professional_id" gorm:"type:uuid;index"`                   // nil = qualquer profissional
 	OriginalAppointmentID *uuid.UUID `json:"original_appointment_id,omitempty" gorm:"type:uuid;index"` // If set, this is an anticipation request for an existing appointment
 
 	// Preferências de horário
@@ -62,55 +62,55 @@ type WaitlistEntryWithPatient struct {
 
 // WaitlistEntryResponse represents the API response for a waitlist entry
 type WaitlistEntryResponse struct {
-	ID                 uuid.UUID      `json:"id"`
-	ClinicID           uuid.UUID      `json:"clinic_id"`
-	PatientID          uuid.UUID      `json:"patient_id"`
-	PatientName        string         `json:"patient_name,omitempty"`
-	PatientPhone       string         `json:"patient_phone,omitempty"`
-	ProfessionalID     *uuid.UUID     `json:"professional_id,omitempty"`
-	ProfessionalName   string         `json:"professional_name,omitempty"`
-	OriginalAppointmentID *uuid.UUID  `json:"original_appointment_id,omitempty"`
-	PreferredDays      []string       `json:"preferred_days"`
-	PreferredTimeStart string         `json:"preferred_time_start"`
-	PreferredTimeEnd   string         `json:"preferred_time_end"`
-	Status             WaitlistStatus `json:"status"`
-	Notes              string         `json:"notes,omitempty"`
-	PendingSlotTime    *time.Time     `json:"pending_slot_time,omitempty"`
-	NotifiedAt         *time.Time     `json:"notified_at,omitempty"`
-	CreatedAt          time.Time      `json:"created_at"`
-	ExpiresAt          *time.Time     `json:"expires_at,omitempty"`
+	ID                    uuid.UUID      `json:"id"`
+	ClinicID              uuid.UUID      `json:"clinic_id"`
+	PatientID             uuid.UUID      `json:"patient_id"`
+	PatientName           string         `json:"patient_name,omitempty"`
+	PatientPhone          string         `json:"patient_phone,omitempty"`
+	ProfessionalID        *uuid.UUID     `json:"professional_id,omitempty"`
+	ProfessionalName      string         `json:"professional_name,omitempty"`
+	OriginalAppointmentID *uuid.UUID     `json:"original_appointment_id,omitempty"`
+	PreferredDays         []string       `json:"preferred_days"`
+	PreferredTimeStart    string         `json:"preferred_time_start"`
+	PreferredTimeEnd      string         `json:"preferred_time_end"`
+	Status                WaitlistStatus `json:"status"`
+	Notes                 string         `json:"notes,omitempty"`
+	PendingSlotTime       *time.Time     `json:"pending_slot_time,omitempty"`
+	NotifiedAt            *time.Time     `json:"notified_at,omitempty"`
+	CreatedAt             time.Time      `json:"created_at"`
+	ExpiresAt             *time.Time     `json:"expires_at,omitempty"`
 }
 
 // ToResponse converts WaitlistEntry to WaitlistEntryResponse
 func (w *WaitlistEntry) ToResponse() *WaitlistEntryResponse {
 	return &WaitlistEntryResponse{
-		ID:                 w.ID,
-		ClinicID:           w.ClinicID,
-		PatientID:          w.PatientID,
-		ProfessionalID:     w.ProfessionalID,
+		ID:                    w.ID,
+		ClinicID:              w.ClinicID,
+		PatientID:             w.PatientID,
+		ProfessionalID:        w.ProfessionalID,
 		OriginalAppointmentID: w.OriginalAppointmentID,
-		PreferredDays:      w.PreferredDays,
-		PreferredTimeStart: w.PreferredTimeStart,
-		PreferredTimeEnd:   w.PreferredTimeEnd,
-		Status:             w.Status,
-		Notes:              w.Notes,
-		PendingSlotTime:    w.PendingSlotTime,
-		NotifiedAt:         w.NotifiedAt,
-		CreatedAt:          w.CreatedAt,
-		ExpiresAt:          w.ExpiresAt,
+		PreferredDays:         w.PreferredDays,
+		PreferredTimeStart:    w.PreferredTimeStart,
+		PreferredTimeEnd:      w.PreferredTimeEnd,
+		Status:                w.Status,
+		Notes:                 w.Notes,
+		PendingSlotTime:       w.PendingSlotTime,
+		NotifiedAt:            w.NotifiedAt,
+		CreatedAt:             w.CreatedAt,
+		ExpiresAt:             w.ExpiresAt,
 	}
 }
 
 // CreateWaitlistRequest represents the request to add a patient to the waitlist
 type CreateWaitlistRequest struct {
-	PatientID          uuid.UUID  `json:"patient_id" binding:"required"`
-	ProfessionalID     *uuid.UUID `json:"professional_id"`                              // nil = qualquer profissional
-	OriginalAppointmentID *uuid.UUID `json:"original_appointment_id"`                   // Optional: link to existing appointment
-	PreferredDays      []string   `json:"preferred_days" binding:"required,min=1"`      // ["monday", "tuesday", ...]
-	PreferredTimeStart string     `json:"preferred_time_start" binding:"omitempty"`     // "08:00"
-	PreferredTimeEnd   string     `json:"preferred_time_end" binding:"omitempty"`       // "18:00"
-	Notes              string     `json:"notes"`
-	ExpiresAt          *time.Time `json:"expires_at"`
+	PatientID             uuid.UUID  `json:"patient_id" binding:"required"`
+	ProfessionalID        *uuid.UUID `json:"professional_id"`                          // nil = qualquer profissional
+	OriginalAppointmentID *uuid.UUID `json:"original_appointment_id"`                  // Optional: link to existing appointment
+	PreferredDays         []string   `json:"preferred_days" binding:"required,min=1"`  // ["monday", "tuesday", ...]
+	PreferredTimeStart    string     `json:"preferred_time_start" binding:"omitempty"` // "08:00"
+	PreferredTimeEnd      string     `json:"preferred_time_end" binding:"omitempty"`   // "18:00"
+	Notes                 string     `json:"notes"`
+	ExpiresAt             *time.Time `json:"expires_at"`
 }
 
 // UpdateWaitlistRequest represents the request to update a waitlist entry
@@ -134,14 +134,14 @@ type WaitlistListResponse struct {
 
 // SlotOffer represents a slot being offered to a waitlist patient
 type SlotOffer struct {
-	WaitlistEntryID uuid.UUID  `json:"waitlist_entry_id"`
-	ClinicID        uuid.UUID  `json:"clinic_id"`
-	PatientID       uuid.UUID  `json:"patient_id"`
-	PatientName     string     `json:"patient_name"`
-	PatientPhone    string     `json:"patient_phone"`
-	ProfessionalID  uuid.UUID  `json:"professional_id"`
+	WaitlistEntryID  uuid.UUID `json:"waitlist_entry_id"`
+	ClinicID         uuid.UUID `json:"clinic_id"`
+	PatientID        uuid.UUID `json:"patient_id"`
+	PatientName      string    `json:"patient_name"`
+	PatientPhone     string    `json:"patient_phone"`
+	ProfessionalID   uuid.UUID `json:"professional_id"`
 	ProfessionalName string    `json:"professional_name"`
-	SlotTime        time.Time  `json:"slot_time"`
-	ClinicName      string     `json:"clinic_name"`
-	Instance        string     `json:"instance"` // WhatsApp instance
+	SlotTime         time.Time `json:"slot_time"`
+	ClinicName       string    `json:"clinic_name"`
+	Instance         string    `json:"instance"` // WhatsApp instance
 }

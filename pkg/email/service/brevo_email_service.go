@@ -37,11 +37,11 @@ func NewBrevoEmailService() (EmailService, error) {
 	client := lib.NewAPIClient(cfg)
 
 	return &brevoEmailService{
-		client:      client,
-		senderName:  senderName,
-		senderEmail: senderEmail,
-	},
-	nil
+			client:      client,
+			senderName:  senderName,
+			senderEmail: senderEmail,
+		},
+		nil
 }
 
 // SendPasswordReset sends a password reset email using Brevo
@@ -77,7 +77,7 @@ func (s *brevoEmailService) SendPasswordReset(ctx context.Context, data *ResetPa
 
 // SendInvite sends an invitation email using Brevo
 func (s *brevoEmailService) SendInvite(ctx context.Context, data *InviteEmailData) error {
-    // For now, we'll just log this. Implementation can be added later.
+	// For now, we'll just log this. Implementation can be added later.
 	fmt.Printf("[BREVO] Would send invite to %s for %s (link: %s)\n",
 		data.RecipientEmail,
 		data.ClinicName,
@@ -87,7 +87,7 @@ func (s *brevoEmailService) SendInvite(ctx context.Context, data *InviteEmailDat
 
 // SendWelcome sends a welcome email using Brevo
 func (s *brevoEmailService) SendWelcome(ctx context.Context, data *WelcomeEmailData) error {
-    // For now, we'll just log this. Implementation can be added later.
+	// For now, we'll just log this. Implementation can be added later.
 	fmt.Printf("[BREVO] Would send welcome to %s (%s) for %s\n",
 		data.RecipientEmail,
 		data.RecipientName,
@@ -97,7 +97,7 @@ func (s *brevoEmailService) SendWelcome(ctx context.Context, data *WelcomeEmailD
 
 // SendEmailVerification sends an email verification email using Brevo
 func (s *brevoEmailService) SendEmailVerification(ctx context.Context, data *EmailVerificationData) error {
-    // For now, we'll just log this. Implementation can be added later.
+	// For now, we'll just log this. Implementation can be added later.
 	fmt.Printf("[BREVO] Would send email verification to %s (%s) (link: %s)\n",
 		data.RecipientEmail,
 		data.RecipientName,

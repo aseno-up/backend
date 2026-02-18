@@ -65,17 +65,17 @@ func (p *MessageLogPayload) Scan(value interface{}) error {
 
 // MessageLog represents a lifecycle event for a message
 type MessageLog struct {
-	ID            uuid.UUID           `json:"id" gorm:"type:uuid;primary_key;default:gen_random_uuid()"`
-	ClinicID      uuid.UUID           `json:"clinic_id" gorm:"type:uuid;not null;index"`
-	MessageID     uuid.UUID           `json:"message_id" gorm:"type:uuid;not null;index"`
-	PatientID     *uuid.UUID          `json:"patient_id,omitempty" gorm:"type:uuid;index"`
-	AppointmentID *uuid.UUID          `json:"appointment_id,omitempty" gorm:"type:uuid;index"`
-	Event         MessageLogEvent     `json:"event" gorm:"type:varchar(50);not null;index"`
-	Channel       MessageLogChannel   `json:"channel" gorm:"type:varchar(50);not null;default:'whatsapp'"`
-	Direction     MessageDirection    `json:"direction" gorm:"type:varchar(50);not null"`
-	Payload       MessageLogPayload   `json:"payload,omitempty" gorm:"type:jsonb"`
-	Error         *string             `json:"error,omitempty"`
-	CreatedAt     time.Time           `json:"created_at" gorm:"index"`
+	ID            uuid.UUID         `json:"id" gorm:"type:uuid;primary_key;default:gen_random_uuid()"`
+	ClinicID      uuid.UUID         `json:"clinic_id" gorm:"type:uuid;not null;index"`
+	MessageID     uuid.UUID         `json:"message_id" gorm:"type:uuid;not null;index"`
+	PatientID     *uuid.UUID        `json:"patient_id,omitempty" gorm:"type:uuid;index"`
+	AppointmentID *uuid.UUID        `json:"appointment_id,omitempty" gorm:"type:uuid;index"`
+	Event         MessageLogEvent   `json:"event" gorm:"type:varchar(50);not null;index"`
+	Channel       MessageLogChannel `json:"channel" gorm:"type:varchar(50);not null;default:'whatsapp'"`
+	Direction     MessageDirection  `json:"direction" gorm:"type:varchar(50);not null"`
+	Payload       MessageLogPayload `json:"payload,omitempty" gorm:"type:jsonb"`
+	Error         *string           `json:"error,omitempty"`
+	CreatedAt     time.Time         `json:"created_at" gorm:"index"`
 }
 
 // TableName returns the table name for GORM

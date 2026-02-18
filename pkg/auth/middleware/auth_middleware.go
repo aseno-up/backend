@@ -13,11 +13,11 @@ import (
 
 // Context keys for storing auth data
 const (
-	ContextKeyUserID                = "user_id"
-	ContextKeyClinicID              = "clinic_id"
-	ContextKeyUserRole              = "user_role"
-	ContextKeyEmail                 = "email"
-	ContextKeyProfessionalID        = "professional_id"
+	ContextKeyUserID                  = "user_id"
+	ContextKeyClinicID                = "clinic_id"
+	ContextKeyUserRole                = "user_role"
+	ContextKeyEmail                   = "email"
+	ContextKeyProfessionalID          = "professional_id"
 	ContextKeyForceProfessionalFilter = "force_professional_filter"
 )
 

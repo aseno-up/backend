@@ -5,8 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"github.com/aseno/backend/internal/logger"
+	"io"
 	"net/http"
 	"time"
 
@@ -106,10 +106,10 @@ func (c *evolutionClient) SetWebhook(ctx context.Context, instance string) error
 
 	payload := map[string]interface{}{
 		"webhook": map[string]interface{}{
-			"enabled":          true,
-			"url":              c.config.WebhookURL,
-			"webhookByEvents":  false,
-			"webhookBase64":    false,
+			"enabled":         true,
+			"url":             c.config.WebhookURL,
+			"webhookByEvents": false,
+			"webhookBase64":   false,
 			"events": []string{
 				"MESSAGES_UPSERT",
 			},
@@ -146,18 +146,18 @@ func (c *evolutionClient) SendButtonMessage(ctx context.Context, instance, phone
 	evolutionButtons := make([]map[string]interface{}, len(buttons))
 	for i, btn := range buttons {
 		evolutionButtons[i] = map[string]interface{}{
-			"buttonId":       btn.ID,
-			"buttonText":     map[string]string{"displayText": btn.Title},
-			"type":           1,
+			"buttonId":   btn.ID,
+			"buttonText": map[string]string{"displayText": btn.Title},
+			"type":       1,
 		}
 	}
 
 	payload := map[string]interface{}{
-		"number":       phone,
-		"title":        "", // Optional title
-		"description":  message,
-		"footer":       "",
-		"buttons":      evolutionButtons,
+		"number":      phone,
+		"title":       "", // Optional title
+		"description": message,
+		"footer":      "",
+		"buttons":     evolutionButtons,
 	}
 
 	resp, err := c.doRequest(ctx, "POST", "/message/sendButtons/"+instance, payload)
@@ -284,7 +284,7 @@ func (c *evolutionClient) doRequest(ctx context.Context, method, path string, bo
 
 	if resp.StatusCode >= 400 {
 		logger.Printf("[Evolution API] Error Response Body: %s", string(respBody))
-		
+
 		var errResp struct {
 			Message  interface{} `json:"message"` // Can be string or []string
 			Error    string      `json:"error"`
