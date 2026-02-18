@@ -191,7 +191,7 @@ func (r *Registry) registerSlotManagementTools() {
 			Properties: map[string]*genai.Schema{
 				"professional_id": {
 					Type:        genai.TypeString,
-					Description: "UUID of the professional (e.g. '3dfde159-4c9a-484e-9194-cf4f1e3ffa4e'). OMIT THIS PARAMETER to search across all professionals. MUST be a valid UUID format, never use names or text like 'Profissional 1'.",
+					Description: "UUID of the professional. OMIT THIS PARAMETER to search across all professionals. MUST be a valid UUID from get_available_professionals result, never use names or invent values.",
 				},
 				"date": {
 					Type:        genai.TypeString,
@@ -222,7 +222,7 @@ func (r *Registry) registerAppointmentManagementTools() {
 			Properties: map[string]*genai.Schema{
 				"professional_id": {
 					Type:        genai.TypeString,
-					Description: "UUID of the professional (e.g. '3dfde159-4c9a-484e-9194-cf4f1e3ffa4e'). REQUIRED. MUST be valid UUID format, never use names or text like 'Profissional 1'.",
+					Description: "UUID of the professional. REQUIRED. MUST be valid UUID from get_available_professionals result, never use names or invent values.",
 				},
 				"start_time": {
 					Type:        genai.TypeString,
@@ -292,7 +292,7 @@ func (r *Registry) registerAppointmentManagementTools() {
 				},
 				"new_professional_id": {
 					Type:        genai.TypeString,
-					Description: "UUID of new professional (e.g. '3dfde159-4c9a-484e-9194-cf4f1e3ffa4e'). OMIT THIS PARAMETER to keep the same professional. Only provide if patient wants to change professional. MUST be valid UUID format.",
+					Description: "UUID of new professional. OMIT THIS PARAMETER to keep the same professional. Only provide if patient wants to change professional. MUST be valid UUID from get_available_professionals result.",
 				},
 			},
 		},
@@ -331,7 +331,7 @@ func (r *Registry) registerAppointmentManagementTools() {
 				},
 				"professional_id": {
 					Type:        genai.TypeString,
-					Description: "UUID of specific professional to filter (e.g. '3dfde159-4c9a-484e-9194-cf4f1e3ffa4e'). OMIT THIS PARAMETER to search across all professionals. MUST be valid UUID format.",
+					Description: "UUID of specific professional to filter. OMIT THIS PARAMETER to search across all professionals. MUST be valid UUID from get_available_professionals result.",
 				},
 				"status": {
 					Type:        genai.TypeString,
@@ -368,7 +368,7 @@ func (r *Registry) registerInformationTools() {
 			Properties: map[string]*genai.Schema{
 				"professional_id": {
 					Type:        genai.TypeString,
-					Description: "UUID of the professional (e.g. '3dfde159-4c9a-484e-9194-cf4f1e3ffa4e'). REQUIRED. MUST be valid UUID format, never use names.",
+					Description: "UUID of the professional. REQUIRED. MUST be valid UUID from get_available_professionals result, never use names.",
 				},
 			},
 		},

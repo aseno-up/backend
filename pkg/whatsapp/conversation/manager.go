@@ -3,8 +3,9 @@ package conversation
 import (
 	"context"
 	"fmt"
-	"github.com/aseno/backend/internal/logger"
 	"time"
+
+	"github.com/aseno/backend/internal/logger"
 
 	"github.com/aseno/backend/pkg/whatsapp/model"
 	"github.com/google/uuid"
@@ -243,7 +244,7 @@ func (m *conversationManager) LogToolCall(ctx context.Context, conversationID uu
 		ConversationID: conversationID,
 		ToolName:       toolName,
 		Parameters:     parameters,
-		Result:         result,
+		Result:         NewToolCallResult(result),
 		DurationMS:     int(duration.Milliseconds()),
 	}
 
