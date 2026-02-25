@@ -164,6 +164,7 @@ func (s *patientRecordService) CreateNote(ctx context.Context, clinicID, patient
 		ProfessionalID: professionalID,
 		AppointmentID:  req.AppointmentID,
 		SessionDate:    req.SessionDate,
+		SessionType:    req.SessionType,
 		Subjective:     req.Subjective,
 		Objective:      req.Objective,
 		Assessment:     req.Assessment,
@@ -267,6 +268,9 @@ func (s *patientRecordService) UpdateNote(ctx context.Context, id, clinicID, pro
 	// Update fields if provided
 	if req.SessionDate != nil {
 		note.SessionDate = *req.SessionDate
+	}
+	if req.SessionType != nil {
+		note.SessionType = *req.SessionType
 	}
 	if req.Subjective != nil {
 		note.Subjective = *req.Subjective

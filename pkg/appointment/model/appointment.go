@@ -42,6 +42,8 @@ type Appointment struct {
 	Title          string            `json:"title"`                           // Optional custom title
 	Notes          string            `json:"notes"`                           // Internal notes
 	PatientNotes   string            `json:"patient_notes"`                   // Notes from patient
+	Procedure      string            `json:"procedure"`                       // Procedimento realizado (estética/fisio)
+	TreatedRegion  string            `json:"treated_region"`                  // Região tratada (ex: rosto, ombro)
 	Price          float64           `json:"price" gorm:"type:decimal(10,2)"` // Price for this appointment
 	ConfirmedAt    *time.Time        `json:"confirmed_at,omitempty"`
 	CanceledAt     *time.Time        `json:"canceled_at,omitempty"`
@@ -109,6 +111,8 @@ type AppointmentResponse struct {
 	Title          string            `json:"title"`
 	Notes          string            `json:"notes"`
 	PatientNotes   string            `json:"patient_notes"`
+	Procedure      string            `json:"procedure"`
+	TreatedRegion  string            `json:"treated_region"`
 	Price          float64           `json:"price"`
 	ConfirmedAt    *time.Time        `json:"confirmed_at,omitempty"`
 	CanceledAt     *time.Time        `json:"canceled_at,omitempty"`
@@ -133,6 +137,8 @@ func (a *Appointment) ToResponse() *AppointmentResponse {
 		Title:          a.Title,
 		Notes:          a.Notes,
 		PatientNotes:   a.PatientNotes,
+		Procedure:      a.Procedure,
+		TreatedRegion:  a.TreatedRegion,
 		Price:          a.Price,
 		ConfirmedAt:    a.ConfirmedAt,
 		CanceledAt:     a.CanceledAt,
@@ -158,6 +164,8 @@ type CreateAppointmentRequest struct {
 	DurationMinutes   int             `json:"duration_minutes" binding:"required,min=5,max=480"`
 	Title             string          `json:"title"`
 	Notes             string          `json:"notes"`
+	Procedure         string          `json:"procedure"`
+	TreatedRegion     string          `json:"treated_region"`
 	Price             float64         `json:"price"`
 	Type              AppointmentType `json:"type"`
 	WantsAnticipation bool            `json:"wants_anticipation"` // If true, adds to waitlist for earlier slot
@@ -173,6 +181,8 @@ type UpdateAppointmentRequest struct {
 	Title             string            `json:"title"`
 	Notes             string            `json:"notes"`
 	PatientNotes      string            `json:"patient_notes"`
+	Procedure         *string           `json:"procedure"`
+	TreatedRegion     *string           `json:"treated_region"`
 	Price             *float64          `json:"price"`
 	CancelReason      string            `json:"cancel_reason"`
 	WantsAnticipation *bool             `json:"wants_anticipation"` // Update anticipation preference
