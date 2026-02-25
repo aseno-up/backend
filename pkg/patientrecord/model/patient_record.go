@@ -107,11 +107,12 @@ type SessionNote struct {
 	AppointmentID  *uuid.UUID `json:"appointment_id,omitempty" gorm:"type:uuid;index"` // Optional link to appointment
 	ProfessionalID uuid.UUID  `json:"professional_id" gorm:"type:uuid;not null;index"`
 	SessionDate    time.Time  `json:"session_date" gorm:"not null"`
+	SessionType    string     `json:"session_type"`                    // Tipo de sessão (ex: avaliação, alta, terapia manual)
 	Subjective     string     `json:"subjective"`                      // Queixa do paciente (S do SOAP)
 	Objective      string     `json:"objective"`                       // Exame fisico/observacoes (O do SOAP)
 	Assessment     string     `json:"assessment"`                      // Avaliacao/diagnostico (A do SOAP)
 	Plan           string     `json:"plan"`                            // Plano de tratamento (P do SOAP)
-	Notes          string     `json:"notes"`                           // Notas adicionais
+	Notes          string     `json:"notes"`                           // Observacoes livres da sessao
 	IsPrivate      bool       `json:"is_private" gorm:"default:false"` // Visivel apenas para o profissional
 	CreatedAt      time.Time  `json:"created_at"`
 	UpdatedAt      time.Time  `json:"updated_at"`
@@ -132,6 +133,7 @@ type SessionNoteResponse struct {
 	ProfessionalID   uuid.UUID  `json:"professional_id"`
 	ProfessionalName string     `json:"professional_name,omitempty"`
 	SessionDate      time.Time  `json:"session_date"`
+	SessionType      string     `json:"session_type"`
 	Subjective       string     `json:"subjective"`
 	Objective        string     `json:"objective"`
 	Assessment       string     `json:"assessment"`
@@ -151,6 +153,7 @@ func (n *SessionNote) ToResponse() *SessionNoteResponse {
 		AppointmentID:  n.AppointmentID,
 		ProfessionalID: n.ProfessionalID,
 		SessionDate:    n.SessionDate,
+		SessionType:    n.SessionType,
 		Subjective:     n.Subjective,
 		Objective:      n.Objective,
 		Assessment:     n.Assessment,
@@ -166,6 +169,7 @@ func (n *SessionNote) ToResponse() *SessionNoteResponse {
 type CreateSessionNoteRequest struct {
 	AppointmentID *uuid.UUID `json:"appointment_id"`
 	SessionDate   time.Time  `json:"session_date" binding:"required"`
+	SessionType   string     `json:"session_type"`
 	Subjective    string     `json:"subjective"`
 	Objective     string     `json:"objective"`
 	Assessment    string     `json:"assessment"`
@@ -177,6 +181,7 @@ type CreateSessionNoteRequest struct {
 // UpdateSessionNoteRequest represents the request to update a session note
 type UpdateSessionNoteRequest struct {
 	SessionDate *time.Time `json:"session_date"`
+	SessionType *string    `json:"session_type"`
 	Subjective  *string    `json:"subjective"`
 	Objective   *string    `json:"objective"`
 	Assessment  *string    `json:"assessment"`
