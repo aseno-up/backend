@@ -37,6 +37,11 @@ type WorkerConfig struct {
 	MinDelayBetweenMessagesSeconds int
 	MaxDelayBetweenMessagesSeconds int
 	MessageSegmentationEnabled     bool
+	// ResponseDebounceSeconds is the idle window (in seconds) to wait before
+	// processing a patient's message with the AI Agent. If a new message
+	// arrives within this window the timer resets, preventing immediate bot
+	// responses that can trigger WhatsApp account blocking.
+	ResponseDebounceSeconds int
 
 	// Redis
 	RedisURL string
@@ -95,6 +100,7 @@ func NewWorkerConfig() *WorkerConfig {
 		MinDelayBetweenMessagesSeconds: getEnvAsIntW("WHATSAPP_MIN_DELAY_BETWEEN_MESSAGES_SECONDS", 3),
 		MaxDelayBetweenMessagesSeconds: getEnvAsIntW("WHATSAPP_MAX_DELAY_BETWEEN_MESSAGES_SECONDS", 10),
 		MessageSegmentationEnabled:     getEnvAsBoolW("WHATSAPP_MESSAGE_SEGMENTATION_ENABLED", true),
+		ResponseDebounceSeconds:        getEnvAsIntW("WHATSAPP_RESPONSE_DEBOUNCE_SECONDS", 25),
 
 		// Redis
 		RedisURL: getEnvW("REDIS_URL", "redis://localhost:6379"),

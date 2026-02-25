@@ -384,7 +384,8 @@ func main() {
 				whatsappService.SetClinicRepo(clinicRepo)
 				whatsappService.SetScheduledMessageRepo(scheduledMsgRepo)
 				whatsappService.SetDefaultDelayBetweenPatients(workerCfg.MinDelayBetweenPatientsSeconds)
-				logger.Println("AI Agent service connected to WhatsApp")
+				whatsappService.SetDebounceDelay(time.Duration(workerCfg.ResponseDebounceSeconds) * time.Second)
+				logger.Printf("AI Agent service connected to WhatsApp (response debounce: %ds)", workerCfg.ResponseDebounceSeconds)
 			}
 		} else if redis == nil {
 			logger.Println("AI Agent: Not initialized (requires Redis configuration)")

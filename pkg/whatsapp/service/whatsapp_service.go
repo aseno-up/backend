@@ -174,6 +174,10 @@ type WhatsAppService interface {
 
 	// SetDefaultDelayBetweenPatients sets the default delay between patients from config
 	SetDefaultDelayBetweenPatients(delay int)
+
+	// SetDebounceDelay sets the idle window before the AI processes a patient's message.
+	// Any new message received within the window resets the timer.
+	SetDebounceDelay(d time.Duration)
 }
 
 // whatsAppService implements WhatsAppService
@@ -205,6 +209,9 @@ type whatsAppService struct {
 	scheduledMsgRepo ScheduledMessageRepository
 	// Default delay between patients from config
 	defaultDelayBetweenPatients int
+	// Debouncer: delays AI processing until patient stops typing
+	debouncer     *messageDebouncer
+	debounceDelay time.Duration
 }
 
 // AppointmentStatusUpdater interface for updating appointment status
@@ -328,6 +335,62 @@ func (c *rescheduleCache) delete(phone string) {
 	delete(c.entries, phone)
 }
 
+// messageDebouncer debounces incoming messages per (clinicID, phone) pair.
+// When a new message arrives, any pending timer for that key is reset.
+// Processing is triggered only after the configured idle window elapses.
+type messageDebouncer struct {
+	mu     sync.Mutex
+	timers map[string]*time.Timer
+	msgs   map[string]*pendingMessage
+}
+
+type pendingMessage struct {
+	clinicID uuid.UUID
+	msg      *model.ParsedIncomingMessage
+}
+
+func newMessageDebouncer() *messageDebouncer {
+	return &messageDebouncer{
+		timers: make(map[string]*time.Timer),
+		msgs:   make(map[string]*pendingMessage),
+	}
+}
+
+// debounceKey builds the map key for a given (clinicID, phone) pair.
+func debounceKey(clinicID uuid.UUID, phone string) string {
+	return clinicID.String() + ":" + phone
+}
+
+// schedule (re)sets o timer de debounce para a chave (clinicID, phone).
+// fn(lastMsg) é chamado uma vez após o idle window expirar, recebendo
+// a última mensagem registrada para a chave.
+func (d *messageDebouncer) schedule(clinicID uuid.UUID, msg *model.ParsedIncomingMessage, delay time.Duration, fn func(*model.ParsedIncomingMessage)) {
+	key := debounceKey(clinicID, msg.Phone)
+
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	// Sempre sobrescreve com a mensagem mais recente.
+	d.msgs[key] = &pendingMessage{clinicID: clinicID, msg: msg}
+
+	if t, ok := d.timers[key]; ok {
+		t.Reset(delay)
+		return
+	}
+
+	d.timers[key] = time.AfterFunc(delay, func() {
+		d.mu.Lock()
+		pending := d.msgs[key] // lê antes de deletar
+		delete(d.timers, key)
+		delete(d.msgs, key)
+		d.mu.Unlock()
+
+		if pending != nil {
+			fn(pending.msg)
+		}
+	})
+}
+
 // AppointmentFinder interface for finding appointments by phone
 type AppointmentFinder interface {
 	GetPendingByPhone(ctx context.Context, clinicID uuid.UUID, phone string) (*AppointmentInfo, error)
@@ -349,7 +412,14 @@ func NewWhatsAppService(
 		messageRepo:        messageRepo,
 		appointmentUpdater: appointmentUpdater,
 		rescheduleCache:    newRescheduleCache(),
+		debouncer:          newMessageDebouncer(),
+		debounceDelay:      25 * time.Second,
 	}
+}
+
+// SetDebounceDelay sets the idle window before message processing.
+func (s *whatsAppService) SetDebounceDelay(d time.Duration) {
+	s.debounceDelay = d
 }
 
 // SetAppointmentFinder sets the appointment finder for WhatsApp response handling
@@ -647,9 +717,23 @@ func (s *whatsAppService) HandleIncomingMessage(ctx context.Context, clinicID uu
 	// Log incoming message
 	s.logMessage(ctx, clinicID, nil, msg.Phone, model.MessageDirectionInbound, msg.Content, model.MessageStatusDelivered, msg.MessageID)
 
-	// If AI Agent is enabled, use it for dynamic conversations
+	// Se o AI Agent está habilitado, debounce antes de processar.
+	// Evita respostas instantâneas que podem acionar bloqueio pelo WhatsApp.
 	if s.aiAgentService != nil {
-		return s.handleWithAIAgent(ctx, clinicID, msg)
+		logger.Printf("[Debounce] Message from %s received — waiting %v idle before processing",
+			msg.Phone, s.debounceDelay)
+
+		bgCtx := context.Background()
+		capClinicID := clinicID
+
+		s.debouncer.schedule(clinicID, msg, s.debounceDelay, func(lastMsg *model.ParsedIncomingMessage) {
+			logger.Printf("[Debounce] Idle window elapsed for %s — processing with AI Agent: %q",
+				lastMsg.Phone, lastMsg.Content)
+			if err := s.handleWithAIAgent(bgCtx, capClinicID, lastMsg); err != nil {
+				logger.Printf("[Debounce] Error handling AI Agent message from %s: %v", lastMsg.Phone, err)
+			}
+		})
+		return nil
 	}
 
 	// Check for reschedule button response first (rsch_0, rsch_1, etc.)
