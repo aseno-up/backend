@@ -2,10 +2,11 @@ package worker
 
 import (
 	"context"
-	"github.com/aseno/backend/internal/logger"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/aseno/backend/internal/logger"
 
 	"github.com/aseno/backend/internal/config"
 	clinic_repository "github.com/aseno/backend/pkg/clinic/repository"
@@ -150,14 +151,20 @@ func (w *ScheduledMessageWorker) processPatientMessages(ctx context.Context, mes
 
 // processSingleMessage processes a single scheduled message
 func (w *ScheduledMessageWorker) processSingleMessage(ctx context.Context, msg *whatsapp_model.ScheduledMessage) {
-	logger.Printf("[ScheduledMessageWorker] Sending scheduled message %s to %s (scheduled at: %s)",
-		msg.ID, msg.Phone, msg.ScheduledAt.Format(time.RFC3339))
+	logger.Printf("[ScheduledMessageWorker] Handling msg %s to %s (type: %s, scheduled at: %s)",
+		msg.ID, msg.Phone, msg.MessageType, msg.ScheduledAt.Format(time.RFC3339))
 
-	// Send the message via WhatsApp
-	_, err := w.whatsappService.SendTextMessage(ctx, msg.Instance, msg.Phone, msg.Message)
+	var err error
+	if msg.MessageType == "ai_processing" {
+		err = w.whatsappService.ProcessDelayedAI(ctx, msg)
+	} else {
+		// Normal scheduled text message
+		_, err = w.whatsappService.SendTextMessage(ctx, msg.Instance, msg.Phone, msg.Message)
+	}
+
 	if err != nil {
 		atomic.AddInt64(&w.messagesFailed, 1)
-		logger.Printf("[ScheduledMessageWorker] Failed to send message %s: %v", msg.ID, err)
+		logger.Printf("[ScheduledMessageWorker] Failed to process message %s: %v", msg.ID, err)
 
 		// Mark as failed (but don't mark as sent, so it can be retried)
 		if markErr := w.scheduledMsgRepo.MarkAsFailed(ctx, msg.ID, err.Error()); markErr != nil {
