@@ -158,6 +158,7 @@ func main() {
 	analyticsRepo := analytics_repository.NewAnalyticsRepository(db.GetDB())
 	notificationRepo := notification_repository.NewNotificationRepository(db.GetDB())
 	settingsRepo := settings_repository.NewSettingsRepository(db.GetDB())
+	whatsappConnRepo := whatsapp_repository.NewWhatsAppConnectionRepository(db.GetDB())
 
 	// Seed default settings (if not exist)
 	if err := settingsRepo.SeedDefaults(context.Background()); err != nil {
@@ -519,6 +520,7 @@ func main() {
 				&appointmentCreatorAdapter{appointmentService: appointmentService},
 				messageQueue,
 				clinicRepo,
+				whatsappConnRepo,
 			)
 
 			// Wire waitlist service into appointment service
@@ -551,7 +553,7 @@ func main() {
 	// Initialize WhatsApp handler (if service is configured)
 	var whatsappHandler whatsapp_handler.WhatsAppHandler
 	if whatsappService != nil {
-		whatsappHandler = whatsapp_handler.NewWhatsAppHandler(whatsappService, clinicRepo, cfg.GetWhatsAppWebhookSecret(), cfg.GetWhatsAppProvider())
+		whatsappHandler = whatsapp_handler.NewWhatsAppHandler(whatsappService, clinicRepo, whatsappConnRepo, cfg.GetWhatsAppWebhookSecret(), cfg.GetWhatsAppProvider())
 	}
 
 	// Initialize Payment handler (if service is configured)
@@ -932,6 +934,7 @@ func runMigrations(db *database.Database) error {
 		&notification_model.Notification{},
 		&waitlist_model.WaitlistEntry{},
 		&settings_model.SystemSetting{},
+		&whatsapp_model.WhatsAppConnection{},
 		// AI Agent conversation tables
 		&conversation.ConversationContext{},
 		&conversation.ToolCallLog{},
@@ -958,10 +961,8 @@ func (a *clinicInfoAdapter) GetClinicInfo(ctx context.Context, clinicID uuid.UUI
 		return nil, err
 	}
 	return &waitlist_service.ClinicInfo{
-		ID:                clinic.ID,
-		Name:              clinic.Name,
-		WhatsAppInstance:  clinic.WhatsAppInstance,
-		WhatsAppConnected: clinic.WhatsAppConnected,
+		ID:   clinic.ID,
+		Name: clinic.Name,
 	}, nil
 }
 

@@ -307,7 +307,7 @@ Gostaria de remarcar para outro horário?"
 - Sempre inclua dia da semana + data + horário completo
 - Seja específico: evite "amanhã", prefira "Sábado 20/01"
 - Ao final de um agendamento bem-sucedido, sempre inclua os detalhes completos
-`, currentTime.Format("02/01/2006 15:04"), b.clinicName)
+`, currentTime.Format("02/01/2006 15:04"), b.clinicName, b.clinicName)
 }
 
 // BuildUserPrompt builds the user message with conversation history
