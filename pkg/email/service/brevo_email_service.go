@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"fmt"
-	"os"
 
 	"github.com/getbrevo/brevo-go/lib"
 )
@@ -16,18 +15,15 @@ type brevoEmailService struct {
 }
 
 // NewBrevoEmailService creates a new Brevo email service
-func NewBrevoEmailService() (EmailService, error) {
-	apiKey := os.Getenv("BREVO_API_KEY")
+func NewBrevoEmailService(apiKey, senderEmail, senderName string) (EmailService, error) {
 	if apiKey == "" {
-		return nil, fmt.Errorf("BREVO_API_KEY is not set")
+		return nil, fmt.Errorf("brevo API key is required")
 	}
 
-	senderEmail := os.Getenv("EMAIL_SENDER_SUPORT_ADDRESS")
 	if senderEmail == "" {
-		return nil, fmt.Errorf("EMAIL_SENDER_SUPORT_ADDRESS is not set")
+		return nil, fmt.Errorf("sender email address is required")
 	}
 
-	senderName := os.Getenv("EMAIL_SENDER_NAME")
 	if senderName == "" {
 		senderName = "Aseno" // Default sender name
 	}

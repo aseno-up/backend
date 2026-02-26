@@ -49,6 +49,15 @@ type EvolutionMessageContent struct {
 	ExtendedTextMessage    *EvolutionExtendedText   `json:"extendedTextMessage,omitempty"`
 	ButtonsResponseMessage *EvolutionButtonResponse `json:"buttonsResponseMessage,omitempty"`
 	ListResponseMessage    *EvolutionListResponse   `json:"listResponseMessage,omitempty"`
+	AudioMessage           *EvolutionAudioMessage   `json:"audioMessage,omitempty"`
+}
+
+// EvolutionAudioMessage represents an audio message from Evolution API
+type EvolutionAudioMessage struct {
+	URL        string `json:"url,omitempty"`
+	Mimetype   string `json:"mimetype,omitempty"`
+	Seconds    int    `json:"seconds,omitempty"`
+	FileLength int64  `json:"fileLength,omitempty"`
 }
 
 // EvolutionExtendedText represents extended text message
@@ -79,6 +88,9 @@ type ParsedIncomingMessage struct {
 	IsFromMe   bool      `json:"is_from_me"`
 	Timestamp  time.Time `json:"timestamp"`
 	Instance   string    `json:"instance"`
+	// Audio fields — set when the incoming message is an audio/voice note
+	IsAudio  bool   `json:"is_audio,omitempty"`
+	AudioURL string `json:"audio_url,omitempty"` // URL from provider (may require auth)
 }
 
 // MessageIntent represents the classified intent of an incoming message

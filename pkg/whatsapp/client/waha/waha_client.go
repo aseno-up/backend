@@ -5,10 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/aseno/backend/internal/logger"
 	"io"
 	"net/http"
 	"time"
+
+	"github.com/aseno/backend/internal/logger"
 
 	"github.com/aseno/backend/internal/errors"
 	"github.com/aseno/backend/pkg/whatsapp/model"
@@ -330,6 +331,44 @@ func (c *wahaClient) doRequest(ctx context.Context, method, path string, body in
 	return respBody, nil
 }
 
+// DownloadMedia downloads audio/media content from WAHA API
+func (c *wahaClient) DownloadMedia(ctx context.Context, instance, messageID string) ([]byte, string, error) {
+	// WAHA API: GET /api/{session}/messages/{messageId}/download
+	endpoint := fmt.Sprintf("%s/api/%s/messages/%s/download", c.config.BaseURL, instance, messageID)
+
+	req, err := http.NewRequestWithContext(ctx, "GET", endpoint, nil)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to create waha download request: %w", err)
+	}
+
+	if c.config.APIKey != "" {
+		req.Header.Set("Authorization", "Bearer "+c.config.APIKey)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, "", fmt.Errorf("waha API error downloading media: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		respBytes, _ := io.ReadAll(resp.Body)
+		return nil, "", fmt.Errorf("waha API error downloading media: %d %s", resp.StatusCode, string(respBytes))
+	}
+
+	mediaBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to read downloaded media: %w", err)
+	}
+
+	mimeType := resp.Header.Get("Content-Type")
+	if mimeType == "" {
+		mimeType = "audio/ogg" // Fallback mostly for whatsapp voice notes
+	}
+
+	return mediaBytes, mimeType, nil
+}
+
 // parseMessageResponse parses the WAHA message response
 func (c *wahaClient) parseMessageResponse(resp []byte) (*model.SendMessageResponse, error) {
 	var result struct {
@@ -397,6 +436,9 @@ func ParseWebhookPayload(data []byte) (*model.ParsedIncomingMessage, error) {
 	// Get sender name (not provided in WAHA webhook, use phone)
 	senderName := phone
 
+	// Detect audio: WAHA marks media messages with hasMedia=true and empty body
+	isAudio := payload.Payload.HasMedia && payload.Payload.Body == ""
+
 	return &model.ParsedIncomingMessage{
 		Phone:      phone,
 		SenderName: senderName,
@@ -406,5 +448,6 @@ func ParseWebhookPayload(data []byte) (*model.ParsedIncomingMessage, error) {
 		IsFromMe:   payload.Payload.FromMe,
 		Timestamp:  time.Unix(payload.Payload.Timestamp, 0),
 		Instance:   payload.Session,
+		IsAudio:    isAudio,
 	}, nil
 }

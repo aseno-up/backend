@@ -53,7 +53,7 @@ type WorkerConfig struct {
 
 	// AI Agent Configuration
 	AIAgentEnabled          bool
-	AIAgentProvider         string // gemini, claude, openai
+	AIAgentProvider         string // openrouter, gemini, claude, openai
 	AIAgentModel            string
 	AIAgentFallbackModels   []string // List of fallback models to try in order
 	AIAgentMaxTokens        int
@@ -112,13 +112,11 @@ func NewWorkerConfig() *WorkerConfig {
 
 		// AI Agent Configuration
 		AIAgentEnabled:  getEnvAsBoolW("AI_AGENT_ENABLED", false),
-		AIAgentProvider: getEnvW("AI_AGENT_PROVIDER", "gemini"),
-		AIAgentModel:    getEnvW("AI_AGENT_MODEL", "gemini-2.0-flash-exp"),
+		AIAgentProvider: getEnvW("AI_AGENT_PROVIDER", "openrouter"),
+		AIAgentModel:    getEnvW("AI_AGENT_MODEL", "google/gemini-2.0-flash-001"),
 		AIAgentFallbackModels: getEnvAsSliceW("AI_AGENT_FALLBACK_MODELS", []string{
-			"gemini-2.0-flash",
-			"gemini-2.5-flash-lite",
-			"gemini-1.5-flash",
-			"gemini-2.5-flash",
+			"google/gemini-2.0-flash-lite-001",
+			"qwen/qwen-2.5-72b-instruct",
 		}),
 		AIAgentMaxTokens:        getEnvAsIntW("AI_AGENT_MAX_TOKENS", 2048),
 		AIAgentTemperature:      getEnvAsFloat32W("AI_AGENT_TEMPERATURE", 0.7),

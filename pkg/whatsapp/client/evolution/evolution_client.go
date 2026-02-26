@@ -3,12 +3,15 @@ package evolution
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"github.com/aseno/backend/internal/logger"
 	"io"
 	"net/http"
+	"strings"
 	"time"
+
+	"github.com/aseno/backend/internal/logger"
 
 	"github.com/aseno/backend/internal/errors"
 	"github.com/aseno/backend/pkg/whatsapp/model"
@@ -347,6 +350,67 @@ func (c *evolutionClient) doRequest(ctx context.Context, method, path string, bo
 	return respBody, nil
 }
 
+// DownloadMedia downloads audio/media content from Evolution API
+func (c *evolutionClient) DownloadMedia(ctx context.Context, instance, messageID string) ([]byte, string, error) {
+	endpoint := fmt.Sprintf("%s/chat/getBase64FromMediaMessage/%s", c.config.BaseURL, instance)
+
+	reqBody := map[string]interface{}{
+		"message": map[string]interface{}{
+			"key": map[string]interface{}{
+				"id": messageID,
+			},
+		},
+	}
+
+	bodyBytes, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to marshal download media request: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", endpoint, bytes.NewReader(bodyBytes))
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	if c.config.APIKey != "" {
+		req.Header.Set("apikey", c.config.APIKey)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, "", fmt.Errorf("evolution API error downloading media: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		respBytes, _ := io.ReadAll(resp.Body)
+		return nil, "", fmt.Errorf("evolution API error downloading media: %d %s", resp.StatusCode, string(respBytes))
+	}
+
+	var result struct {
+		Base64   string `json:"base64"`
+		Mimetype string `json:"mimetype"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, "", fmt.Errorf("failed to decode media response: %w", err)
+	}
+
+	// Evolution docs say base64 may have data:audio/ogg;base64, prefix. Find comma if exists
+	base64Data := result.Base64
+	if idx := strings.Index(base64Data, ","); idx != -1 {
+		base64Data = base64Data[idx+1:]
+	}
+
+	decoded, err := base64.StdEncoding.DecodeString(base64Data)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to decode base64 media: %w", err)
+	}
+
+	return decoded, result.Mimetype, nil
+}
+
 // parseMessageResponse parses the Evolution API message response
 func (c *evolutionClient) parseMessageResponse(resp []byte) (*model.SendMessageResponse, error) {
 	var result struct {
@@ -388,6 +452,8 @@ func ParseWebhookPayload(data []byte) (*model.ParsedIncomingMessage, error) {
 	// Extract message content
 	var content string
 	var buttonID string
+	var isAudio bool
+	var audioURL string
 
 	if payload.Data.Message.Conversation != "" {
 		content = payload.Data.Message.Conversation
@@ -398,6 +464,9 @@ func ParseWebhookPayload(data []byte) (*model.ParsedIncomingMessage, error) {
 		content = payload.Data.Message.ButtonsResponseMessage.SelectedDisplayText
 	} else if payload.Data.Message.ListResponseMessage != nil {
 		buttonID = payload.Data.Message.ListResponseMessage.SingleSelectReply.SelectedRowID
+	} else if payload.Data.Message.AudioMessage != nil {
+		isAudio = true
+		audioURL = payload.Data.Message.AudioMessage.URL
 	}
 
 	return &model.ParsedIncomingMessage{
@@ -409,5 +478,7 @@ func ParseWebhookPayload(data []byte) (*model.ParsedIncomingMessage, error) {
 		IsFromMe:   payload.Data.Key.FromMe,
 		Timestamp:  time.Unix(payload.Data.MessageTimestamp, 0),
 		Instance:   payload.Instance,
+		IsAudio:    isAudio,
+		AudioURL:   audioURL,
 	}, nil
 }

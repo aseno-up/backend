@@ -75,6 +75,9 @@ func (s *stubWhatsAppClient) GetConnectionStatus(_ context.Context, _ string) (*
 func (s *stubWhatsAppClient) GetQRCode(_ context.Context, _ string) (*model.QRCodeData, error) {
 	return nil, nil
 }
+func (s *stubWhatsAppClient) DownloadMedia(_ context.Context, _, _ string) ([]byte, string, error) {
+	return []byte("stub"), "audio/ogg", nil
+}
 func (s *stubWhatsAppClient) Logout(_ context.Context, _ string) error         { return nil }
 func (s *stubWhatsAppClient) DeleteInstance(_ context.Context, _ string) error { return nil }
 

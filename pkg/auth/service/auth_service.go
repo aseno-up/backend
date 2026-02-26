@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
-	"os"
 	"regexp"
 	"strings"
 	"time"
@@ -74,6 +73,7 @@ type authService struct {
 	googleClient          GoogleAuthClient
 	emailService          email_service.EmailService
 	paymentService        PaymentService // Optional: for creating Asaas subscriptions during registration
+	frontendURL           string
 }
 
 // NewAuthService creates a new auth service
@@ -84,6 +84,7 @@ func NewAuthService(
 	emailVerificationRepo auth_repository.EmailVerificationRepository,
 	jwtService JWTService,
 	emailService email_service.EmailService,
+	frontendURL string,
 ) AuthService {
 	return &authService{
 		userRepo:              userRepo,
@@ -92,6 +93,7 @@ func NewAuthService(
 		emailVerificationRepo: emailVerificationRepo,
 		jwtService:            jwtService,
 		emailService:          emailService,
+		frontendURL:           frontendURL,
 	}
 }
 
@@ -104,6 +106,7 @@ func NewAuthServiceWithGoogle(
 	jwtService JWTService,
 	googleClient GoogleAuthClient,
 	emailService email_service.EmailService,
+	frontendURL string,
 ) AuthService {
 	return &authService{
 		userRepo:              userRepo,
@@ -113,6 +116,7 @@ func NewAuthServiceWithGoogle(
 		jwtService:            jwtService,
 		googleClient:          googleClient,
 		emailService:          emailService,
+		frontendURL:           frontendURL,
 	}
 }
 
@@ -593,7 +597,7 @@ func (s *authService) RequestPasswordReset(ctx context.Context, req *model.Reque
 	}
 
 	// Send email
-	frontendURL := os.Getenv("FRONTEND_URL")
+	frontendURL := s.frontendURL
 	if frontendURL == "" {
 		frontendURL = "http://localhost:3000"
 	}
@@ -703,7 +707,7 @@ func (s *authService) SendVerificationEmail(ctx context.Context, userID uuid.UUI
 	}
 
 	// Send email
-	frontendURL := os.Getenv("FRONTEND_URL")
+	frontendURL := s.frontendURL
 	if frontendURL == "" {
 		frontendURL = "http://localhost:3000"
 	}
