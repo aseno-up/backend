@@ -3,9 +3,10 @@ package service
 import (
 	"context"
 	"fmt"
-	"github.com/aseno/backend/internal/logger"
 	"math"
 	"time"
+
+	"github.com/aseno/backend/internal/logger"
 
 	"github.com/google/uuid"
 
@@ -611,6 +612,19 @@ func (s *appointmentService) Confirm(ctx context.Context, id, clinicID uuid.UUID
 	appointment, err := s.repo.GetByID(ctx, id, clinicID)
 	if err != nil {
 		return nil, err
+	}
+
+	// Reactivation guard: if the appointment was previously cancelled, the slot
+	// may have been taken by another patient. Check before allowing reactivation.
+	if appointment.Status == model.AppointmentStatusCanceled {
+		hasConflict, err := s.repo.CheckConflict(ctx, clinicID, appointment.ProfessionalID,
+			appointment.StartTime, appointment.EndTime, &id)
+		if err != nil {
+			return nil, err
+		}
+		if hasConflict {
+			return nil, errors.ErrSlotUnavailableInstance
+		}
 	}
 
 	now := time.Now()
