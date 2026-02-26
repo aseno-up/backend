@@ -4,12 +4,13 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"github.com/aseno/backend/internal/logger"
 	"io"
 	"net/http"
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/aseno/backend/internal/logger"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -20,6 +21,7 @@ import (
 	"github.com/aseno/backend/pkg/whatsapp/client/evolution"
 	"github.com/aseno/backend/pkg/whatsapp/client/waha"
 	"github.com/aseno/backend/pkg/whatsapp/model"
+	whatsapp_repository "github.com/aseno/backend/pkg/whatsapp/repository"
 	"github.com/aseno/backend/pkg/whatsapp/service"
 )
 
@@ -39,6 +41,7 @@ type WhatsAppHandler interface {
 type whatsAppHandler struct {
 	service       service.WhatsAppService
 	clinicRepo    clinic_repository.ClinicRepository
+	connRepo      whatsapp_repository.WhatsAppConnectionRepository
 	webhookSecret string
 	provider      string // "evolution" or "waha"
 }
@@ -47,12 +50,14 @@ type whatsAppHandler struct {
 func NewWhatsAppHandler(
 	service service.WhatsAppService,
 	clinicRepo clinic_repository.ClinicRepository,
+	connRepo whatsapp_repository.WhatsAppConnectionRepository,
 	webhookSecret string,
 	provider string,
 ) WhatsAppHandler {
 	return &whatsAppHandler{
 		service:       service,
 		clinicRepo:    clinicRepo,
+		connRepo:      connRepo,
 		webhookSecret: webhookSecret,
 		provider:      provider,
 	}
@@ -133,8 +138,8 @@ func (h *whatsAppHandler) processWebhook(c *gin.Context) {
 		return
 	}
 
-	// Get clinic ID from instance name
-	clinic, err := h.clinicRepo.GetByWhatsAppInstance(c.Request.Context(), parsed.Instance)
+	// Get clinic ID from instance name (now querying whatsapp_connections table)
+	conn, err := h.connRepo.GetByInstance(c.Request.Context(), parsed.Instance)
 	if err != nil {
 		logger.Printf("Unknown instance: %s", parsed.Instance)
 		c.JSON(http.StatusOK, gin.H{"status": "unknown_instance"})
@@ -142,7 +147,7 @@ func (h *whatsAppHandler) processWebhook(c *gin.Context) {
 	}
 
 	// Process the message
-	if err := h.service.HandleIncomingMessage(c.Request.Context(), clinic.ID, parsed); err != nil {
+	if err := h.service.HandleIncomingMessage(c.Request.Context(), conn.ClinicID, parsed); err != nil {
 		logger.Printf("Error handling incoming message: %v", err)
 	}
 
@@ -173,9 +178,11 @@ func (h *whatsAppHandler) Connect(c *gin.Context) {
 		return
 	}
 
-	// Generate a descriptive instance name if it doesn't exist
-	if clinic.WhatsAppInstance == "" {
-		// Sanitize clinic name for the instance name
+	// Get or create the active WhatsApp connection for this clinic
+	conn, connErr := h.connRepo.GetActiveByClinicID(c.Request.Context(), clinic.ID)
+	var instance string
+	if connErr != nil {
+		// No connection exists yet — generate a descriptive instance name
 		reg := regexp.MustCompile(`[^a-z0-9]+`)
 		safeClinicName := strings.ToLower(clinic.Name)
 		safeClinicName = reg.ReplaceAllString(safeClinicName, "-")
@@ -183,21 +190,22 @@ func (h *whatsAppHandler) Connect(c *gin.Context) {
 		if len(safeClinicName) > 30 {
 			safeClinicName = safeClinicName[:30]
 		}
+		instance = fmt.Sprintf("%s-%s", safeClinicName, clinic.ID.String()[:8])
 
-		clinic.WhatsAppInstance = fmt.Sprintf("%s-%s", safeClinicName, clinic.ID.String()[:8])
-
-		if err := h.clinicRepo.UpdateWhatsAppInstance(c.Request.Context(), clinic.ID, clinic.WhatsAppInstance); err != nil {
+		if err := h.connRepo.UpsertInstance(c.Request.Context(), clinic.ID, instance); err != nil {
 			logger.Printf("[Connect Handler] Failed to save new instance name to DB: %v", err)
 			statusCode := errors.GetStatusCode(err)
 			c.JSON(statusCode, errors.ToResponse(err))
 			return
 		}
+	} else {
+		instance = conn.Instance
 	}
 
 	// Attempt to create the instance. The Evolution API may return the QR code directly
 	// if the instance is new, or may do nothing if it already exists.
-	logger.Printf("[Connect Handler] Attempting to create or fetch QR for instance %s", clinic.WhatsAppInstance)
-	qrCode, err := h.service.CreateInstance(c.Request.Context(), clinic.WhatsAppInstance)
+	logger.Printf("[Connect Handler] Attempting to create or fetch QR for instance %s", instance)
+	qrCode, err := h.service.CreateInstance(c.Request.Context(), instance)
 	if err != nil {
 		// This can happen if the instance exists but is in a weird state.
 		// We'll log it and try to get the QR code separately as a fallback.
@@ -206,7 +214,7 @@ func (h *whatsAppHandler) Connect(c *gin.Context) {
 
 	// If CreateInstance didn't return a QR code (e.g., instance already existed), get it now.
 	if qrCode == nil || qrCode.Base64 == "" {
-		logger.Printf("[Connect Handler] CreateInstance did not return a QR code. Fetching separately for instance %s.", clinic.WhatsAppInstance)
+		logger.Printf("[Connect Handler] CreateInstance did not return a QR code. Fetching separately for instance %s.", instance)
 
 		// Try to get QR code with retries (instance may take a few seconds to generate it)
 		maxRetries := 5
@@ -215,7 +223,7 @@ func (h *whatsAppHandler) Connect(c *gin.Context) {
 		for i := 0; i < maxRetries; i++ {
 			time.Sleep(retryDelay)
 
-			qrCode, err = h.service.GetQRCode(c.Request.Context(), clinic.WhatsAppInstance)
+			qrCode, err = h.service.GetQRCode(c.Request.Context(), instance)
 			if err != nil {
 				logger.Printf("[Connect Handler] GetQRCode attempt %d/%d failed: %v", i+1, maxRetries, err)
 				if i == maxRetries-1 {
@@ -238,13 +246,13 @@ func (h *whatsAppHandler) Connect(c *gin.Context) {
 		// If still no QR code (Base64 is empty), the instance might be in a stuck state
 		// Check the connection status before deciding to delete
 		if qrCode == nil || qrCode.Base64 == "" {
-			logger.Printf("[Connect Handler] No QR code available for instance %s. Checking connection status.", clinic.WhatsAppInstance)
+			logger.Printf("[Connect Handler] No QR code available for instance %s. Checking connection status.", instance)
 
 			// Check if the instance is already connected
-			status, statusErr := h.service.GetConnectionStatus(c.Request.Context(), clinic.WhatsAppInstance)
+			status, statusErr := h.service.GetConnectionStatus(c.Request.Context(), instance)
 			if statusErr == nil && status != nil && status.State == "open" {
 				// Instance is already connected, no need for QR code
-				logger.Printf("[Connect Handler] Instance %s is already connected (state: open). No QR code needed.", clinic.WhatsAppInstance)
+				logger.Printf("[Connect Handler] Instance %s is already connected (state: open). No QR code needed.", instance)
 				c.JSON(http.StatusOK, gin.H{
 					"message": "WhatsApp já está conectado",
 					"state":   "open",
@@ -254,7 +262,7 @@ func (h *whatsAppHandler) Connect(c *gin.Context) {
 
 			// Instance is not connected and has no QR code - restart it
 			logger.Printf("[Connect Handler] Instance %s is not connected (state: %s). Restarting instance.",
-				clinic.WhatsAppInstance,
+				instance,
 				func() string {
 					if status != nil {
 						return status.State
@@ -263,7 +271,7 @@ func (h *whatsAppHandler) Connect(c *gin.Context) {
 				}())
 
 			// Delete the instance completely to clear any stuck state
-			if err := h.service.DeleteInstance(c.Request.Context(), clinic.WhatsAppInstance); err != nil {
+			if err := h.service.DeleteInstance(c.Request.Context(), instance); err != nil {
 				logger.Printf("[Connect Handler] Warning: Delete instance failed during restart: %v", err)
 			}
 
@@ -271,7 +279,7 @@ func (h *whatsAppHandler) Connect(c *gin.Context) {
 			time.Sleep(2 * time.Second)
 
 			// Try creating instance again
-			qrCode, err = h.service.CreateInstance(c.Request.Context(), clinic.WhatsAppInstance)
+			qrCode, err = h.service.CreateInstance(c.Request.Context(), instance)
 			if err != nil {
 				logger.Printf("[Connect Handler] Failed to restart instance: %v", err)
 				statusCode := errors.GetStatusCode(err)
@@ -282,7 +290,7 @@ func (h *whatsAppHandler) Connect(c *gin.Context) {
 			// If still no QR code after restart, try GetQRCode one more time
 			if qrCode == nil || qrCode.Base64 == "" {
 				time.Sleep(2 * time.Second)
-				qrCode, err = h.service.GetQRCode(c.Request.Context(), clinic.WhatsAppInstance)
+				qrCode, err = h.service.GetQRCode(c.Request.Context(), instance)
 				if err != nil {
 					logger.Printf("[Connect Handler] Failed to get QR code after restart: %v", err)
 					statusCode := errors.GetStatusCode(err)
@@ -295,7 +303,7 @@ func (h *whatsAppHandler) Connect(c *gin.Context) {
 
 	// Final check: if we still don't have a QR code, return an error
 	if qrCode == nil || qrCode.Base64 == "" {
-		logger.Printf("[Connect Handler] Failed to obtain QR code for instance %s after all attempts", clinic.WhatsAppInstance)
+		logger.Printf("[Connect Handler] Failed to obtain QR code for instance %s after all attempts", instance)
 		c.JSON(http.StatusInternalServerError, errors.ToResponse(
 			errors.ErrInternalInstance.WithMessage("Não foi possível gerar o QR Code. Por favor, tente novamente."),
 		))
@@ -314,18 +322,19 @@ func (h *whatsAppHandler) Disconnect(c *gin.Context) {
 		return
 	}
 
-	if clinic.WhatsAppInstance == "" {
+	conn, err := h.connRepo.GetActiveByClinicID(c.Request.Context(), clinic.ID)
+	if err != nil {
 		c.JSON(http.StatusBadRequest, errors.ToResponse(errors.ErrBadRequestInstance.WithMessage("WhatsApp not connected")))
 		return
 	}
 
 	// Logout from Evolution API
-	if err := h.service.Logout(c.Request.Context(), clinic.WhatsAppInstance); err != nil {
+	if err := h.service.Logout(c.Request.Context(), conn.Instance); err != nil {
 		logger.Printf("Error logging out from Evolution: %v", err)
 	}
 
-	// Update clinic status
-	if err := h.clinicRepo.UpdateWhatsAppConnected(c.Request.Context(), clinic.ID, false); err != nil {
+	// Update connection status
+	if err := h.connRepo.UpdateConnected(c.Request.Context(), clinic.ID, false); err != nil {
 		statusCode := errors.GetStatusCode(err)
 		c.JSON(statusCode, errors.ToResponse(err))
 		return
@@ -343,7 +352,8 @@ func (h *whatsAppHandler) GetStatus(c *gin.Context) {
 		return
 	}
 
-	if clinic.WhatsAppInstance == "" {
+	conn, err := h.connRepo.GetActiveByClinicID(c.Request.Context(), clinic.ID)
+	if err != nil {
 		c.JSON(http.StatusOK, &model.ConnectionStatus{
 			Instance: "",
 			State:    "disconnected",
@@ -351,20 +361,20 @@ func (h *whatsAppHandler) GetStatus(c *gin.Context) {
 		return
 	}
 
-	status, err := h.service.GetConnectionStatus(c.Request.Context(), clinic.WhatsAppInstance)
+	status, err := h.service.GetConnectionStatus(c.Request.Context(), conn.Instance)
 	if err != nil {
 		// If error, assume disconnected
 		c.JSON(http.StatusOK, &model.ConnectionStatus{
-			Instance: clinic.WhatsAppInstance,
+			Instance: conn.Instance,
 			State:    "disconnected",
 		})
 		return
 	}
 
-	// Update clinic connected status if changed
+	// Update connection status if changed
 	isConnected := status.State == "open"
-	if clinic.WhatsAppConnected != isConnected {
-		_ = h.clinicRepo.UpdateWhatsAppConnected(c.Request.Context(), clinic.ID, isConnected)
+	if conn.Connected != isConnected {
+		_ = h.connRepo.UpdateConnected(c.Request.Context(), clinic.ID, isConnected)
 	}
 
 	c.JSON(http.StatusOK, status)
@@ -379,12 +389,13 @@ func (h *whatsAppHandler) GetQRCode(c *gin.Context) {
 		return
 	}
 
-	if clinic.WhatsAppInstance == "" {
+	conn, err := h.connRepo.GetActiveByClinicID(c.Request.Context(), clinic.ID)
+	if err != nil {
 		c.JSON(http.StatusBadRequest, errors.ToResponse(errors.ErrBadRequestInstance.WithMessage("WhatsApp not initialized. Call /connect first.")))
 		return
 	}
 
-	qrCode, err := h.service.GetQRCode(c.Request.Context(), clinic.WhatsAppInstance)
+	qrCode, err := h.service.GetQRCode(c.Request.Context(), conn.Instance)
 	if err != nil {
 		statusCode := errors.GetStatusCode(err)
 		c.JSON(statusCode, errors.ToResponse(err))
@@ -406,13 +417,14 @@ func (h *whatsAppHandler) SendMessage(c *gin.Context) {
 		return
 	}
 
-	logger.Printf("[SendMessage] Clinic: %s, Instance: %s, Connected: %v", clinic.ID, clinic.WhatsAppInstance, clinic.WhatsAppConnected)
-
-	if clinic.WhatsAppInstance == "" || !clinic.WhatsAppConnected {
-		logger.Printf("[SendMessage] WhatsApp not connected")
+	conn, err := h.connRepo.GetActiveByClinicID(c.Request.Context(), clinic.ID)
+	if err != nil || !conn.Connected {
+		logger.Printf("[SendMessage] WhatsApp not connected for clinic %s", clinic.ID)
 		c.JSON(http.StatusBadRequest, errors.ToResponse(errors.ErrBadRequestInstance.WithMessage("WhatsApp not connected")))
 		return
 	}
+
+	logger.Printf("[SendMessage] Clinic: %s, Instance: %s, Connected: %v", clinic.ID, conn.Instance, conn.Connected)
 
 	var req model.SendMessageRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -430,7 +442,7 @@ func (h *whatsAppHandler) SendMessage(c *gin.Context) {
 	logger.Printf("[SendMessage] Sending message:\n%s", string(reqJSON))
 
 	// Send the message
-	resp, err := h.service.SendTextMessage(c.Request.Context(), clinic.WhatsAppInstance, req.Phone, req.Message)
+	resp, err := h.service.SendTextMessage(c.Request.Context(), conn.Instance, req.Phone, req.Message)
 	if err != nil {
 		logger.Printf("[SendMessage] Error sending message: %v", err)
 		statusCode := errors.GetStatusCode(err)
@@ -455,7 +467,8 @@ func (h *whatsAppHandler) SendConfirmation(c *gin.Context) {
 		return
 	}
 
-	if clinic.WhatsAppInstance == "" || !clinic.WhatsAppConnected {
+	conn, err := h.connRepo.GetActiveByClinicID(c.Request.Context(), clinic.ID)
+	if err != nil || !conn.Connected {
 		c.JSON(http.StatusBadRequest, errors.ToResponse(errors.ErrBadRequestInstance.WithMessage("WhatsApp not connected")))
 		return
 	}
@@ -468,7 +481,7 @@ func (h *whatsAppHandler) SendConfirmation(c *gin.Context) {
 
 	req.ClinicID = clinic.ID
 
-	if err := h.service.SendConfirmationMessage(c.Request.Context(), clinic.WhatsAppInstance, &req); err != nil {
+	if err := h.service.SendConfirmationMessage(c.Request.Context(), conn.Instance, &req); err != nil {
 		statusCode := errors.GetStatusCode(err)
 		c.JSON(statusCode, errors.ToResponse(err))
 		return
@@ -494,7 +507,8 @@ func (h *whatsAppHandler) SendReminder(c *gin.Context) {
 		return
 	}
 
-	if clinic.WhatsAppInstance == "" || !clinic.WhatsAppConnected {
+	conn, err := h.connRepo.GetActiveByClinicID(c.Request.Context(), clinic.ID)
+	if err != nil || !conn.Connected {
 		c.JSON(http.StatusBadRequest, errors.ToResponse(errors.ErrBadRequestInstance.WithMessage("WhatsApp not connected")))
 		return
 	}
@@ -507,7 +521,7 @@ func (h *whatsAppHandler) SendReminder(c *gin.Context) {
 
 	req.ClinicID = clinic.ID
 
-	if err := h.service.SendReminderMessage(c.Request.Context(), clinic.WhatsAppInstance, &req.ReminderMessage); err != nil {
+	if err := h.service.SendReminderMessage(c.Request.Context(), conn.Instance, &req.ReminderMessage); err != nil {
 		statusCode := errors.GetStatusCode(err)
 		c.JSON(statusCode, errors.ToResponse(err))
 		return
