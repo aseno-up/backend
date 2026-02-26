@@ -55,11 +55,13 @@ type Config struct {
 	LogLevel string
 
 	// SMTP (private - sensitive)
-	smtpHost     string
-	smtpPort     int
-	smtpUser     string
-	smtpPassword string
-	smtpFrom     string
+	smtpHost                  string
+	smtpPort                  int
+	smtpUser                  string
+	smtpPassword              string
+	smtpFrom                  string
+	emailSenderSupportAddress string
+	emailSenderName           string
 
 	// Frontend URL
 	frontendURL string
@@ -74,6 +76,13 @@ type Config struct {
 	anthropicAPIKey                 string
 	openaiAPIKey                    string
 	brevoAPIKey                     string
+
+	// OpenRouter Configs
+	openrouterAPIKey           string
+	openrouterAPIURL           string
+	openrouterHTTPReferer      string
+	openrouterClassifierTitle  string
+	openrouterTranscriberTitle string
 }
 
 // NewConfig creates a new configuration from environment variables
@@ -82,46 +91,53 @@ func NewConfig() *Config {
 	_ = godotenv.Load()
 
 	return &Config{
-		Port:                  getEnv("PORT", "4901"),
-		Environment:           getEnv("ENVIRONMENT", "development"),
-		databaseURL:           getEnv("DATABASE_URL", ""),
-		jwtSecret:             getEnv("JWT_SECRET", ""),
-		JWTAccessTokenTTL:     getEnvAsInt("JWT_ACCESS_TOKEN_TTL", 15),
-		JWTRefreshTokenTTL:    getEnvAsInt("JWT_REFRESH_TOKEN_TTL", 7),
-		googleClientID:        getEnv("GOOGLE_CLIENT_ID", ""),
-		googleClientSecret:    getEnv("GOOGLE_CLIENT_SECRET", ""),
-		GoogleRedirectURL:     getEnv("GOOGLE_REDIRECT_URL", ""),
-		GoogleAuthRedirectURL: getEnv("GOOGLE_AUTH_REDIRECT_URL", ""),
-		whatsappProvider:      getEnv("WHATSAPP_PROVIDER", "evolution"), // Default to evolution for backwards compatibility
-		evolutionAPIURL:       getEnv("EVOLUTION_API_URL", ""),
-		evolutionAPIKey:       getEnv("EVOLUTION_API_KEY", ""),
-		wahaAPIURL:            getEnv("WAHA_API_URL", ""),
-		wahaAPIKey:            getEnv("WAHA_API_KEY", ""),
-		whatsappWebhookSecret: getEnv("WHATSAPP_WEBHOOK_SECRET", ""),
-		whatsappWebhookURL:    getEnv("WHATSAPP_WEBHOOK_URL", ""),
-		asaasAPIURL:           getEnv("ASAAS_API_URL", "https://sandbox.asaas.com/api/v3"),
-		asaasAPIKey:           getEnv("ASAAS_API_KEY", ""),
-		asaasWebhookSecret:    getEnv("ASAAS_WEBHOOK_SECRET", ""),
-		AsaasSandbox:          getEnvAsBool("ASAAS_SANDBOX", true),
-		AllowedOrigins:        getEnvAsSlice("ALLOWED_ORIGINS", []string{"http://localhost:3000"}),
-		LogLevel:              getEnv("LOG_LEVEL", "info"),
-		smtpHost:              getEnv("SMTP_HOST", ""),
-		smtpPort:              getEnvAsInt("SMTP_PORT", 587),
-		smtpUser:              getEnv("SMTP_USER", ""),
-		smtpPassword:          getEnv("SMTP_PASSWORD", ""),
-		smtpFrom:              getEnv("SMTP_FROM", ""),
-		frontendURL:           getEnv("FRONTEND_URL", "http://localhost:3000"),
+		Port:                      getEnv("PORT", "4901"),
+		Environment:               getEnv("ENVIRONMENT", "development"),
+		databaseURL:               getEnv("DATABASE_URL", ""),
+		jwtSecret:                 getEnv("JWT_SECRET", ""),
+		JWTAccessTokenTTL:         getEnvAsInt("JWT_ACCESS_TOKEN_TTL", 15),
+		JWTRefreshTokenTTL:        getEnvAsInt("JWT_REFRESH_TOKEN_TTL", 7),
+		googleClientID:            getEnv("GOOGLE_CLIENT_ID", ""),
+		googleClientSecret:        getEnv("GOOGLE_CLIENT_SECRET", ""),
+		GoogleRedirectURL:         getEnv("GOOGLE_REDIRECT_URL", ""),
+		GoogleAuthRedirectURL:     getEnv("GOOGLE_AUTH_REDIRECT_URL", ""),
+		whatsappProvider:          getEnv("WHATSAPP_PROVIDER", "evolution"), // Default to evolution for backwards compatibility
+		evolutionAPIURL:           getEnv("EVOLUTION_API_URL", ""),
+		evolutionAPIKey:           getEnv("EVOLUTION_API_KEY", ""),
+		wahaAPIURL:                getEnv("WAHA_API_URL", ""),
+		wahaAPIKey:                getEnv("WAHA_API_KEY", ""),
+		whatsappWebhookSecret:     getEnv("WHATSAPP_WEBHOOK_SECRET", ""),
+		whatsappWebhookURL:        getEnv("WHATSAPP_WEBHOOK_URL", ""),
+		asaasAPIURL:               getEnv("ASAAS_API_URL", "https://sandbox.asaas.com/api/v3"),
+		asaasAPIKey:               getEnv("ASAAS_API_KEY", ""),
+		asaasWebhookSecret:        getEnv("ASAAS_WEBHOOK_SECRET", ""),
+		AsaasSandbox:              getEnvAsBool("ASAAS_SANDBOX", true),
+		AllowedOrigins:            getEnvAsSlice("ALLOWED_ORIGINS", []string{"http://localhost:3000"}),
+		LogLevel:                  getEnv("LOG_LEVEL", "info"),
+		smtpHost:                  getEnv("SMTP_HOST", ""),
+		smtpPort:                  getEnvAsInt("SMTP_PORT", 587),
+		smtpUser:                  getEnv("SMTP_USER", ""),
+		smtpPassword:              getEnv("SMTP_PASSWORD", ""),
+		smtpFrom:                  getEnv("SMTP_FROM", ""),
+		emailSenderSupportAddress: getEnv("EMAIL_SENDER_SUPORT_ADDRESS", ""),
+		emailSenderName:           getEnv("EMAIL_SENDER_NAME", "Aseno"),
+		frontendURL:               getEnv("FRONTEND_URL", "http://localhost:3001"),
 
 		// AI Classifier defaults
 		aiClassifierEnabled:             getEnvAsBool("AI_CLASSIFIER_ENABLED", false),
-		aiClassifierProvider:            getEnv("AI_CLASSIFIER_PROVIDER", "gemini"),
-		aiClassifierModel:               getEnv("AI_CLASSIFIER_MODEL", "gemini-1.5-flash"),
+		aiClassifierProvider:            getEnv("AI_CLASSIFIER_PROVIDER", "openrouter"),
+		aiClassifierModel:               getEnv("AI_CLASSIFIER_MODEL", "google/gemini-2.0-flash-001"),
 		aiClassifierTimeout:             getEnvAsInt("AI_CLASSIFIER_TIMEOUT", 5),
 		aiClassifierConfidenceThreshold: getEnvAsFloat64("AI_CLASSIFIER_CONFIDENCE_THRESHOLD", 0.7),
-		geminiAPIKey:                    getEnv("GEMINI_API_KEY", ""),
+		geminiAPIKey:                    getEnv("GEMINI_API_KEY", ""), // kept for backwards compatibility
 		anthropicAPIKey:                 getEnv("ANTHROPIC_API_KEY", ""),
 		openaiAPIKey:                    getEnv("OPENAI_API_KEY", ""),
 		brevoAPIKey:                     getEnv("BREVO_API_KEY", ""),
+		openrouterAPIKey:                getEnv("OPENROUTER_API_KEY", ""),
+		openrouterAPIURL:                getEnv("OPENROUTER_API_URL", "https://openrouter.ai/api/v1/chat/completions"),
+		openrouterHTTPReferer:           getEnv("OPENROUTER_HTTP_REFERER", "https://github.com/aseno/backend"),
+		openrouterClassifierTitle:       getEnv("OPENROUTER_CLASSIFIER_TITLE", "Aseno WhatsApp Classifier"),
+		openrouterTranscriberTitle:      getEnv("OPENROUTER_TRANSCRIBER_TITLE", "Aseno WhatsApp Transcriber"),
 	}
 }
 
@@ -256,6 +272,14 @@ func (c *Config) GetSMTPFrom() string {
 	return c.smtpFrom
 }
 
+func (c *Config) GetEmailSenderSupportAddress() string {
+	return c.emailSenderSupportAddress
+}
+
+func (c *Config) GetEmailSenderName() string {
+	return c.emailSenderName
+}
+
 // GetFrontendURL returns the frontend URL
 func (c *Config) GetFrontendURL() string {
 	return c.frontendURL
@@ -266,7 +290,7 @@ func (c *Config) AIClassifierEnabled() bool {
 	return c.aiClassifierEnabled
 }
 
-// AIClassifierProvider returns the AI provider (gemini, claude, openai)
+// AIClassifierProvider returns the AI provider (openrouter, claude, openai)
 func (c *Config) AIClassifierProvider() string {
 	return c.aiClassifierProvider
 }
@@ -303,6 +327,26 @@ func (c *Config) GetOpenAIAPIKey() string {
 
 func (c *Config) GetBrevoAPIKey() string {
 	return c.brevoAPIKey
+}
+
+func (c *Config) GetOpenRouterAPIKey() string {
+	return c.openrouterAPIKey
+}
+
+func (c *Config) GetOpenRouterAPIURL() string {
+	return c.openrouterAPIURL
+}
+
+func (c *Config) GetOpenRouterHTTPReferer() string {
+	return c.openrouterHTTPReferer
+}
+
+func (c *Config) GetOpenRouterClassifierTitle() string {
+	return c.openrouterClassifierTitle
+}
+
+func (c *Config) GetOpenRouterTranscriberTitle() string {
+	return c.openrouterTranscriberTitle
 }
 
 func getEnv(key, defaultValue string) string {

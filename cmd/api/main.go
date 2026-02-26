@@ -101,6 +101,7 @@ import (
 	whatsapp_repository "github.com/aseno/backend/pkg/whatsapp/repository"
 	whatsapp_service "github.com/aseno/backend/pkg/whatsapp/service"
 	"github.com/aseno/backend/pkg/whatsapp/tools"
+	whatsapp_transcriber "github.com/aseno/backend/pkg/whatsapp/transcriber"
 )
 
 func main() {
@@ -258,7 +259,7 @@ func main() {
 	var emailSvc email_service.EmailService
 	if cfg.GetBrevoAPIKey() != "" {
 		var err error
-		emailSvc, err = email_service.NewBrevoEmailService()
+		emailSvc, err = email_service.NewBrevoEmailService(cfg.GetBrevoAPIKey(), cfg.GetEmailSenderSupportAddress(), cfg.GetEmailSenderName())
 		if err != nil {
 			logger.Fatalf("Failed to initialize Brevo email service: %v", err)
 		}
@@ -281,9 +282,9 @@ func main() {
 	// Initialize auth service with or without Google OAuth
 	var authService auth_service.AuthService
 	if googleAuthClient != nil {
-		authService = auth_service.NewAuthServiceWithGoogle(userRepo, clinicRepo, passwordResetRepo, emailVerificationRepo, jwtService, &googleAuthAdapter{client: googleAuthClient}, emailSvc)
+		authService = auth_service.NewAuthServiceWithGoogle(userRepo, clinicRepo, passwordResetRepo, emailVerificationRepo, jwtService, &googleAuthAdapter{client: googleAuthClient}, emailSvc, cfg.GetFrontendURL())
 	} else {
-		authService = auth_service.NewAuthService(userRepo, clinicRepo, passwordResetRepo, emailVerificationRepo, jwtService, emailSvc)
+		authService = auth_service.NewAuthService(userRepo, clinicRepo, passwordResetRepo, emailVerificationRepo, jwtService, emailSvc, cfg.GetFrontendURL())
 	}
 	professionalService := professional_service.NewProfessionalService(professionalRepo, clinicRepo, settingsSvc)
 	patientService := patient_service.NewPatientService(patientRepo, clinicRepo)
@@ -340,14 +341,19 @@ func main() {
 				apiKey = cfg.GetAnthropicAPIKey()
 			case "openai":
 				apiKey = cfg.GetOpenAIAPIKey()
+			case "openrouter":
+				apiKey = cfg.GetOpenRouterAPIKey()
 			}
 
 			if apiKey != "" {
 				aiClassifier, err := whatsapp_classifier.NewClassifier(whatsapp_classifier.Config{
-					Provider: cfg.AIClassifierProvider(),
-					Model:    cfg.AIClassifierModel(),
-					APIKey:   apiKey,
-					Timeout:  time.Duration(cfg.AIClassifierTimeout()) * time.Second,
+					Provider:                  cfg.AIClassifierProvider(),
+					Model:                     cfg.AIClassifierModel(),
+					APIKey:                    apiKey,
+					Timeout:                   time.Duration(cfg.AIClassifierTimeout()) * time.Second,
+					OpenRouterAPIURL:          cfg.GetOpenRouterAPIURL(),
+					OpenRouterHTTPReferer:     cfg.GetOpenRouterHTTPReferer(),
+					OpenRouterClassifierTitle: cfg.GetOpenRouterClassifierTitle(),
 				})
 				if err != nil {
 					logger.Printf("Warning: Failed to initialize AI classifier: %v", err)
@@ -360,6 +366,23 @@ func main() {
 				logger.Printf("Warning: AI_CLASSIFIER_ENABLED=true but no API key for provider %s",
 					cfg.AIClassifierProvider())
 			}
+		}
+
+		// Initialize Audio Transcriber
+		if cfg.GetOpenRouterAPIKey() != "" {
+			transcriberModel := workerCfg.AIAgentModel // Use default multimodal model
+			if transcriberModel == "" {
+				transcriberModel = "google/gemini-2.0-flash-001"
+			}
+			audioTranscriber := whatsapp_transcriber.NewOpenRouterTranscriber(
+				cfg.GetOpenRouterAPIURL(),
+				cfg.GetOpenRouterAPIKey(),
+				transcriberModel,
+				cfg.GetOpenRouterHTTPReferer(),
+				cfg.GetOpenRouterTranscriberTitle(),
+			)
+			whatsappService.SetAudioTranscriber(audioTranscriber)
+			logger.Println("Audio Transcriber initialized with OpenRouter")
 		}
 
 		// Initialize AI Agent for dynamic WhatsApp conversations (if enabled)
@@ -565,7 +588,7 @@ func main() {
 	// Initialize Calendar handler (if service is configured)
 	var calendarHandler calendar_handler.CalendarHandler
 	if calendarService != nil {
-		calendarHandler = calendar_handler.NewCalendarHandler(calendarService)
+		calendarHandler = calendar_handler.NewCalendarHandler(calendarService, cfg.GetFrontendURL())
 	}
 
 	// Initialize Session Plan handler
@@ -1375,7 +1398,7 @@ func initializeAIAgent(
 
 	switch strings.ToLower(workerCfg.AIAgentProvider) {
 	case "gemini":
-		apiKey := strings.TrimSpace(os.Getenv("GEMINI_API_KEY"))
+		apiKey := strings.TrimSpace(cfg.GetGeminiAPIKey())
 		if apiKey == "" {
 			return nil, nil, nil, fmt.Errorf("GEMINI_API_KEY is required for Gemini provider")
 		}
@@ -1383,7 +1406,7 @@ func initializeAIAgent(
 		aiAgent, err = agent.NewGeminiAgent(agentConfig, toolRegistry, toolExecutor, execContext)
 
 	case "openrouter":
-		apiKey := strings.TrimSpace(os.Getenv("OPENROUTER_API_KEY"))
+		apiKey := strings.TrimSpace(cfg.GetOpenRouterAPIKey())
 		if apiKey == "" {
 			return nil, nil, nil, fmt.Errorf("OPENROUTER_API_KEY is required for OpenRouter provider")
 		}

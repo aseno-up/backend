@@ -19,6 +19,7 @@ import (
 	"github.com/aseno/backend/pkg/whatsapp/agent"
 	"github.com/aseno/backend/pkg/whatsapp/classifier"
 	"github.com/aseno/backend/pkg/whatsapp/model"
+	"github.com/aseno/backend/pkg/whatsapp/transcriber"
 )
 
 // WhatsAppClient defines the interface for WhatsApp API operations
@@ -45,6 +46,10 @@ type WhatsAppClient interface {
 
 	// DeleteInstance removes a WhatsApp instance
 	DeleteInstance(ctx context.Context, instance string) error
+
+	// DownloadMedia downloads audio/media content from the WhatsApp provider
+	// Returns the raw bytes, MIME type, and any error
+	DownloadMedia(ctx context.Context, instance, messageID string) ([]byte, string, error)
 }
 
 // MessageRepository defines the interface for message persistence
@@ -178,6 +183,9 @@ type WhatsAppService interface {
 	// SetDebounceDelay sets the idle window before the AI processes a patient's message.
 	// Any new message received within the window resets the timer.
 	SetDebounceDelay(d time.Duration)
+
+	// SetAudioTranscriber sets the audio transcriber for voice message transcription
+	SetAudioTranscriber(t transcriber.AudioTranscriber)
 }
 
 // whatsAppService implements WhatsAppService
@@ -212,6 +220,8 @@ type whatsAppService struct {
 	// Debouncer: delays AI processing until patient stops typing
 	debouncer     *messageDebouncer
 	debounceDelay time.Duration
+	// Audio transcriber for voice message transcription
+	audioTranscriber transcriber.AudioTranscriber
 }
 
 // AppointmentStatusUpdater interface for updating appointment status
@@ -420,6 +430,11 @@ func NewWhatsAppService(
 // SetDebounceDelay sets the idle window before message processing.
 func (s *whatsAppService) SetDebounceDelay(d time.Duration) {
 	s.debounceDelay = d
+}
+
+// SetAudioTranscriber sets the audio transcriber for voice message transcription
+func (s *whatsAppService) SetAudioTranscriber(t transcriber.AudioTranscriber) {
+	s.audioTranscriber = t
 }
 
 // SetAppointmentFinder sets the appointment finder for WhatsApp response handling
@@ -714,7 +729,32 @@ func (s *whatsAppService) SendReminderMessage(ctx context.Context, instance stri
 
 // HandleIncomingMessage processes an incoming message
 func (s *whatsAppService) HandleIncomingMessage(ctx context.Context, clinicID uuid.UUID, msg *model.ParsedIncomingMessage) error {
-	// Log incoming message
+	logger.Printf("[WhatsApp] Message received from %s (clinic: %s): %s", msg.Phone, clinicID, msg.Content)
+
+	// Se for áudio, tenta transcrever antes de processar
+	if msg.IsAudio && s.audioTranscriber != nil {
+		logger.Printf("[WhatsApp] Audio message detected from %s, downloading...", msg.Phone)
+
+		audioBytes, mimeType, err := s.client.DownloadMedia(ctx, msg.Instance, msg.MessageID)
+		if err != nil {
+			logger.Printf("[WhatsApp] Failed to download audio from %s: %v", msg.Phone, err)
+			msg.Content = "[Mensagem de áudio não pôde ser baixada]"
+		} else {
+			transcribed, err := s.audioTranscriber.Transcribe(ctx, audioBytes, mimeType)
+			if err != nil {
+				logger.Printf("[WhatsApp] Failed to transcribe audio from %s: %v", msg.Phone, err)
+				msg.Content = "[Mensagem de áudio inaudível]"
+			} else {
+				msg.Content = transcribed
+				logger.Printf("[WhatsApp] Transcribed audio from %s: %s", msg.Phone, transcribed)
+			}
+		}
+	} else if msg.IsAudio {
+		logger.Printf("[WhatsApp] Audio message ignored from %s (transcriber disabled)", msg.Phone)
+		msg.Content = "[Mensagem de áudio]"
+	}
+
+	// Log incoming message (logs original text or transcribed text)
 	s.logMessage(ctx, clinicID, nil, msg.Phone, model.MessageDirectionInbound, msg.Content, model.MessageStatusDelivered, msg.MessageID)
 
 	// Se o AI Agent está habilitado, debounce antes de processar.
