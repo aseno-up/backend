@@ -13,6 +13,7 @@ type ScheduledMessage struct {
 	Instance    string     `gorm:"type:varchar(255);not null" json:"instance"`
 	Phone       string     `gorm:"type:varchar(20);not null" json:"phone"`
 	Message     string     `gorm:"type:text;not null" json:"message"`
+	MessageType string     `gorm:"type:varchar(50);not null;default:'outbound'" json:"message_type"`
 	ScheduledAt time.Time  `gorm:"not null;index:idx_scheduled_messages_clinic_scheduled" json:"scheduled_at"`
 	Sent        bool       `gorm:"default:false;index:idx_scheduled_messages_sent" json:"sent"`
 	SentAt      *time.Time `gorm:"type:timestamptz" json:"sent_at,omitempty"`

@@ -95,6 +95,7 @@ type ClinicRepository interface {
 type ScheduledMessageRepository interface {
 	Create(ctx context.Context, msg *model.ScheduledMessage) error
 	GetLastScheduledForClinic(ctx context.Context, clinicID uuid.UUID) (*model.ScheduledMessage, error)
+	DeletePendingByPhoneAndType(ctx context.Context, clinicID uuid.UUID, phone string, messageType string) error
 }
 
 // WhatsAppService defines the interface for WhatsApp business logic
@@ -113,6 +114,9 @@ type WhatsAppService interface {
 
 	// HandleIncomingMessage processes an incoming message from webhook
 	HandleIncomingMessage(ctx context.Context, clinicID uuid.UUID, msg *model.ParsedIncomingMessage) error
+
+	// ProcessDelayedAI processes a delayed AI response that was scheduled due to being outside business hours
+	ProcessDelayedAI(ctx context.Context, msg *model.ScheduledMessage) error
 
 	// ClassifyMessage classifies the intent of an incoming message
 	ClassifyMessage(content string) model.MessageIntent
@@ -1063,8 +1067,10 @@ func (s *whatsAppService) handleWithAIAgent(ctx context.Context, clinicID uuid.U
 	}
 
 	// Check if AI agent is enabled for this clinic
+	var clinic *clinic_model.Clinic
 	if s.clinicRepo != nil {
-		clinic, err := s.clinicRepo.GetByID(ctx, clinicID)
+		var err error
+		clinic, err = s.clinicRepo.GetByID(ctx, clinicID)
 		if err != nil {
 			logger.Printf("[AI Agent] Warning: failed to fetch clinic settings: %v", err)
 		} else if !clinic.Settings.AIAgentEnabled {
@@ -1073,7 +1079,40 @@ func (s *whatsAppService) handleWithAIAgent(ctx context.Context, clinicID uuid.U
 		}
 	}
 
-	// Removed business hours check - messages are processed and scheduled if outside hours
+	// Check if we're outside business hours
+	outsideHours := clinic != nil && !clinic.IsWithinBusinessHours(time.Now())
+
+	if outsideHours && s.scheduledMsgRepo != nil {
+		logger.Printf("[AI Agent] Outside business hours for clinic %s, scheduling AI processing instead", clinicID)
+
+		// Delete any pending AI processing intents for this patient
+		if err := s.scheduledMsgRepo.DeletePendingByPhoneAndType(ctx, clinicID, msg.Phone, "ai_processing"); err != nil {
+			logger.Printf("[AI Agent] Error deleting pending AI intents: %v", err)
+		}
+
+		// Calculate next business hour
+		nextBusinessHour := clinic.CalculateNextBusinessHour(time.Now())
+
+		// Save message content to process later
+		scheduledMsg := &model.ScheduledMessage{
+			ID:          uuid.New(),
+			ClinicID:    clinicID,
+			Instance:    msg.Instance,
+			Phone:       msg.Phone,
+			Message:     msg.Content, // For AI processing, this is the trigger context
+			MessageType: "ai_processing",
+			ScheduledAt: nextBusinessHour,
+			Sent:        false,
+			CreatedAt:   time.Now(),
+		}
+
+		if err := s.scheduledMsgRepo.Create(ctx, scheduledMsg); err != nil {
+			logger.Printf("[AI Agent] Error scheduling AI processing: %v", err)
+		} else {
+			logger.Printf("[AI Agent] Scheduled AI processing for %s at %s", msg.Phone, nextBusinessHour.Format(time.RFC3339))
+		}
+		return nil
+	}
 
 	// Classify message intent
 	intent := s.ClassifyMessage(msg.Content)
@@ -1081,7 +1120,7 @@ func (s *whatsAppService) handleWithAIAgent(ctx context.Context, clinicID uuid.U
 	// Create message request
 	req := &agent.MessageRequest{
 		ClinicID:     clinicID,
-		ClinicName:   "", // TODO: Fetch clinic name if needed
+		ClinicName:   "", // Fetch clinic name if needed
 		PatientPhone: msg.Phone,
 		PatientName:  msg.SenderName,
 		MessageText:  msg.Content,
@@ -1125,26 +1164,8 @@ func (s *whatsAppService) handleWithAIAgent(ctx context.Context, clinicID uuid.U
 	return nil
 }
 
-// sendAIResponseSegmented sends AI response segments through the message queue with delays or schedules for later
+// sendAIResponseSegmented sends AI response segments through the message queue with delays
 func (s *whatsAppService) sendAIResponseSegmented(ctx context.Context, clinicID uuid.UUID, instance, phone string, resp *agent.MessageResponse) error {
-	// Get clinic settings
-	var clinic *clinic_model.Clinic
-	if s.clinicRepo != nil {
-		var err error
-		clinic, err = s.clinicRepo.GetByID(ctx, clinicID)
-		if err != nil {
-			logger.Printf("[WhatsApp] Warning: failed to fetch clinic settings: %v", err)
-		}
-	}
-
-	// Check if we're outside business hours
-	outsideHours := clinic != nil && !clinic.IsWithinBusinessHours(time.Now())
-
-	if outsideHours && s.scheduledMsgRepo != nil {
-		// Schedule messages for next business hour
-		return s.scheduleMessagesForNextBusinessHour(ctx, clinicID, clinic, instance, phone, resp)
-	}
-
 	// Normal flow: send through queue
 	var cumulativeDelay time.Duration
 
@@ -1179,61 +1200,57 @@ func (s *whatsAppService) sendAIResponseSegmented(ctx context.Context, clinicID 
 	return nil
 }
 
-// scheduleMessagesForNextBusinessHour schedules AI response messages for the next business hour
-func (s *whatsAppService) scheduleMessagesForNextBusinessHour(
-	ctx context.Context,
-	clinicID uuid.UUID,
-	clinic *clinic_model.Clinic,
-	instance, phone string,
-	resp *agent.MessageResponse,
-) error {
-	// Get last scheduled message for this clinic
-	lastScheduled, err := s.scheduledMsgRepo.GetLastScheduledForClinic(ctx, clinicID)
+// ProcessDelayedAI processes a delayed AI response that was scheduled due to being outside business hours
+func (s *whatsAppService) ProcessDelayedAI(ctx context.Context, scheduledMsg *model.ScheduledMessage) error {
+	logger.Printf("[WhatsApp] Processing delayed AI for message %s from %s", scheduledMsg.ID, scheduledMsg.Phone)
+
+	// Build ParsedIncomingMessage to use existing logic
+	msg := &model.ParsedIncomingMessage{
+		Instance:   scheduledMsg.Instance,
+		MessageID:  uuid.New().String(), // Generate a new transaction ID
+		Phone:      scheduledMsg.Phone,
+		SenderName: "Paciente", // Best effort, AI agent will query past name usually
+		Content:    scheduledMsg.Message,
+		IsAudio:    false,
+		Timestamp:  time.Now(),
+	}
+
+	intent := s.ClassifyMessage(msg.Content)
+	req := &agent.MessageRequest{
+		ClinicID:     scheduledMsg.ClinicID,
+		ClinicName:   "", // Let AI agent resolve it
+		PatientPhone: msg.Phone,
+		PatientName:  msg.SenderName,
+		MessageText:  msg.Content,
+		Intent:       intent,
+	}
+
+	logger.Printf("[AI Agent] Processing delayed message from %s (intent: %s): %s", msg.Phone, intent, msg.Content)
+
+	resp, err := s.aiAgentService.ProcessMessage(ctx, req)
 	if err != nil {
-		logger.Printf("[WhatsApp] Warning: failed to get last scheduled message: %v", err)
+		logger.Printf("[AI Agent] Error processing delayed message: %v", err)
+		return err
 	}
 
-	// Calculate next business hour
-	nextBusinessHour := clinic.CalculateNextBusinessHour(time.Now())
-
-	// If there was a previous scheduled message, calculate next slot with delay
-	var nextSlot time.Time
-	if lastScheduled != nil && lastScheduled.ScheduledAt.After(nextBusinessHour) {
-		// Use clinic-specific delay or default
-		delay := clinic.GetMinDelayBetweenPatients(s.defaultDelayBetweenPatients)
-		nextSlot = lastScheduled.ScheduledAt.Add(time.Duration(delay) * time.Second)
-	} else {
-		nextSlot = nextBusinessHour
+	if resp == nil || len(resp.Segments) == 0 {
+		logger.Printf("[AI Agent] No response segments from delayed agent")
+		return nil
 	}
 
-	logger.Printf("[WhatsApp] Message outside business hours - scheduling %d segments starting at %s",
-		len(resp.Segments), nextSlot.Format(time.RFC3339))
+	if s.messageQueue != nil {
+		return s.sendAIResponseSegmented(ctx, scheduledMsg.ClinicID, msg.Instance, msg.Phone, resp)
+	}
 
-	// Schedule all segments
-	for _, segment := range resp.Segments {
-		scheduledMsg := &model.ScheduledMessage{
-			ID:          uuid.New(),
-			ClinicID:    clinicID,
-			Instance:    instance,
-			Phone:       phone,
-			Message:     segment.Content,
-			ScheduledAt: nextSlot,
-			Sent:        false,
-			CreatedAt:   time.Now(),
+	// Fallback
+	for i, segment := range resp.Segments {
+		if i > 0 && segment.DelayAfter > 0 {
+			time.Sleep(segment.DelayAfter)
 		}
-
-		if err := s.scheduledMsgRepo.Create(ctx, scheduledMsg); err != nil {
-			logger.Printf("[WhatsApp] Failed to create scheduled message: %v", err)
-			// Continue with next segment
-		} else {
-			logger.Printf("[WhatsApp] Scheduled message %s for %s at %s",
-				scheduledMsg.ID, phone, nextSlot.Format(time.RFC3339))
-		}
-
-		// Next segment gets scheduled after message-level delay
-		if segment.DelayAfter > 0 {
-			delay := clinic.GetMinDelayBetweenMessages(3) // default 3 seconds
-			nextSlot = nextSlot.Add(time.Duration(delay) * time.Second)
+		_, err := s.SendTextMessage(ctx, msg.Instance, msg.Phone, segment.Content)
+		if err != nil {
+			logger.Printf("[AI Agent] Failed to send delayed segment %d: %v", i, err)
+			return err
 		}
 	}
 

@@ -130,6 +130,9 @@ func (s *stubWhatsAppSvc) SendReminderMessage(_ context.Context, _ string, _ *wh
 func (s *stubWhatsAppSvc) HandleIncomingMessage(_ context.Context, _ uuid.UUID, _ *whatsapp_model.ParsedIncomingMessage) error {
 	return nil
 }
+func (s *stubWhatsAppSvc) ProcessDelayedAI(_ context.Context, _ *whatsapp_model.ScheduledMessage) error {
+	return nil
+}
 func (s *stubWhatsAppSvc) ClassifyMessage(_ string) whatsapp_model.MessageIntent {
 	return whatsapp_model.MessageIntentUnknown
 }
