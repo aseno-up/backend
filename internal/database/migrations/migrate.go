@@ -2,8 +2,16 @@ package migrations
 
 import (
 	"fmt"
+
 	"github.com/aseno/backend/internal/logger"
 
+	appointmentModel "github.com/aseno/backend/pkg/appointment/model"
+	clinicModel "github.com/aseno/backend/pkg/clinic/model"
+	patientModel "github.com/aseno/backend/pkg/patient/model"
+	paymentModel "github.com/aseno/backend/pkg/payment/model"
+	procedureModel "github.com/aseno/backend/pkg/procedure/model"
+	professionalModel "github.com/aseno/backend/pkg/professional/model"
+	sessionPlanModel "github.com/aseno/backend/pkg/sessionplan/model"
 	"github.com/aseno/backend/pkg/whatsapp/conversation"
 	"gorm.io/gorm"
 )
@@ -16,6 +24,30 @@ func MigrateConversations(db *gorm.DB) error {
 	if err := db.AutoMigrate(
 		&conversation.ConversationContext{},
 		&conversation.ToolCallLog{},
+
+		// Clinic models
+		&clinicModel.Clinic{},
+
+		// Patient models
+		&patientModel.Patient{},
+
+		// Professional models
+		&professionalModel.Professional{},
+
+		// Session Plan models
+		&sessionPlanModel.SessionPlan{},
+
+		// Payment models
+		&paymentModel.Payment{},
+		&paymentModel.Customer{},
+		&paymentModel.Subscription{},
+
+		// Procedure models
+		&procedureModel.Procedure{},
+		&appointmentModel.AppointmentProcedure{},
+
+		// Appointment models
+		&appointmentModel.Appointment{},
 	); err != nil {
 		return fmt.Errorf("failed to migrate conversation tables: %w", err)
 	}
