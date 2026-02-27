@@ -390,17 +390,34 @@ func (s *appointmentService) Create(ctx context.Context, clinicID uuid.UUID, req
 		appointmentType = model.AppointmentTypeRegular
 	}
 
+	// Map procedures
+	var appointmentProcedures []model.AppointmentProcedure
+	var calculatedProceduresPriceCents int64
+	for _, p := range req.Procedures {
+		appointmentProcedures = append(appointmentProcedures, model.AppointmentProcedure{
+			ProcedureID: p.ProcedureID,
+			Price:       *p.Price, // assuming input defaults are handled by handler or we take pointer value
+		})
+		calculatedProceduresPriceCents += int64(math.Round(*p.Price * 100))
+	}
+
+	priceToUse := req.Price
+	if req.Price == 0 && len(appointmentProcedures) > 0 {
+		priceToUse = float64(calculatedProceduresPriceCents) / 100.0
+	}
+
 	appointment := &model.Appointment{
 		ClinicID:       clinicID,
 		PatientID:      req.PatientID,
 		ProfessionalID: req.ProfessionalID,
 		StartTime:      req.StartTime,
-		EndTime:        endTime,
+		EndTime:        req.StartTime.Add(time.Duration(req.DurationMinutes) * time.Minute),
 		Status:         model.AppointmentStatusPending,
 		Type:           appointmentType,
 		Title:          req.Title,
 		Notes:          req.Notes,
-		Price:          req.Price,
+		Procedures:     appointmentProcedures,
+		Price:          priceToUse,
 	}
 
 	if err := s.repo.Create(ctx, appointment); err != nil {
@@ -585,6 +602,27 @@ func (s *appointmentService) Update(ctx context.Context, id, clinicID uuid.UUID,
 	if req.PatientNotes != "" {
 		appointment.PatientNotes = req.PatientNotes
 	}
+	if req.Procedures != nil {
+		var appointmentProcedures []model.AppointmentProcedure
+		var calculatedProceduresPriceCents int64
+		for _, p := range *req.Procedures {
+			appointmentProcedures = append(appointmentProcedures, model.AppointmentProcedure{
+				AppointmentID: appointment.ID,
+				ProcedureID:   p.ProcedureID,
+				Price:         *p.Price,
+			})
+			calculatedProceduresPriceCents += int64(math.Round(*p.Price * 100))
+		}
+
+		// Optional: if repo.Update handles replacing associations, we can set it:
+		appointment.Procedures = appointmentProcedures
+
+		// Note: since GORM Save handles associations if configured properly, we check if price was overridden:
+		if req.Price == nil {
+			appointment.Price = float64(calculatedProceduresPriceCents) / 100.0
+		}
+	}
+
 	if req.Price != nil {
 		appointment.Price = *req.Price
 	}

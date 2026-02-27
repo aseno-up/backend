@@ -126,7 +126,7 @@ func TestClinic_IsWithinBusinessHours(t *testing.T) {
 			name: "default hours - Monday 10:00",
 			clinic: &Clinic{
 				Settings: ClinicSettings{
-					Timezone:        "America/Sao_Paulo",
+					Timezone:        "UTC",
 					AIBusinessHours: nil, // usar padrão
 				},
 			},
@@ -137,7 +137,7 @@ func TestClinic_IsWithinBusinessHours(t *testing.T) {
 			name: "default hours - Sunday (disabled)",
 			clinic: &Clinic{
 				Settings: ClinicSettings{
-					Timezone:        "America/Sao_Paulo",
+					Timezone:        "UTC",
 					AIBusinessHours: nil,
 				},
 			},
@@ -148,7 +148,7 @@ func TestClinic_IsWithinBusinessHours(t *testing.T) {
 			name: "default hours - Monday 07:00 (before start)",
 			clinic: &Clinic{
 				Settings: ClinicSettings{
-					Timezone:        "America/Sao_Paulo",
+					Timezone:        "UTC",
 					AIBusinessHours: nil,
 				},
 			},
@@ -159,7 +159,7 @@ func TestClinic_IsWithinBusinessHours(t *testing.T) {
 			name: "default hours - Monday 19:00 (after end)",
 			clinic: &Clinic{
 				Settings: ClinicSettings{
-					Timezone:        "America/Sao_Paulo",
+					Timezone:        "UTC",
 					AIBusinessHours: nil,
 				},
 			},
@@ -170,7 +170,7 @@ func TestClinic_IsWithinBusinessHours(t *testing.T) {
 			name: "custom hours - Monday enabled 09:00-17:00, testing 10:00",
 			clinic: &Clinic{
 				Settings: ClinicSettings{
-					Timezone: "America/Sao_Paulo",
+					Timezone: "UTC",
 					AIBusinessHours: &BusinessHoursConfig{
 						Monday: makeSchedule(true, "09:00", "17:00"),
 					},
@@ -183,7 +183,7 @@ func TestClinic_IsWithinBusinessHours(t *testing.T) {
 			name: "custom hours - Monday disabled",
 			clinic: &Clinic{
 				Settings: ClinicSettings{
-					Timezone: "America/Sao_Paulo",
+					Timezone: "UTC",
 					AIBusinessHours: &BusinessHoursConfig{
 						Monday: makeSchedule(false, "09:00", "17:00"),
 					},
@@ -196,7 +196,7 @@ func TestClinic_IsWithinBusinessHours(t *testing.T) {
 			name: "custom hours - Tuesday enabled, testing before start",
 			clinic: &Clinic{
 				Settings: ClinicSettings{
-					Timezone: "America/Sao_Paulo",
+					Timezone: "UTC",
 					AIBusinessHours: &BusinessHoursConfig{
 						Tuesday: makeSchedule(true, "10:00", "16:00"),
 					},
@@ -209,7 +209,7 @@ func TestClinic_IsWithinBusinessHours(t *testing.T) {
 			name: "custom hours - Tuesday enabled, testing after end",
 			clinic: &Clinic{
 				Settings: ClinicSettings{
-					Timezone: "America/Sao_Paulo",
+					Timezone: "UTC",
 					AIBusinessHours: &BusinessHoursConfig{
 						Tuesday: makeSchedule(true, "10:00", "16:00"),
 					},
@@ -222,7 +222,7 @@ func TestClinic_IsWithinBusinessHours(t *testing.T) {
 			name: "custom hours - Wednesday nil schedule",
 			clinic: &Clinic{
 				Settings: ClinicSettings{
-					Timezone: "America/Sao_Paulo",
+					Timezone: "UTC",
 					AIBusinessHours: &BusinessHoursConfig{
 						Wednesday: nil,
 					},

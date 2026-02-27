@@ -70,6 +70,10 @@ import (
 	payment_model "github.com/aseno/backend/pkg/payment/model"
 	payment_repository "github.com/aseno/backend/pkg/payment/repository"
 	payment_service "github.com/aseno/backend/pkg/payment/service"
+	procedure_handler "github.com/aseno/backend/pkg/procedure/handler"
+	procedure_model "github.com/aseno/backend/pkg/procedure/model"
+	procedure_repository "github.com/aseno/backend/pkg/procedure/repository"
+	procedure_service "github.com/aseno/backend/pkg/procedure/service"
 	professional_handler "github.com/aseno/backend/pkg/professional/handler"
 	professional_model "github.com/aseno/backend/pkg/professional/model"
 	professional_repository "github.com/aseno/backend/pkg/professional/repository"
@@ -141,6 +145,7 @@ func main() {
 	professionalRepo := professional_repository.NewProfessionalRepository(db.GetDB())
 	patientRepo := patient_repository.NewPatientRepository(db.GetDB())
 	appointmentRepo := appointment_repository.NewAppointmentRepository(db.GetDB())
+	procedureRepo := procedure_repository.NewProcedureRepository(db.GetDB())
 	messageRepo := whatsapp_repository.NewMessageRepository(db.GetDB())
 	messageLogRepo := whatsapp_repository.NewMessageLogRepository(db.GetDB())
 	scheduledMsgRepo := whatsapp_repository.NewScheduledMessageRepository(db.GetDB())
@@ -289,6 +294,7 @@ func main() {
 	professionalService := professional_service.NewProfessionalService(professionalRepo, clinicRepo, settingsSvc)
 	patientService := patient_service.NewPatientService(patientRepo, clinicRepo)
 	appointmentService := appointment_service.NewAppointmentService(appointmentRepo, professionalRepo)
+	procedureService := procedure_service.NewProcedureService(procedureRepo)
 
 	// Initialize message log service
 	messageLogService := whatsapp_service.NewMessageLogService(messageLogRepo)
@@ -572,6 +578,7 @@ func main() {
 	professionalHandler := professional_handler.NewProfessionalHandler(professionalService)
 	patientHandler := patient_handler.NewPatientHandler(patientService)
 	appointmentHandler := appointment_handler.NewAppointmentHandler(appointmentService)
+	procedureHandler := procedure_handler.NewProcedureHandler(procedureService)
 
 	// Initialize WhatsApp handler (if service is configured)
 	var whatsappHandler whatsapp_handler.WhatsAppHandler
@@ -650,6 +657,7 @@ func main() {
 		professionalHandler,
 		patientHandler,
 		appointmentHandler,
+		procedureHandler,
 		whatsappHandler,
 		paymentHandler,
 		calendarHandler,
@@ -727,6 +735,7 @@ func setupRouter(
 	professionalHandler professional_handler.ProfessionalHandler,
 	patientHandler patient_handler.PatientHandler,
 	appointmentHandler appointment_handler.AppointmentHandler,
+	procedureHandler *procedure_handler.ProcedureHandler,
 	whatsappHandler whatsapp_handler.WhatsAppHandler,
 	paymentHandler payment_handler.PaymentHandler,
 	calendarHandler calendar_handler.CalendarHandler,
@@ -815,6 +824,9 @@ func setupRouter(
 			{
 				appointmentHandler.RegisterRoutes(appointmentsProtected)
 			}
+
+			// Procedure routes
+			procedureHandler.RegisterRoutes(protected)
 
 			// WhatsApp routes (protected endpoints)
 			if whatsappHandler != nil {
@@ -958,6 +970,9 @@ func runMigrations(db *database.Database) error {
 		&waitlist_model.WaitlistEntry{},
 		&settings_model.SystemSetting{},
 		&whatsapp_model.WhatsAppConnection{},
+		// Procedure models
+		&procedure_model.Procedure{},
+		&appointment_model.AppointmentProcedure{},
 		// AI Agent conversation tables
 		&conversation.ConversationContext{},
 		&conversation.ToolCallLog{},

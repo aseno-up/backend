@@ -98,6 +98,7 @@ func (r *appointmentRepository) GetByID(ctx context.Context, id, clinicID uuid.U
 	result := r.db.WithContext(ctx).
 		Preload("Patient").
 		Preload("Professional").
+		Preload("Procedures.Procedure").
 		Where("id = ? AND clinic_id = ? AND deleted_at IS NULL", id, clinicID).
 		First(&appointment)
 	if result.Error != nil {
@@ -154,6 +155,7 @@ func (r *appointmentRepository) List(ctx context.Context, clinicID uuid.UUID, fi
 	result := query.
 		Preload("Patient").
 		Preload("Professional").
+		Preload("Procedures.Procedure").
 		Order("start_time ASC").
 		Limit(perPage).
 		Offset(offset).
@@ -173,6 +175,7 @@ func (r *appointmentRepository) GetByDateRange(ctx context.Context, clinicID uui
 	query := r.db.WithContext(ctx).
 		Preload("Patient").
 		Preload("Professional").
+		Preload("Procedures.Procedure").
 		Where("clinic_id = ? AND deleted_at IS NULL", clinicID).
 		Where("start_time >= ? AND start_time < ?", start, end).
 		Where("status NOT IN (?)", []model.AppointmentStatus{model.AppointmentStatusCanceled})
@@ -201,11 +204,33 @@ func (r *appointmentRepository) GetByDay(ctx context.Context, clinicID uuid.UUID
 
 // Update updates an appointment
 func (r *appointmentRepository) Update(ctx context.Context, appointment *model.Appointment) error {
-	result := r.db.WithContext(ctx).Omit("Patient", "Professional").Save(appointment)
-	if result.Error != nil {
-		return errors.ErrInternalInstance.WithError(result.Error)
-	}
-	return nil
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// Save the core appointment but omit relations so we handle Procedures explicitly
+		if err := tx.Omit("Patient", "Professional", "Procedures").Save(appointment).Error; err != nil {
+			return errors.ErrInternalInstance.WithError(err)
+		}
+
+		// Explicitly replace the Procedures association
+		// Rather than rely on GORM's Replace (which attempts to NULL the foreign key causing constraint failures),
+		// we explicitly delete old records for this appointment and insert the new ones.
+		if appointment.Procedures != nil {
+			if err := tx.Where("appointment_id = ?", appointment.ID).Delete(&model.AppointmentProcedure{}).Error; err != nil {
+				return errors.ErrInternalInstance.WithError(err)
+			}
+
+			if len(appointment.Procedures) > 0 {
+				// Ensure the appointment_id is mapped correctly and insert the new procedures
+				for i := range appointment.Procedures {
+					appointment.Procedures[i].AppointmentID = appointment.ID
+				}
+				if err := tx.Create(&appointment.Procedures).Error; err != nil {
+					return errors.ErrInternalInstance.WithError(err)
+				}
+			}
+		}
+
+		return nil
+	})
 }
 
 // Delete soft-deletes an appointment
@@ -248,6 +273,7 @@ func (r *appointmentRepository) GetByPatient(ctx context.Context, patientID, cli
 
 	result := r.db.WithContext(ctx).
 		Preload("Professional").
+		Preload("Procedures.Procedure").
 		Where("patient_id = ? AND clinic_id = ? AND deleted_at IS NULL", patientID, clinicID).
 		Order("start_time DESC").
 		Limit(limit).
