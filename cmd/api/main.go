@@ -97,7 +97,9 @@ import (
 	waitlist_service "github.com/aseno/backend/pkg/waitlist/service"
 	"github.com/aseno/backend/pkg/whatsapp/agent"
 	whatsapp_classifier "github.com/aseno/backend/pkg/whatsapp/classifier"
+	whatsapp_client "github.com/aseno/backend/pkg/whatsapp/client"
 	whatsapp_evolution "github.com/aseno/backend/pkg/whatsapp/client/evolution"
+	whatsapp_gupshup "github.com/aseno/backend/pkg/whatsapp/client/gupshup"
 	whatsapp_waha "github.com/aseno/backend/pkg/whatsapp/client/waha"
 	"github.com/aseno/backend/pkg/whatsapp/conversation"
 	whatsapp_handler "github.com/aseno/backend/pkg/whatsapp/handler"
@@ -186,39 +188,37 @@ func main() {
 		notificationSvc,
 	)
 
-	// Initialize WhatsApp client (Evolution API or WAHA)
-	var whatsappClient whatsapp_service.WhatsAppClient
-	whatsappProvider := cfg.GetWhatsAppProvider()
-
-	switch whatsappProvider {
-	case "waha":
-		if cfg.GetWahaAPIURL() != "" {
-			whatsappClient = whatsapp_waha.NewWahaClient(whatsapp_waha.Config{
-				BaseURL: cfg.GetWahaAPIURL(),
-				APIKey:  cfg.GetWahaAPIKey(),
-			})
-			logger.Println("WhatsApp (WAHA) client initialized")
-		}
-	case "evolution":
-		if cfg.GetEvolutionAPIURL() != "" {
-			whatsappClient = whatsapp_evolution.NewEvolutionClient(whatsapp_evolution.Config{
-				BaseURL:    cfg.GetEvolutionAPIURL(),
-				APIKey:     cfg.GetEvolutionAPIKey(),
-				WebhookURL: cfg.GetWhatsAppWebhookURL(),
-			})
-			logger.Println("WhatsApp (Evolution API) client initialized")
-		}
-	default:
-		// Default to Evolution for backwards compatibility
-		if cfg.GetEvolutionAPIURL() != "" {
-			whatsappClient = whatsapp_evolution.NewEvolutionClient(whatsapp_evolution.Config{
-				BaseURL:    cfg.GetEvolutionAPIURL(),
-				APIKey:     cfg.GetEvolutionAPIKey(),
-				WebhookURL: cfg.GetWhatsAppWebhookURL(),
-			})
-			logger.Println("WhatsApp (Evolution API) client initialized (default)")
-		}
+	// Initialize WhatsApp clients for all available providers
+	var evolutionClient whatsapp_service.WhatsAppClient
+	if cfg.GetEvolutionAPIURL() != "" {
+		evolutionClient = whatsapp_evolution.NewEvolutionClient(whatsapp_evolution.Config{
+			BaseURL:    cfg.GetEvolutionAPIURL(),
+			APIKey:     cfg.GetEvolutionAPIKey(),
+			WebhookURL: cfg.GetWhatsAppWebhookURL(),
+		})
+		logger.Println("WhatsApp (Evolution API) client initialized")
 	}
+
+	var wahaClient whatsapp_service.WhatsAppClient
+	if cfg.GetWahaAPIURL() != "" {
+		wahaClient = whatsapp_waha.NewWahaClient(whatsapp_waha.Config{
+			BaseURL: cfg.GetWahaAPIURL(),
+			APIKey:  cfg.GetWahaAPIKey(),
+		})
+		logger.Println("WhatsApp (WAHA) client initialized")
+	}
+
+	// Initialize Gupshup/Official Client natively (using empty config properties until specific keys are added to cfg)
+	gupshupClient := whatsapp_gupshup.NewGupshupClient(whatsapp_gupshup.Config{})
+	logger.Println("WhatsApp (Gupshup/Official) client initialized")
+
+	// Wrap clients in ProxyClient to route requests dynamically per clinic
+	whatsappClient := whatsapp_client.NewProxyClient(
+		whatsappConnRepo,
+		evolutionClient,
+		wahaClient,
+		gupshupClient,
+	)
 
 	// Initialize Asaas client (Payment Gateway)
 	var asaasClient *payment_asaas.Client
@@ -894,10 +894,10 @@ func setupRouter(
 		// WhatsApp webhook (public, validated by secret)
 		if whatsappHandler != nil {
 			v1.POST("/whatsapp/webhook", whatsappHandler.Webhook)
-			v1.POST("/whatsapp/webhook/:secret", func(c *gin.Context) {
-				// Handled by the handler itself
-				whatsappHandler.Webhook(c)
-			})
+			v1.POST("/whatsapp/webhook/evolution", whatsappHandler.WebhookEvolution)
+			v1.POST("/whatsapp/webhook/waha", whatsappHandler.WebhookWaha)
+			v1.POST("/whatsapp/webhook/gupshup", whatsappHandler.WebhookGupshup)
+			v1.POST("/whatsapp/webhook/:secret", whatsappHandler.WebhookWithSecret)
 		}
 
 		// Payment webhook (public, validated by secret)

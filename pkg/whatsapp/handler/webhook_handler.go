@@ -19,6 +19,7 @@ import (
 	clinic_model "github.com/aseno/backend/pkg/clinic/model"
 	clinic_repository "github.com/aseno/backend/pkg/clinic/repository"
 	"github.com/aseno/backend/pkg/whatsapp/client/evolution"
+	"github.com/aseno/backend/pkg/whatsapp/client/gupshup"
 	"github.com/aseno/backend/pkg/whatsapp/client/waha"
 	"github.com/aseno/backend/pkg/whatsapp/model"
 	whatsapp_repository "github.com/aseno/backend/pkg/whatsapp/repository"
@@ -29,9 +30,14 @@ import (
 type WhatsAppHandler interface {
 	RegisterRoutes(router gin.IRouter)
 	Webhook(c *gin.Context)
+	WebhookWithSecret(c *gin.Context)
+	WebhookEvolution(c *gin.Context)
+	WebhookWaha(c *gin.Context)
+	WebhookGupshup(c *gin.Context)
 	GetStatus(c *gin.Context)
 	GetQRCode(c *gin.Context)
 	Connect(c *gin.Context)
+	Configure(c *gin.Context)
 	Disconnect(c *gin.Context)
 	SendMessage(c *gin.Context)
 	SendConfirmation(c *gin.Context)
@@ -77,9 +83,9 @@ func (h *whatsAppHandler) RegisterRoutes(router gin.IRouter) {
 	}
 }
 
-// Webhook handles incoming webhooks from Evolution API
+// Webhook handles incoming webhooks (legacy generic endpoint)
 func (h *whatsAppHandler) Webhook(c *gin.Context) {
-	h.processWebhook(c)
+	h.processWebhook(c, h.provider)
 }
 
 // WebhookWithSecret handles webhooks with a secret in the URL
@@ -89,11 +95,26 @@ func (h *whatsAppHandler) WebhookWithSecret(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, errors.ToResponse(errors.ErrUnauthorizedInstance))
 		return
 	}
-	h.processWebhook(c)
+	h.processWebhook(c, h.provider)
+}
+
+// WebhookEvolution handles incoming webhooks specifically for Evolution
+func (h *whatsAppHandler) WebhookEvolution(c *gin.Context) {
+	h.processWebhook(c, "evolution")
+}
+
+// WebhookWaha handles incoming webhooks specifically for WAHA
+func (h *whatsAppHandler) WebhookWaha(c *gin.Context) {
+	h.processWebhook(c, "waha")
+}
+
+// WebhookGupshup handles incoming webhooks specifically for Gupshup/Official
+func (h *whatsAppHandler) WebhookGupshup(c *gin.Context) {
+	h.processWebhook(c, "gupshup")
 }
 
 // processWebhook processes the webhook payload
-func (h *whatsAppHandler) processWebhook(c *gin.Context) {
+func (h *whatsAppHandler) processWebhook(c *gin.Context, provider string) {
 	body, err := io.ReadAll(c.Request.Body)
 	if err != nil {
 		logger.Printf("Error reading webhook body: %v", err)
@@ -115,11 +136,13 @@ func (h *whatsAppHandler) processWebhook(c *gin.Context) {
 
 	// Parse the webhook payload based on provider
 	var parsed *model.ParsedIncomingMessage
-	switch h.provider {
+	switch provider {
 	case "waha":
 		parsed, err = waha.ParseWebhookPayload(body)
 	case "evolution":
 		parsed, err = evolution.ParseWebhookPayload(body)
+	case "gupshup":
+		parsed, err = gupshup.ParseWebhookPayload(body)
 	default:
 		// Default to Evolution for backwards compatibility
 		parsed, err = evolution.ParseWebhookPayload(body)
@@ -199,7 +222,10 @@ func (h *whatsAppHandler) Connect(c *gin.Context) {
 			return
 		}
 	} else {
-		instance = conn.Instance
+		instance = ""
+		if conn.Instance != nil {
+			instance = *conn.Instance
+		}
 	}
 
 	// Attempt to create the instance. The Evolution API may return the QR code directly
@@ -313,6 +339,71 @@ func (h *whatsAppHandler) Connect(c *gin.Context) {
 	c.JSON(http.StatusOK, qrCode)
 }
 
+// ConfigRequest payload for saving WhatsApp config
+type ConfigRequest struct {
+	Provider      string  `json:"provider"`
+	WabaID        *string `json:"waba_id,omitempty"`
+	PhoneNumberID *string `json:"phone_number_id,omitempty"`
+	Token         *string `json:"token,omitempty"`
+	Instance      *string `json:"instance,omitempty"`
+}
+
+// Configure saves WhatsApp connection info like Provider, Token, etc.
+func (h *whatsAppHandler) Configure(c *gin.Context) {
+	clinic, err := h.getClinicFromContext(c)
+	if err != nil {
+		c.JSON(errors.GetStatusCode(err), errors.ToResponse(err))
+		return
+	}
+
+	var req ConfigRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, errors.ToResponse(errors.ErrBadRequestInstance.WithMessage("Payload inválido")))
+		return
+	}
+
+	conn, connErr := h.connRepo.GetActiveByClinicID(c.Request.Context(), clinic.ID)
+
+	if connErr != nil {
+		// Create new
+		conn = &model.WhatsAppConnection{
+			ClinicID:      clinic.ID,
+			Provider:      req.Provider,
+			WabaID:        req.WabaID,
+			PhoneNumberID: req.PhoneNumberID,
+			Token:         req.Token,
+			Instance:      req.Instance,
+			Connected:     req.Provider != "EVOLUTION", // Evolution requer ler o QR Code
+		}
+		if err := h.connRepo.Create(c.Request.Context(), conn); err != nil {
+			c.JSON(errors.GetStatusCode(err), errors.ToResponse(err))
+			return
+		}
+	} else {
+		// Update existing
+		conn.Provider = req.Provider
+		conn.WabaID = req.WabaID
+		conn.PhoneNumberID = req.PhoneNumberID
+		conn.Token = req.Token
+		if req.Instance != nil {
+			conn.Instance = req.Instance
+		}
+
+		if req.Provider == "EVOLUTION" {
+			conn.Connected = false
+		} else {
+			conn.Connected = true
+		}
+
+		if err := h.connRepo.Update(c.Request.Context(), conn); err != nil {
+			c.JSON(errors.GetStatusCode(err), errors.ToResponse(err))
+			return
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{"status": "success"})
+}
+
 // Disconnect disconnects the clinic's WhatsApp instance
 func (h *whatsAppHandler) Disconnect(c *gin.Context) {
 	clinic, err := h.getClinicFromContext(c)
@@ -329,7 +420,11 @@ func (h *whatsAppHandler) Disconnect(c *gin.Context) {
 	}
 
 	// Logout from Evolution API
-	if err := h.service.Logout(c.Request.Context(), conn.Instance); err != nil {
+	var instance string
+	if conn.Instance != nil {
+		instance = *conn.Instance
+	}
+	if err := h.service.Logout(c.Request.Context(), instance); err != nil {
 		logger.Printf("Error logging out from Evolution: %v", err)
 	}
 
@@ -361,15 +456,23 @@ func (h *whatsAppHandler) GetStatus(c *gin.Context) {
 		return
 	}
 
-	status, err := h.service.GetConnectionStatus(c.Request.Context(), conn.Instance)
+	instance := ""
+	if conn.Instance != nil {
+		instance = *conn.Instance
+	}
+
+	status, err := h.service.GetConnectionStatus(c.Request.Context(), instance)
 	if err != nil {
 		// If error, assume disconnected
 		c.JSON(http.StatusOK, &model.ConnectionStatus{
-			Instance: conn.Instance,
+			Instance: instance,
+			Provider: conn.Provider,
 			State:    "disconnected",
 		})
 		return
 	}
+
+	status.Provider = conn.Provider
 
 	// Update connection status if changed
 	isConnected := status.State == "open"
@@ -395,7 +498,11 @@ func (h *whatsAppHandler) GetQRCode(c *gin.Context) {
 		return
 	}
 
-	qrCode, err := h.service.GetQRCode(c.Request.Context(), conn.Instance)
+	instance := ""
+	if conn.Instance != nil {
+		instance = *conn.Instance
+	}
+	qrCode, err := h.service.GetQRCode(c.Request.Context(), instance)
 	if err != nil {
 		statusCode := errors.GetStatusCode(err)
 		c.JSON(statusCode, errors.ToResponse(err))
@@ -441,8 +548,12 @@ func (h *whatsAppHandler) SendMessage(c *gin.Context) {
 	}, "", "  ")
 	logger.Printf("[SendMessage] Sending message:\n%s", string(reqJSON))
 
+	instance := ""
+	if conn.Instance != nil {
+		instance = *conn.Instance
+	}
 	// Send the message
-	resp, err := h.service.SendTextMessage(c.Request.Context(), conn.Instance, req.Phone, req.Message)
+	resp, err := h.service.SendTextMessage(c.Request.Context(), instance, req.Phone, req.Message)
 	if err != nil {
 		logger.Printf("[SendMessage] Error sending message: %v", err)
 		statusCode := errors.GetStatusCode(err)
@@ -481,7 +592,11 @@ func (h *whatsAppHandler) SendConfirmation(c *gin.Context) {
 
 	req.ClinicID = clinic.ID
 
-	if err := h.service.SendConfirmationMessage(c.Request.Context(), conn.Instance, &req); err != nil {
+	instance := ""
+	if conn.Instance != nil {
+		instance = *conn.Instance
+	}
+	if err := h.service.SendConfirmationMessage(c.Request.Context(), instance, &req); err != nil {
 		statusCode := errors.GetStatusCode(err)
 		c.JSON(statusCode, errors.ToResponse(err))
 		return
@@ -521,7 +636,11 @@ func (h *whatsAppHandler) SendReminder(c *gin.Context) {
 
 	req.ClinicID = clinic.ID
 
-	if err := h.service.SendReminderMessage(c.Request.Context(), conn.Instance, &req.ReminderMessage); err != nil {
+	instance := ""
+	if conn.Instance != nil {
+		instance = *conn.Instance
+	}
+	if err := h.service.SendReminderMessage(c.Request.Context(), instance, &req.ReminderMessage); err != nil {
 		statusCode := errors.GetStatusCode(err)
 		c.JSON(statusCode, errors.ToResponse(err))
 		return

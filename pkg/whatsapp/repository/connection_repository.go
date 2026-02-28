@@ -15,6 +15,7 @@ type WhatsAppConnectionRepository interface {
 	Create(ctx context.Context, conn *model.WhatsAppConnection) error
 	GetActiveByClinicID(ctx context.Context, clinicID uuid.UUID) (*model.WhatsAppConnection, error)
 	GetByInstance(ctx context.Context, instance string) (*model.WhatsAppConnection, error)
+	Update(ctx context.Context, conn *model.WhatsAppConnection) error
 	UpdateConnected(ctx context.Context, clinicID uuid.UUID, connected bool) error
 	UpsertInstance(ctx context.Context, clinicID uuid.UUID, instance string) error
 }
@@ -32,6 +33,15 @@ func NewWhatsAppConnectionRepository(db *gorm.DB) WhatsAppConnectionRepository {
 // Create creates a new WhatsApp connection record
 func (r *whatsAppConnectionRepository) Create(ctx context.Context, conn *model.WhatsAppConnection) error {
 	result := r.db.WithContext(ctx).Create(conn)
+	if result.Error != nil {
+		return errors.ErrInternalInstance.WithError(result.Error)
+	}
+	return nil
+}
+
+// Update updates an existing WhatsApp connection record
+func (r *whatsAppConnectionRepository) Update(ctx context.Context, conn *model.WhatsAppConnection) error {
+	result := r.db.WithContext(ctx).Save(conn)
 	if result.Error != nil {
 		return errors.ErrInternalInstance.WithError(result.Error)
 	}
@@ -89,7 +99,7 @@ func (r *whatsAppConnectionRepository) UpsertInstance(ctx context.Context, clini
 		// No active connection exists — create one
 		conn := &model.WhatsAppConnection{
 			ClinicID:  clinicID,
-			Instance:  instance,
+			Instance:  &instance,
 			Connected: false,
 			IsActive:  true,
 		}
@@ -99,7 +109,7 @@ func (r *whatsAppConnectionRepository) UpsertInstance(ctx context.Context, clini
 	// Update the instance name of the existing connection
 	result := r.db.WithContext(ctx).
 		Model(existing).
-		Update("instance", instance)
+		Update("instance", &instance)
 	if result.Error != nil {
 		return errors.ErrInternalInstance.WithError(result.Error)
 	}

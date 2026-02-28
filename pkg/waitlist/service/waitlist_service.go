@@ -300,12 +300,17 @@ func (s *waitlistService) ProcessCancelledAppointment(ctx context.Context, clini
 	// Build and send WhatsApp message
 	message := s.buildSlotOfferMessage(entry.PatientName, professionalName, clinic.Name, slotTime, entry.OriginalAppointmentID != nil)
 
+	instance := ""
+	if conn != nil && conn.Instance != nil {
+		instance = *conn.Instance
+	}
+
 	if s.messageQueue != nil && s.messageQueue.IsConnected() {
 		job := &queue.MessageJob{
 			ID:            uuid.New().String(),
 			ClinicID:      clinicID.String(),
 			AppointmentID: "", // No appointment yet
-			Instance:      conn.Instance,
+			Instance:      instance,
 			Phone:         entry.PatientWhatsApp,
 			PatientName:   entry.PatientName,
 			Message:       message,
@@ -524,11 +529,16 @@ func (s *waitlistService) sendConfirmationMessage(ctx context.Context, clinicID 
 		professionalName,
 	)
 
+	instance := ""
+	if conn != nil && conn.Instance != nil {
+		instance = *conn.Instance
+	}
+
 	job := &queue.MessageJob{
 		ID:            uuid.New().String(),
 		ClinicID:      clinicID.String(),
 		AppointmentID: "",
-		Instance:      conn.Instance,
+		Instance:      instance,
 		Phone:         entryWithPatient.PatientWhatsApp,
 		PatientName:   entryWithPatient.PatientName,
 		Message:       message,

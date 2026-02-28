@@ -20,10 +20,12 @@ func TestWhatsAppConnection_Defaults(t *testing.T) {
 	conn := WhatsAppConnection{}
 	assert.Equal(t, uuid.Nil, conn.ID)
 	assert.Equal(t, uuid.Nil, conn.ClinicID)
-	assert.Equal(t, "", conn.Instance)
+	assert.Nil(t, conn.Instance)
 	assert.False(t, conn.Connected, "Connected deve ser false por padrão")
 	assert.False(t, conn.IsActive, "IsActive deve ser false por padrão")
 }
+
+func ptr[T any](v T) *T { return &v }
 
 // TestWhatsAppConnection_Fields verifica que os campos são corretamente atribuíveis.
 func TestWhatsAppConnection_Fields(t *testing.T) {
@@ -33,7 +35,7 @@ func TestWhatsAppConnection_Fields(t *testing.T) {
 	conn := WhatsAppConnection{
 		ID:        uuid.New(),
 		ClinicID:  clinicID,
-		Instance:  "minha-clinica-abc12345",
+		Instance:  ptr("minha-clinica-abc12345"),
 		Connected: true,
 		IsActive:  true,
 		CreatedAt: now,
@@ -41,7 +43,7 @@ func TestWhatsAppConnection_Fields(t *testing.T) {
 	}
 
 	assert.Equal(t, clinicID, conn.ClinicID)
-	assert.Equal(t, "minha-clinica-abc12345", conn.Instance)
+	assert.Equal(t, "minha-clinica-abc12345", *conn.Instance)
 	assert.True(t, conn.Connected)
 	assert.True(t, conn.IsActive)
 }
@@ -55,7 +57,7 @@ func TestWhatsAppConnection_IsActiveSemantics(t *testing.T) {
 	active := WhatsAppConnection{
 		ID:       uuid.New(),
 		ClinicID: clinicID,
-		Instance: "instance-ativa",
+		Instance: ptr("instance-ativa"),
 		IsActive: true,
 	}
 
@@ -63,7 +65,7 @@ func TestWhatsAppConnection_IsActiveSemantics(t *testing.T) {
 	inactive := WhatsAppConnection{
 		ID:       uuid.New(),
 		ClinicID: clinicID,
-		Instance: "instance-velha",
+		Instance: ptr("instance-velha"),
 		IsActive: false,
 	}
 
@@ -80,7 +82,7 @@ func TestWhatsAppConnection_ConnectedDisconnected(t *testing.T) {
 	conn := WhatsAppConnection{
 		ID:        uuid.New(),
 		ClinicID:  uuid.New(),
-		Instance:  "test-instance",
+		Instance:  ptr("test-instance"),
 		Connected: true,
 		IsActive:  true,
 	}
