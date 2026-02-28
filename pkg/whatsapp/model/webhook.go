@@ -123,6 +123,7 @@ type ClassifiedMessage struct {
 // ConnectionStatus represents the WhatsApp connection status
 type ConnectionStatus struct {
 	Instance   string `json:"instance"`
+	Provider   string `json:"provider,omitempty"`
 	State      string `json:"state"`
 	StatusCode int    `json:"status_code"`
 }

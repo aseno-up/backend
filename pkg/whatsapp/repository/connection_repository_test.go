@@ -57,13 +57,15 @@ func (r *inMemoryConnRepo) GetByInstance(_ context.Context, instance string) (*m
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	for _, c := range r.store {
-		if c.Instance == instance {
+		if c.Instance != nil && *c.Instance == instance {
 			cp := *c
 			return &cp, nil
 		}
 	}
 	return nil, errors.ErrNotFoundInstance.WithMessage("WhatsApp connection not found")
 }
+
+func ptr[T any](v T) *T { return &v }
 
 func (r *inMemoryConnRepo) UpdateConnected(_ context.Context, clinicID uuid.UUID, connected bool) error {
 	r.mu.Lock()
@@ -82,14 +84,14 @@ func (r *inMemoryConnRepo) UpsertInstance(ctx context.Context, clinicID uuid.UUI
 	if err != nil {
 		return r.Create(ctx, &model.WhatsAppConnection{
 			ClinicID:  clinicID,
-			Instance:  instance,
+			Instance:  &instance,
 			Connected: false,
 			IsActive:  true,
 		})
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.store[existing.ID].Instance = instance
+	r.store[existing.ID].Instance = &instance
 	return nil
 }
 
@@ -105,7 +107,7 @@ func TestConnRepo_Create(t *testing.T) {
 
 	conn := &model.WhatsAppConnection{
 		ClinicID:  clinicID,
-		Instance:  "test-instance",
+		Instance:  ptr("test-instance"),
 		Connected: false,
 		IsActive:  true,
 	}
@@ -123,14 +125,14 @@ func TestConnRepo_GetActiveByClinicID_Exists(t *testing.T) {
 
 	require.NoError(t, repo.Create(ctx, &model.WhatsAppConnection{
 		ClinicID: clinicID,
-		Instance: "minha-clinica-abc12345",
+		Instance: ptr("minha-clinica-abc12345"),
 		IsActive: true,
 	}))
 
 	got, err := repo.GetActiveByClinicID(ctx, clinicID)
 	require.NoError(t, err)
 	assert.Equal(t, clinicID, got.ClinicID)
-	assert.Equal(t, "minha-clinica-abc12345", got.Instance)
+	assert.Equal(t, "minha-clinica-abc12345", *got.Instance)
 }
 
 // TestConnRepo_GetActiveByClinicID_NotFound retorna erro quando não existe conexão ativa.
@@ -152,7 +154,7 @@ func TestConnRepo_GetActiveByClinicID_InactiveIgnored(t *testing.T) {
 	// Cria conexão inativa (histórico)
 	require.NoError(t, repo.Create(ctx, &model.WhatsAppConnection{
 		ClinicID: clinicID,
-		Instance: "instance-velha",
+		Instance: ptr("instance-velha"),
 		IsActive: false,
 	}))
 
@@ -169,13 +171,13 @@ func TestConnRepo_GetByInstance_Exists(t *testing.T) {
 
 	require.NoError(t, repo.Create(ctx, &model.WhatsAppConnection{
 		ClinicID: clinicID,
-		Instance: instance,
+		Instance: ptr(instance),
 		IsActive: true,
 	}))
 
 	got, err := repo.GetByInstance(ctx, instance)
 	require.NoError(t, err)
-	assert.Equal(t, instance, got.Instance)
+	assert.Equal(t, instance, *got.Instance)
 	assert.Equal(t, clinicID, got.ClinicID)
 }
 
@@ -197,7 +199,7 @@ func TestConnRepo_UpdateConnected_ToTrue(t *testing.T) {
 
 	require.NoError(t, repo.Create(ctx, &model.WhatsAppConnection{
 		ClinicID:  clinicID,
-		Instance:  "test-instance",
+		Instance:  ptr("test-instance"),
 		Connected: false,
 		IsActive:  true,
 	}))
@@ -218,7 +220,7 @@ func TestConnRepo_UpdateConnected_ToFalse(t *testing.T) {
 
 	require.NoError(t, repo.Create(ctx, &model.WhatsAppConnection{
 		ClinicID:  clinicID,
-		Instance:  "test-instance",
+		Instance:  ptr("test-instance"),
 		Connected: true,
 		IsActive:  true,
 	}))
@@ -253,7 +255,7 @@ func TestConnRepo_UpsertInstance_Cria_Quando_Inexistente(t *testing.T) {
 
 	got, err := repo.GetActiveByClinicID(ctx, clinicID)
 	require.NoError(t, err)
-	assert.Equal(t, instance, got.Instance)
+	assert.Equal(t, instance, *got.Instance)
 	assert.True(t, got.IsActive)
 	assert.False(t, got.Connected, "nova conexão deve iniciar desconectada")
 }
@@ -267,7 +269,7 @@ func TestConnRepo_UpsertInstance_Atualiza_Quando_Existente(t *testing.T) {
 
 	require.NoError(t, repo.Create(ctx, &model.WhatsAppConnection{
 		ClinicID:  clinicID,
-		Instance:  "instance-antiga",
+		Instance:  ptr("instance-antiga"),
 		Connected: true,
 		IsActive:  true,
 	}))
@@ -277,7 +279,7 @@ func TestConnRepo_UpsertInstance_Atualiza_Quando_Existente(t *testing.T) {
 
 	got, err := repo.GetActiveByClinicID(ctx, clinicID)
 	require.NoError(t, err)
-	assert.Equal(t, "instance-nova", got.Instance, "instance deve ter sido atualizada")
+	assert.Equal(t, "instance-nova", *got.Instance, "instance deve ter sido atualizada")
 }
 
 // TestConnRepo_MultiTenantIsolation verifica que conexões de clínicas
@@ -291,12 +293,12 @@ func TestConnRepo_MultiTenantIsolation(t *testing.T) {
 
 	require.NoError(t, repo.Create(ctx, &model.WhatsAppConnection{
 		ClinicID: clinicA,
-		Instance: "instance-clinica-a",
+		Instance: ptr("instance-clinica-a"),
 		IsActive: true,
 	}))
 	require.NoError(t, repo.Create(ctx, &model.WhatsAppConnection{
 		ClinicID: clinicB,
-		Instance: "instance-clinica-b",
+		Instance: ptr("instance-clinica-b"),
 		IsActive: true,
 	}))
 

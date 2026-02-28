@@ -27,6 +27,8 @@ func init() {
 	gin.SetMode(gin.TestMode)
 }
 
+func ptr[T any](v T) *T { return &v }
+
 // ---------------------------------------------------------------------------
 // Stubs
 // ---------------------------------------------------------------------------
@@ -72,7 +74,9 @@ func (r *stubConnRepo) Create(_ context.Context, conn *whatsapp_model.WhatsAppCo
 	}
 	cp := *conn
 	r.activeConn = &cp
-	r.byInstance[conn.Instance] = &cp
+	if conn.Instance != nil {
+		r.byInstance[*conn.Instance] = &cp
+	}
 	return nil
 }
 
@@ -97,11 +101,21 @@ func (r *stubConnRepo) UpdateConnected(_ context.Context, _ uuid.UUID, connected
 	return nil
 }
 
+func (r *stubConnRepo) Update(_ context.Context, conn *whatsapp_model.WhatsAppConnection) error {
+	if conn == nil {
+		return nil
+	}
+	if conn.Instance != nil {
+		r.byInstance[*conn.Instance] = conn
+	}
+	return nil
+}
+
 func (r *stubConnRepo) UpsertInstance(_ context.Context, clinicID uuid.UUID, instance string) error {
 	conn := &whatsapp_model.WhatsAppConnection{
 		ID:       uuid.New(),
 		ClinicID: clinicID,
-		Instance: instance,
+		Instance: ptr(instance),
 		IsActive: true,
 	}
 	r.activeConn = conn
@@ -343,7 +357,7 @@ func TestSendMessage_SemWhatsAppConectado(t *testing.T) {
 	connRepo.activeConn = &whatsapp_model.WhatsAppConnection{
 		ID:        uuid.New(),
 		ClinicID:  clinicID,
-		Instance:  "test-instance",
+		Instance:  ptr("test-instance"),
 		Connected: false,
 		IsActive:  true,
 	}
@@ -369,7 +383,7 @@ func TestSendMessage_ComWhatsAppConectado(t *testing.T) {
 	connRepo.activeConn = &whatsapp_model.WhatsAppConnection{
 		ID:        uuid.New(),
 		ClinicID:  clinicID,
-		Instance:  "test-instance",
+		Instance:  ptr("test-instance"),
 		Connected: true,
 		IsActive:  true,
 	}
