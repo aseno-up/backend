@@ -3,8 +3,8 @@ package handler
 import (
 	"errors"
 	"net/http"
-	"strconv"
 
+	"github.com/aseno/backend/pkg/pagination"
 	"github.com/aseno/backend/pkg/procedure/model"
 	"github.com/aseno/backend/pkg/procedure/service"
 	"github.com/gin-gonic/gin"
@@ -80,10 +80,13 @@ func (h *ProcedureHandler) List(c *gin.Context) {
 		return
 	}
 
-	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	perPage, _ := strconv.Atoi(c.DefaultQuery("per_page", "10"))
+	var filter pagination.Filter
+	if err := c.ShouldBindQuery(&filter); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Parâmetros de paginação/filtro inválidos"})
+		return
+	}
 
-	resp, err := h.service.List(clinicID, page, perPage)
+	resp, err := h.service.List(c.Request.Context(), clinicID, filter)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return

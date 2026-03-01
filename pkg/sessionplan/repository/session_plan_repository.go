@@ -8,6 +8,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/aseno/backend/internal/errors"
+	"github.com/aseno/backend/pkg/pagination"
 	"github.com/aseno/backend/pkg/sessionplan/model"
 )
 
@@ -15,7 +16,7 @@ import (
 type SessionPlanRepository interface {
 	Create(ctx context.Context, plan *model.SessionPlan) error
 	GetByID(ctx context.Context, clinicID, id uuid.UUID) (*model.SessionPlan, error)
-	GetByClinic(ctx context.Context, clinicID uuid.UUID, page, perPage int, status *model.PlanStatus) ([]*model.SessionPlan, int64, error)
+	GetByClinic(ctx context.Context, clinicID uuid.UUID, filter pagination.Filter) ([]*model.SessionPlan, int64, error)
 	GetByPatient(ctx context.Context, clinicID, patientID uuid.UUID) ([]*model.SessionPlan, error)
 	GetByProfessional(ctx context.Context, clinicID, professionalID uuid.UUID) ([]*model.SessionPlan, error)
 	GetActivePlansForGeneration(ctx context.Context, generateBefore time.Time) ([]*model.SessionPlan, error)
@@ -65,22 +66,40 @@ func (r *sessionPlanRepository) GetByID(ctx context.Context, clinicID, id uuid.U
 }
 
 // GetByClinic retrieves all session plans for a clinic with pagination
-func (r *sessionPlanRepository) GetByClinic(ctx context.Context, clinicID uuid.UUID, page, perPage int, status *model.PlanStatus) ([]*model.SessionPlan, int64, error) {
+func (r *sessionPlanRepository) GetByClinic(ctx context.Context, clinicID uuid.UUID, filter pagination.Filter) ([]*model.SessionPlan, int64, error) {
 	var plans []*model.SessionPlan
 	var total int64
 
 	query := r.db.WithContext(ctx).Model(&model.SessionPlan{}).Where("clinic_id = ?", clinicID)
 
-	if status != nil {
-		query = query.Where("status = ?", *status)
+	if filter.Status != "" && filter.Status != "all" {
+		query = query.Where("status = ?", filter.Status)
+	}
+
+	if filter.Search != "" {
+		searchQuery := "%" + filter.Search + "%"
+		query = query.Where("title ILIKE ?", searchQuery)
 	}
 
 	if err := query.Count(&total).Error; err != nil {
 		return nil, 0, errors.ErrInternalInstance.WithError(err)
 	}
 
-	offset := (page - 1) * perPage
-	if err := query.Order("created_at DESC").Offset(offset).Limit(perPage).Find(&plans).Error; err != nil {
+	// Sorting
+	switch filter.SortBy {
+	case "created_desc":
+		query = query.Order("created_at DESC")
+	case "created_asc":
+		query = query.Order("created_at ASC")
+	case "title_asc":
+		query = query.Order("title ASC")
+	case "title_desc":
+		query = query.Order("title DESC")
+	default:
+		query = query.Order("created_at DESC")
+	}
+
+	if err := query.Scopes(pagination.Paginate(&filter)).Find(&plans).Error; err != nil {
 		return nil, 0, errors.ErrInternalInstance.WithError(err)
 	}
 

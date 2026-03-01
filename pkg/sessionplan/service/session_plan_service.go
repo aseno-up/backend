@@ -11,6 +11,7 @@ import (
 	"github.com/aseno/backend/internal/errors"
 	appointment_model "github.com/aseno/backend/pkg/appointment/model"
 	appointment_repository "github.com/aseno/backend/pkg/appointment/repository"
+	"github.com/aseno/backend/pkg/pagination"
 	"github.com/aseno/backend/pkg/sessionplan/model"
 	"github.com/aseno/backend/pkg/sessionplan/repository"
 )
@@ -19,7 +20,7 @@ import (
 type SessionPlanService interface {
 	Create(ctx context.Context, clinicID uuid.UUID, req *model.CreateSessionPlanRequest) (*model.SessionPlan, error)
 	GetByID(ctx context.Context, clinicID, id uuid.UUID) (*model.SessionPlan, error)
-	List(ctx context.Context, clinicID uuid.UUID, page, perPage int, status *model.PlanStatus) ([]*model.SessionPlan, int64, error)
+	List(ctx context.Context, clinicID uuid.UUID, filter pagination.Filter) (pagination.Response[*model.SessionPlanResponse], error)
 	GetByPatient(ctx context.Context, clinicID, patientID uuid.UUID) ([]*model.SessionPlan, error)
 	Update(ctx context.Context, clinicID, id uuid.UUID, req *model.UpdateSessionPlanRequest) (*model.SessionPlan, error)
 	Pause(ctx context.Context, clinicID, id uuid.UUID) error
@@ -126,14 +127,35 @@ func (s *sessionPlanService) GetByID(ctx context.Context, clinicID, id uuid.UUID
 }
 
 // List retrieves all session plans for a clinic
-func (s *sessionPlanService) List(ctx context.Context, clinicID uuid.UUID, page, perPage int, status *model.PlanStatus) ([]*model.SessionPlan, int64, error) {
-	if page < 1 {
-		page = 1
+func (s *sessionPlanService) List(ctx context.Context, clinicID uuid.UUID, filter pagination.Filter) (pagination.Response[*model.SessionPlanResponse], error) {
+	if filter.Page < 1 {
+		filter.Page = 1
 	}
-	if perPage < 1 || perPage > 100 {
-		perPage = 20
+	if filter.Limit < 1 || filter.Limit > 100 {
+		filter.Limit = 10
 	}
-	return s.repo.GetByClinic(ctx, clinicID, page, perPage, status)
+
+	plans, total, err := s.repo.GetByClinic(ctx, clinicID, filter)
+	if err != nil {
+		return pagination.Response[*model.SessionPlanResponse]{}, err
+	}
+
+	data := make([]*model.SessionPlanResponse, len(plans))
+	for i, plan := range plans {
+		data[i] = plan.ToResponse()
+	}
+
+	totalPages := int((total + int64(filter.Limit) - 1) / int64(filter.Limit))
+
+	return pagination.Response[*model.SessionPlanResponse]{
+		Data: data,
+		Meta: pagination.Meta{
+			Page:       filter.Page,
+			Limit:      filter.Limit,
+			Total:      total,
+			TotalPages: totalPages,
+		},
+	}, nil
 }
 
 // GetByPatient retrieves all session plans for a patient

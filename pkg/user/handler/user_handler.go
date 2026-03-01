@@ -2,12 +2,12 @@ package handler
 
 import (
 	"net/http"
-	"strconv"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 
 	"github.com/aseno/backend/internal/errors"
+	"github.com/aseno/backend/pkg/pagination"
 	"github.com/aseno/backend/pkg/user/model"
 	"github.com/aseno/backend/pkg/user/service"
 )
@@ -57,7 +57,7 @@ func (h *userHandler) RegisterRoutes(router gin.IRouter) {
 // @Produce json
 // @Param page query int false "Page number" default(1)
 // @Param per_page query int false "Items per page" default(20)
-// @Success 200 {object} service.UserListResponse
+// @Success 200 {object} pagination.Response[*model.UserResponse]
 // @Failure 401 {object} errors.AppError
 // @Failure 403 {object} errors.AppError
 // @Router /users [get]
@@ -68,17 +68,20 @@ func (h *userHandler) ListUsers(c *gin.Context) {
 		return
 	}
 
-	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	perPage, _ := strconv.Atoi(c.DefaultQuery("per_page", "20"))
+	var filter pagination.Filter
+	if err := c.ShouldBindQuery(&filter); err != nil {
+		c.JSON(http.StatusBadRequest, errors.ToResponse(errors.ErrValidationInstance.WithError(err)))
+		return
+	}
 
-	response, err := h.userService.ListUsers(c.Request.Context(), clinicID.(uuid.UUID), page, perPage)
+	resp, err := h.userService.ListUsers(c.Request.Context(), clinicID.(uuid.UUID), filter)
 	if err != nil {
 		statusCode := errors.GetStatusCode(err)
 		c.JSON(statusCode, errors.ToResponse(err))
 		return
 	}
 
-	c.JSON(http.StatusOK, response)
+	c.JSON(http.StatusOK, resp)
 }
 
 // GetUser handles getting a user by ID

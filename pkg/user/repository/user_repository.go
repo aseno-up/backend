@@ -7,6 +7,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/aseno/backend/internal/errors"
+	"github.com/aseno/backend/pkg/pagination"
 	"github.com/aseno/backend/pkg/user/model"
 )
 
@@ -16,7 +17,7 @@ type UserRepository interface {
 	GetByID(ctx context.Context, id uuid.UUID) (*model.User, error)
 	GetByEmail(ctx context.Context, email string) (*model.User, error)
 	GetByGoogleID(ctx context.Context, googleID string) (*model.User, error)
-	GetByClinicID(ctx context.Context, clinicID uuid.UUID, limit, offset int) ([]*model.User, int64, error)
+	GetByClinicID(ctx context.Context, clinicID uuid.UUID, filter pagination.Filter) ([]*model.User, int64, error)
 	Update(ctx context.Context, user *model.User) error
 	Delete(ctx context.Context, id uuid.UUID) error
 	ExistsByEmail(ctx context.Context, email string) (bool, error)
@@ -83,25 +84,42 @@ func (r *userRepository) GetByGoogleID(ctx context.Context, googleID string) (*m
 }
 
 // GetByClinicID retrieves users belonging to a clinic
-func (r *userRepository) GetByClinicID(ctx context.Context, clinicID uuid.UUID, limit, offset int) ([]*model.User, int64, error) {
+func (r *userRepository) GetByClinicID(ctx context.Context, clinicID uuid.UUID, filter pagination.Filter) ([]*model.User, int64, error) {
 	var users []*model.User
 	var total int64
 
+	query := r.db.WithContext(ctx).Model(&model.User{}).Where("clinic_id = ? AND deleted_at IS NULL", clinicID)
+
+	if filter.Search != "" {
+		searchQuery := "%" + filter.Search + "%"
+		query = query.Where("name ILIKE ? OR email ILIKE ?", searchQuery, searchQuery)
+	}
+
+	if filter.Status != "" && filter.Status != "all" {
+		query = query.Where("role = ?", filter.Status) // reusing status argument for role logic in the frontend
+	}
+
 	// Count total
-	if err := r.db.WithContext(ctx).
-		Model(&model.User{}).
-		Where("clinic_id = ? AND deleted_at IS NULL", clinicID).
-		Count(&total).Error; err != nil {
+	if err := query.Count(&total).Error; err != nil {
 		return nil, 0, errors.ErrInternalInstance.WithError(err)
 	}
 
+	// Sorting
+	switch filter.SortBy {
+	case "created_desc":
+		query = query.Order("created_at DESC")
+	case "created_asc":
+		query = query.Order("created_at ASC")
+	case "name_asc":
+		query = query.Order("name ASC")
+	case "name_desc":
+		query = query.Order("name DESC")
+	default:
+		query = query.Order("created_at DESC")
+	}
+
 	// Get paginated results
-	result := r.db.WithContext(ctx).
-		Where("clinic_id = ? AND deleted_at IS NULL", clinicID).
-		Order("created_at DESC").
-		Limit(limit).
-		Offset(offset).
-		Find(&users)
+	result := query.Scopes(pagination.Paginate(&filter)).Find(&users)
 
 	if result.Error != nil {
 		return nil, 0, errors.ErrInternalInstance.WithError(result.Error)

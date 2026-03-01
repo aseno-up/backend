@@ -2,12 +2,12 @@ package handler
 
 import (
 	"net/http"
-	"strconv"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 
 	"github.com/aseno/backend/internal/errors"
+	"github.com/aseno/backend/pkg/pagination"
 	"github.com/aseno/backend/pkg/professional/model"
 	"github.com/aseno/backend/pkg/professional/service"
 )
@@ -89,11 +89,19 @@ func (h *professionalHandler) GetByID(c *gin.Context) {
 func (h *professionalHandler) List(c *gin.Context) {
 	clinicID, _ := c.Get("clinic_id")
 
-	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	perPage, _ := strconv.Atoi(c.DefaultQuery("per_page", "20"))
-	activeOnly := c.DefaultQuery("active_only", "false") == "true"
+	var filter pagination.Filter
+	if err := c.ShouldBindQuery(&filter); err != nil {
+		c.JSON(http.StatusBadRequest, errors.ToResponse(errors.ErrValidationInstance.WithError(err)))
+		return
+	}
 
-	result, err := h.service.List(c.Request.Context(), clinicID.(uuid.UUID), activeOnly, page, perPage)
+	// Legacy support for activeOnly (if front-end didn't send ?status=active)
+	activeOnly := c.DefaultQuery("active_only", "")
+	if activeOnly == "true" && filter.Status == "" {
+		filter.Status = "active"
+	}
+
+	result, err := h.service.List(c.Request.Context(), clinicID.(uuid.UUID), filter)
 	if err != nil {
 		statusCode := errors.GetStatusCode(err)
 		c.JSON(statusCode, errors.ToResponse(err))

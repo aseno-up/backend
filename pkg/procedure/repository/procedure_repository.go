@@ -1,6 +1,9 @@
 package repository
 
 import (
+	"context"
+
+	"github.com/aseno/backend/pkg/pagination"
 	"github.com/aseno/backend/pkg/procedure/model"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -13,7 +16,7 @@ type ProcedureRepository interface {
 	GetByIDs(ids []uuid.UUID, clinicID uuid.UUID) ([]*model.Procedure, error)
 	Update(procedure *model.Procedure) error
 	Delete(id uuid.UUID, clinicID uuid.UUID) error
-	List(clinicID uuid.UUID, page, perPage int) ([]*model.Procedure, int64, error)
+	List(ctx context.Context, clinicID uuid.UUID, filter pagination.Filter) ([]*model.Procedure, int64, error)
 }
 
 type procedureRepository struct {
@@ -59,19 +62,50 @@ func (r *procedureRepository) Delete(id uuid.UUID, clinicID uuid.UUID) error {
 }
 
 // List retrieves a paginated list of procedures for a clinic
-func (r *procedureRepository) List(clinicID uuid.UUID, page, perPage int) ([]*model.Procedure, int64, error) {
+func (r *procedureRepository) List(ctx context.Context, clinicID uuid.UUID, filter pagination.Filter) ([]*model.Procedure, int64, error) {
 	var procedures []*model.Procedure
 	var total int64
 
-	query := r.db.Model(&model.Procedure{}).Where("clinic_id = ?", clinicID)
+	query := r.db.WithContext(ctx).Model(&model.Procedure{}).Where("clinic_id = ?", clinicID)
+
+	// Search
+	if filter.Search != "" {
+		searchQuery := "%" + filter.Search + "%"
+		query = query.Where("name ILIKE ?", searchQuery)
+	}
+
+	// Status (Ativo/Inativo) - Se aplicavel (assumindo que procedure tem is_active se o status vier, se nao tiver, ignorar)
+	// Como a UI de Procedimentos pode n ter Inativos, deixamos preparado
+	switch filter.Status {
+	case "active":
+		query = query.Where("is_active = ?", true)
+	case "inactive":
+		query = query.Where("is_active = ?", false)
+	}
 
 	err := query.Count(&total).Error
 	if err != nil {
 		return nil, 0, err
 	}
 
-	offset := (page - 1) * perPage
-	err = query.Order("name ASC").Offset(offset).Limit(perPage).Find(&procedures).Error
+	// Sorting
+	switch filter.SortBy {
+	case "name_asc":
+		query = query.Order("name ASC")
+	case "name_desc":
+		query = query.Order("name DESC")
+	case "price_asc":
+		query = query.Order("price ASC")
+	case "price_desc":
+		query = query.Order("price DESC")
+	case "created_desc":
+		query = query.Order("created_at DESC")
+	case "created_asc":
+		query = query.Order("created_at ASC")
+	default:
+		query = query.Order("name ASC")
+	}
 
+	err = query.Scopes(pagination.Paginate(&filter)).Find(&procedures).Error
 	return procedures, total, err
 }

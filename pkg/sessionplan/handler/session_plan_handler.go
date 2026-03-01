@@ -7,6 +7,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/aseno/backend/internal/errors"
+	"github.com/aseno/backend/pkg/pagination"
 	"github.com/aseno/backend/pkg/sessionplan/model"
 	"github.com/aseno/backend/pkg/sessionplan/service"
 )
@@ -103,13 +104,6 @@ func (h *sessionPlanHandler) GetByID(c *gin.Context) {
 	c.JSON(http.StatusOK, plan.ToResponse())
 }
 
-// ListRequest represents the query parameters for listing session plans
-type ListRequest struct {
-	Page    int    `form:"page"`
-	PerPage int    `form:"per_page"`
-	Status  string `form:"status"`
-}
-
 // List retrieves all session plans for a clinic
 func (h *sessionPlanHandler) List(c *gin.Context) {
 	clinicID, exists := c.Get("clinic_id")
@@ -118,50 +112,20 @@ func (h *sessionPlanHandler) List(c *gin.Context) {
 		return
 	}
 
-	var req ListRequest
-	if err := c.ShouldBindQuery(&req); err != nil {
+	var filter pagination.Filter
+	if err := c.ShouldBindQuery(&filter); err != nil {
 		c.JSON(http.StatusBadRequest, errors.ToResponse(errors.ErrValidationInstance.WithError(err)))
 		return
 	}
 
-	if req.Page < 1 {
-		req.Page = 1
-	}
-	if req.PerPage < 1 || req.PerPage > 100 {
-		req.PerPage = 20
-	}
-
-	var status *model.PlanStatus
-	if req.Status != "" {
-		s := model.PlanStatus(req.Status)
-		status = &s
-	}
-
-	plans, total, err := h.service.List(c.Request.Context(), clinicID.(uuid.UUID), req.Page, req.PerPage, status)
+	resp, err := h.service.List(c.Request.Context(), clinicID.(uuid.UUID), filter)
 	if err != nil {
 		statusCode := errors.GetStatusCode(err)
 		c.JSON(statusCode, errors.ToResponse(err))
 		return
 	}
 
-	// Convert to response
-	responses := make([]*model.SessionPlanResponse, len(plans))
-	for i, plan := range plans {
-		responses[i] = plan.ToResponse()
-	}
-
-	totalPages := int(total) / req.PerPage
-	if int(total)%req.PerPage > 0 {
-		totalPages++
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"data":        responses,
-		"total":       total,
-		"page":        req.Page,
-		"per_page":    req.PerPage,
-		"total_pages": totalPages,
-	})
+	c.JSON(http.StatusOK, resp)
 }
 
 // GetByPatient retrieves all session plans for a patient

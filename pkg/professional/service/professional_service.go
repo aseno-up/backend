@@ -3,12 +3,12 @@ package service
 import (
 	"context"
 	"fmt"
-	"math"
 
 	"github.com/google/uuid"
 
 	"github.com/aseno/backend/internal/errors"
 	clinic_repository "github.com/aseno/backend/pkg/clinic/repository"
+	"github.com/aseno/backend/pkg/pagination"
 	"github.com/aseno/backend/pkg/professional/model"
 	"github.com/aseno/backend/pkg/professional/repository"
 	settings_service "github.com/aseno/backend/pkg/settings/service"
@@ -18,7 +18,7 @@ import (
 type ProfessionalService interface {
 	Create(ctx context.Context, clinicID uuid.UUID, req *model.CreateProfessionalRequest) (*model.ProfessionalResponse, error)
 	GetByID(ctx context.Context, id, clinicID uuid.UUID) (*model.ProfessionalResponse, error)
-	List(ctx context.Context, clinicID uuid.UUID, activeOnly bool, page, perPage int) (*model.ProfessionalListResponse, error)
+	List(ctx context.Context, clinicID uuid.UUID, filter pagination.Filter) (pagination.Response[*model.ProfessionalResponse], error)
 	Update(ctx context.Context, id, clinicID uuid.UUID, req *model.UpdateProfessionalRequest) (*model.ProfessionalResponse, error)
 	Delete(ctx context.Context, id, clinicID uuid.UUID) error
 }
@@ -47,8 +47,8 @@ func (s *professionalService) Create(ctx context.Context, clinicID uuid.UUID, re
 		return nil, err
 	}
 
-	// Count active professionals
-	_, count, err := s.repo.GetByClinicID(ctx, clinicID, true, 1, 0)
+	// Count active professionals (using default limit 1 to just get count)
+	_, count, err := s.repo.List(ctx, clinicID, pagination.Filter{Limit: 1, Status: "active"})
 	if err != nil {
 		return nil, err
 	}
@@ -115,19 +115,10 @@ func (s *professionalService) GetByID(ctx context.Context, id, clinicID uuid.UUI
 }
 
 // List retrieves a paginated list of professionals
-func (s *professionalService) List(ctx context.Context, clinicID uuid.UUID, activeOnly bool, page, perPage int) (*model.ProfessionalListResponse, error) {
-	if page < 1 {
-		page = 1
-	}
-	if perPage < 1 || perPage > 100 {
-		perPage = 20
-	}
-
-	offset := (page - 1) * perPage
-
-	professionals, total, err := s.repo.GetByClinicID(ctx, clinicID, activeOnly, perPage, offset)
+func (s *professionalService) List(ctx context.Context, clinicID uuid.UUID, filter pagination.Filter) (pagination.Response[*model.ProfessionalResponse], error) {
+	professionals, total, err := s.repo.List(ctx, clinicID, filter)
 	if err != nil {
-		return nil, err
+		return pagination.Response[*model.ProfessionalResponse]{}, err
 	}
 
 	data := make([]*model.ProfessionalResponse, len(professionals))
@@ -135,14 +126,9 @@ func (s *professionalService) List(ctx context.Context, clinicID uuid.UUID, acti
 		data[i] = p.ToResponse()
 	}
 
-	totalPages := int(math.Ceil(float64(total) / float64(perPage)))
-
-	return &model.ProfessionalListResponse{
-		Data:       data,
-		Total:      total,
-		Page:       page,
-		PerPage:    perPage,
-		TotalPages: totalPages,
+	return pagination.Response[*model.ProfessionalResponse]{
+		Data: data,
+		Meta: pagination.NewMeta(filter.GetPage(), filter.GetLimit(), total),
 	}, nil
 }
 
