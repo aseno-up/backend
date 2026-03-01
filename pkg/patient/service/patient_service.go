@@ -2,13 +2,13 @@ package service
 
 import (
 	"context"
-	"math"
 
 	"github.com/google/uuid"
 
 	"github.com/aseno/backend/internal/errors"
 	clinic_model "github.com/aseno/backend/pkg/clinic/model"
 	clinic_repository "github.com/aseno/backend/pkg/clinic/repository"
+	"github.com/aseno/backend/pkg/pagination"
 	"github.com/aseno/backend/pkg/patient/model"
 	"github.com/aseno/backend/pkg/patient/repository"
 )
@@ -17,8 +17,7 @@ import (
 type PatientService interface {
 	Create(ctx context.Context, clinicID uuid.UUID, req *model.CreatePatientRequest) (*model.PatientResponse, error)
 	GetByID(ctx context.Context, id, clinicID uuid.UUID) (*model.PatientResponse, error)
-	List(ctx context.Context, clinicID uuid.UUID, page, perPage int) (*model.PatientListResponse, error)
-	Search(ctx context.Context, clinicID uuid.UUID, query string, page, perPage int) (*model.PatientListResponse, error)
+	List(ctx context.Context, clinicID uuid.UUID, filter pagination.Filter) (pagination.Response[*model.PatientResponse], error)
 	Update(ctx context.Context, id, clinicID uuid.UUID, req *model.UpdatePatientRequest) (*model.PatientResponse, error)
 	Delete(ctx context.Context, id, clinicID uuid.UUID) error
 	// Risk assessment methods
@@ -111,19 +110,10 @@ func (s *patientService) GetByID(ctx context.Context, id, clinicID uuid.UUID) (*
 }
 
 // List retrieves a paginated list of patients
-func (s *patientService) List(ctx context.Context, clinicID uuid.UUID, page, perPage int) (*model.PatientListResponse, error) {
-	if page < 1 {
-		page = 1
-	}
-	if perPage < 1 || perPage > 100 {
-		perPage = 20
-	}
-
-	offset := (page - 1) * perPage
-
-	patients, total, err := s.repo.GetByClinicID(ctx, clinicID, perPage, offset)
+func (s *patientService) List(ctx context.Context, clinicID uuid.UUID, filter pagination.Filter) (pagination.Response[*model.PatientResponse], error) {
+	patients, total, err := s.repo.List(ctx, clinicID, filter)
 	if err != nil {
-		return nil, err
+		return pagination.Response[*model.PatientResponse]{}, err
 	}
 
 	data := make([]*model.PatientResponse, len(patients))
@@ -139,54 +129,9 @@ func (s *patientService) List(ctx context.Context, clinicID uuid.UUID, page, per
 		data[i] = resp
 	}
 
-	totalPages := int(math.Ceil(float64(total) / float64(perPage)))
-
-	return &model.PatientListResponse{
-		Data:       data,
-		Total:      total,
-		Page:       page,
-		PerPage:    perPage,
-		TotalPages: totalPages,
-	}, nil
-}
-
-// Search searches patients by name, phone, or email
-func (s *patientService) Search(ctx context.Context, clinicID uuid.UUID, query string, page, perPage int) (*model.PatientListResponse, error) {
-	if page < 1 {
-		page = 1
-	}
-	if perPage < 1 || perPage > 100 {
-		perPage = 20
-	}
-
-	offset := (page - 1) * perPage
-
-	patients, total, err := s.repo.Search(ctx, clinicID, query, perPage, offset)
-	if err != nil {
-		return nil, err
-	}
-
-	data := make([]*model.PatientResponse, len(patients))
-
-	// Check plan once for the list
-	allowed, _ := s.checkPlanForRiskData(ctx, clinicID)
-
-	for i, p := range patients {
-		resp := p.ToResponse()
-		if !allowed {
-			maskRiskData(resp)
-		}
-		data[i] = resp
-	}
-
-	totalPages := int(math.Ceil(float64(total) / float64(perPage)))
-
-	return &model.PatientListResponse{
-		Data:       data,
-		Total:      total,
-		Page:       page,
-		PerPage:    perPage,
-		TotalPages: totalPages,
+	return pagination.Response[*model.PatientResponse]{
+		Data: data,
+		Meta: pagination.NewMeta(filter.GetPage(), filter.GetLimit(), total),
 	}, nil
 }
 

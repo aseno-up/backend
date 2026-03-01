@@ -7,6 +7,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/aseno/backend/internal/errors"
+	"github.com/aseno/backend/pkg/pagination"
 	"github.com/aseno/backend/pkg/patient/model"
 )
 
@@ -14,8 +15,7 @@ import (
 type PatientRepository interface {
 	Create(ctx context.Context, patient *model.Patient) error
 	GetByID(ctx context.Context, id, clinicID uuid.UUID) (*model.Patient, error)
-	GetByClinicID(ctx context.Context, clinicID uuid.UUID, limit, offset int) ([]*model.Patient, int64, error)
-	Search(ctx context.Context, clinicID uuid.UUID, query string, limit, offset int) ([]*model.Patient, int64, error)
+	List(ctx context.Context, clinicID uuid.UUID, filter pagination.Filter) ([]*model.Patient, int64, error)
 	Update(ctx context.Context, patient *model.Patient) error
 	Delete(ctx context.Context, id, clinicID uuid.UUID) error
 	GetByPhone(ctx context.Context, phone string, clinicID uuid.UUID) (*model.Patient, error)
@@ -60,55 +60,49 @@ func (r *patientRepository) GetByID(ctx context.Context, id, clinicID uuid.UUID)
 	return &patient, nil
 }
 
-// GetByClinicID retrieves patients belonging to a clinic
-func (r *patientRepository) GetByClinicID(ctx context.Context, clinicID uuid.UUID, limit, offset int) ([]*model.Patient, int64, error) {
+// List retrieves and filters patients belonging to a clinic
+func (r *patientRepository) List(ctx context.Context, clinicID uuid.UUID, filter pagination.Filter) ([]*model.Patient, int64, error) {
 	var patients []*model.Patient
 	var total int64
 
 	query := r.db.WithContext(ctx).Model(&model.Patient{}).
 		Where("clinic_id = ? AND deleted_at IS NULL", clinicID)
 
+	if filter.Search != "" {
+		searchPattern := "%" + filter.Search + "%"
+		query = query.Where("name ILIKE ? OR phone ILIKE ? OR email ILIKE ? OR whatsapp ILIKE ? OR document ILIKE ?",
+			searchPattern, searchPattern, searchPattern, searchPattern, searchPattern)
+	}
+
+	switch filter.Status {
+	case "complete":
+		query = query.Where("email != '' AND phone != '' AND document != ''")
+	case "incomplete":
+		query = query.Where("email = '' OR phone = '' OR document = ''")
+	}
+
 	// Count total
 	if err := query.Count(&total).Error; err != nil {
 		return nil, 0, errors.ErrInternalInstance.WithError(err)
 	}
 
+	// Determine sort order
+	order := "name ASC"
+	switch filter.SortBy {
+	case "name_desc":
+		order = "name DESC"
+	case "created_asc":
+		order = "created_at ASC"
+	case "created_desc":
+		order = "created_at DESC"
+	case "risk_desc":
+		order = "no_show_risk DESC"
+	}
+
 	// Get paginated results
 	result := query.
-		Order("name ASC").
-		Limit(limit).
-		Offset(offset).
-		Find(&patients)
-
-	if result.Error != nil {
-		return nil, 0, errors.ErrInternalInstance.WithError(result.Error)
-	}
-
-	return patients, total, nil
-}
-
-// Search searches patients by name, phone, or email
-func (r *patientRepository) Search(ctx context.Context, clinicID uuid.UUID, query string, limit, offset int) ([]*model.Patient, int64, error) {
-	var patients []*model.Patient
-	var total int64
-
-	searchPattern := "%" + query + "%"
-
-	baseQuery := r.db.WithContext(ctx).Model(&model.Patient{}).
-		Where("clinic_id = ? AND deleted_at IS NULL", clinicID).
-		Where("name ILIKE ? OR phone ILIKE ? OR email ILIKE ? OR whatsapp ILIKE ?",
-			searchPattern, searchPattern, searchPattern, searchPattern)
-
-	// Count total
-	if err := baseQuery.Count(&total).Error; err != nil {
-		return nil, 0, errors.ErrInternalInstance.WithError(err)
-	}
-
-	// Get paginated results
-	result := baseQuery.
-		Order("name ASC").
-		Limit(limit).
-		Offset(offset).
+		Order(order).
+		Scopes(pagination.Paginate(&filter)).
 		Find(&patients)
 
 	if result.Error != nil {

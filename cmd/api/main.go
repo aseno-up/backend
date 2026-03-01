@@ -57,6 +57,7 @@ import (
 	notification_model "github.com/aseno/backend/pkg/notification/model"
 	notification_repository "github.com/aseno/backend/pkg/notification/repository"
 	notification_service "github.com/aseno/backend/pkg/notification/service"
+	"github.com/aseno/backend/pkg/pagination"
 	patient_handler "github.com/aseno/backend/pkg/patient/handler"
 	patient_model "github.com/aseno/backend/pkg/patient/model"
 	patient_repository "github.com/aseno/backend/pkg/patient/repository"
@@ -1204,7 +1205,7 @@ type professionalListerAdapter struct {
 }
 
 func (a *professionalListerAdapter) ListAvailable(ctx context.Context, clinicID uuid.UUID, specialty string) ([]*whatsapp_service.ProfessionalInfo, error) {
-	professionals, _, err := a.professionalRepo.GetByClinicID(ctx, clinicID, true, 100, 0)
+	professionals, _, err := a.professionalRepo.List(ctx, clinicID, pagination.Filter{Status: "active", Limit: 100})
 	if err != nil {
 		return nil, err
 	}
@@ -1474,7 +1475,7 @@ type aiAgentProfessionalListerAdapter struct {
 
 func (a *aiAgentProfessionalListerAdapter) ListAvailable(ctx context.Context, clinicID uuid.UUID, specialty string) ([]*tools.ProfessionalInfo, error) {
 	// Use List method with activeOnly=true to get available professionals
-	listResp, err := a.professionalService.List(ctx, clinicID, true, 1, 100)
+	listResp, err := a.professionalService.List(ctx, clinicID, pagination.Filter{Status: "active", Page: 1, Limit: 100})
 	if err != nil {
 		return nil, err
 	}
@@ -1561,7 +1562,7 @@ func (a *aiAgentSlotFinderAdapter) GetAvailableSlotsMultipleProfessionals(ctx co
 
 	// Se nenhum profissional especificado, buscar todos ativos da clínica (INV-001)
 	if len(professionalIDs) == 0 {
-		professionals, _, err := a.professionalRepo.GetByClinicID(ctx, clinicID, true, 100, 0)
+		professionals, _, err := a.professionalRepo.List(ctx, clinicID, pagination.Filter{Status: "active", Limit: 100})
 		if err != nil {
 			return nil, fmt.Errorf("failed to list professionals: %w", err)
 		}

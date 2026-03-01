@@ -1,8 +1,10 @@
 package service
 
 import (
+	"context"
 	"errors"
 
+	"github.com/aseno/backend/pkg/pagination"
 	"github.com/aseno/backend/pkg/procedure/model"
 	"github.com/aseno/backend/pkg/procedure/repository"
 	"github.com/google/uuid"
@@ -19,7 +21,7 @@ type ProcedureService interface {
 	GetByID(clinicID, id uuid.UUID) (*model.ProcedureResponse, error)
 	Update(clinicID, id uuid.UUID, req *model.UpdateProcedureRequest) (*model.ProcedureResponse, error)
 	Delete(clinicID, id uuid.UUID) error
-	List(clinicID uuid.UUID, page, perPage int) (*model.ProcedureListResponse, error)
+	List(ctx context.Context, clinicID uuid.UUID, filter pagination.Filter) (pagination.Response[*model.ProcedureResponse], error)
 }
 
 type procedureService struct {
@@ -86,30 +88,33 @@ func (s *procedureService) Delete(clinicID, id uuid.UUID) error {
 	return nil
 }
 
-func (s *procedureService) List(clinicID uuid.UUID, page, perPage int) (*model.ProcedureListResponse, error) {
-	if page < 1 {
-		page = 1
+func (s *procedureService) List(ctx context.Context, clinicID uuid.UUID, filter pagination.Filter) (pagination.Response[*model.ProcedureResponse], error) {
+	if filter.Page < 1 {
+		filter.Page = 1
 	}
-	if perPage < 1 || perPage > 100 {
-		perPage = 10
+	if filter.Limit < 1 || filter.Limit > 100 {
+		filter.Limit = 10
 	}
 
-	procedures, total, err := s.repo.List(clinicID, page, perPage)
+	procedures, total, err := s.repo.List(ctx, clinicID, filter)
 	if err != nil {
-		return nil, err
+		return pagination.Response[*model.ProcedureResponse]{}, err
 	}
 
-	resp := &model.ProcedureListResponse{
-		Data:       make([]*model.ProcedureResponse, len(procedures)),
-		Total:      total,
-		Page:       page,
-		PerPage:    perPage,
-		TotalPages: int((total + int64(perPage) - 1) / int64(perPage)),
-	}
-
+	data := make([]*model.ProcedureResponse, len(procedures))
 	for i, proc := range procedures {
-		resp.Data[i] = proc.ToResponse()
+		data[i] = proc.ToResponse()
 	}
 
-	return resp, nil
+	totalPages := int((total + int64(filter.Limit) - 1) / int64(filter.Limit))
+
+	return pagination.Response[*model.ProcedureResponse]{
+		Data: data,
+		Meta: pagination.Meta{
+			Page:       filter.Page,
+			Limit:      filter.Limit,
+			Total:      total,
+			TotalPages: totalPages,
+		},
+	}, nil
 }

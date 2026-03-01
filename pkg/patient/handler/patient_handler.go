@@ -2,12 +2,12 @@ package handler
 
 import (
 	"net/http"
-	"strconv"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 
 	"github.com/aseno/backend/internal/errors"
+	"github.com/aseno/backend/pkg/pagination"
 	"github.com/aseno/backend/pkg/patient/model"
 	"github.com/aseno/backend/pkg/patient/service"
 )
@@ -92,23 +92,17 @@ func (h *patientHandler) GetByID(c *gin.Context) {
 	c.JSON(http.StatusOK, patient)
 }
 
-// List handles listing patients (with optional search)
+// List handles listing patients (with optional search and filters)
 func (h *patientHandler) List(c *gin.Context) {
 	clinicID, _ := c.Get("clinic_id")
 
-	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	perPage, _ := strconv.Atoi(c.DefaultQuery("per_page", "20"))
-	query := c.Query("q")
-
-	var result *model.PatientListResponse
-	var err error
-
-	if query != "" {
-		result, err = h.service.Search(c.Request.Context(), clinicID.(uuid.UUID), query, page, perPage)
-	} else {
-		result, err = h.service.List(c.Request.Context(), clinicID.(uuid.UUID), page, perPage)
+	var filter pagination.Filter
+	if err := c.ShouldBindQuery(&filter); err != nil {
+		c.JSON(http.StatusBadRequest, errors.ToResponse(errors.ErrValidationInstance.WithError(err)))
+		return
 	}
 
+	result, err := h.service.List(c.Request.Context(), clinicID.(uuid.UUID), filter)
 	if err != nil {
 		statusCode := errors.GetStatusCode(err)
 		c.JSON(statusCode, errors.ToResponse(err))

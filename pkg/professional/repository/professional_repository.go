@@ -7,6 +7,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/aseno/backend/internal/errors"
+	"github.com/aseno/backend/pkg/pagination"
 	"github.com/aseno/backend/pkg/professional/model"
 )
 
@@ -14,7 +15,7 @@ import (
 type ProfessionalRepository interface {
 	Create(ctx context.Context, professional *model.Professional) error
 	GetByID(ctx context.Context, id, clinicID uuid.UUID) (*model.Professional, error)
-	GetByClinicID(ctx context.Context, clinicID uuid.UUID, activeOnly bool, limit, offset int) ([]*model.Professional, int64, error)
+	List(ctx context.Context, clinicID uuid.UUID, filter pagination.Filter) ([]*model.Professional, int64, error)
 	Update(ctx context.Context, professional *model.Professional) error
 	Delete(ctx context.Context, id, clinicID uuid.UUID) error
 	GetByUserID(ctx context.Context, userID, clinicID uuid.UUID) (*model.Professional, error)
@@ -54,16 +55,29 @@ func (r *professionalRepository) GetByID(ctx context.Context, id, clinicID uuid.
 	return &professional, nil
 }
 
-// GetByClinicID retrieves professionals belonging to a clinic
-func (r *professionalRepository) GetByClinicID(ctx context.Context, clinicID uuid.UUID, activeOnly bool, limit, offset int) ([]*model.Professional, int64, error) {
+// List retrieves professionals belonging to a clinic using standard pagination filters
+func (r *professionalRepository) List(ctx context.Context, clinicID uuid.UUID, filter pagination.Filter) ([]*model.Professional, int64, error) {
 	var professionals []*model.Professional
 	var total int64
 
 	query := r.db.WithContext(ctx).Model(&model.Professional{}).
 		Where("clinic_id = ? AND deleted_at IS NULL", clinicID)
 
-	if activeOnly {
+	// Status filtering
+	switch filter.Status {
+	case "active":
 		query = query.Where("is_active = ?", true)
+	case "inactive":
+		query = query.Where("is_active = ?", false)
+	}
+
+	// Search string
+	if filter.Search != "" {
+		searchTerm := "%" + filter.Search + "%"
+		query = query.Where(
+			"name ILIKE ? OR email ILIKE ? OR phone ILIKE ? OR specialty ILIKE ?",
+			searchTerm, searchTerm, searchTerm, searchTerm,
+		)
 	}
 
 	// Count total
@@ -71,11 +85,21 @@ func (r *professionalRepository) GetByClinicID(ctx context.Context, clinicID uui
 		return nil, 0, errors.ErrInternalInstance.WithError(err)
 	}
 
+	// Sorting
+	switch filter.SortBy {
+	case "name_desc":
+		query = query.Order("name DESC")
+	case "created_asc":
+		query = query.Order("created_at ASC")
+	case "created_desc":
+		query = query.Order("created_at DESC")
+	default: // "name_asc"
+		query = query.Order("name ASC")
+	}
+
 	// Get paginated results
 	result := query.
-		Order("name ASC").
-		Limit(limit).
-		Offset(offset).
+		Scopes(pagination.Paginate(&filter)).
 		Find(&professionals)
 
 	if result.Error != nil {

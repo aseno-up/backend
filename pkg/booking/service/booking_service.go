@@ -12,6 +12,7 @@ import (
 	"github.com/aseno/backend/pkg/booking/model"
 	clinicModel "github.com/aseno/backend/pkg/clinic/model"
 	notificationModel "github.com/aseno/backend/pkg/notification/model"
+	"github.com/aseno/backend/pkg/pagination"
 	patientModel "github.com/aseno/backend/pkg/patient/model"
 	professionalModel "github.com/aseno/backend/pkg/professional/model"
 )
@@ -23,7 +24,7 @@ type ClinicProvider interface {
 
 // ProfessionalProvider provides professional information
 type ProfessionalProvider interface {
-	GetByClinicID(ctx context.Context, clinicID uuid.UUID, activeOnly bool, limit, offset int) ([]*professionalModel.Professional, int64, error)
+	List(ctx context.Context, clinicID uuid.UUID, filter pagination.Filter) ([]*professionalModel.Professional, int64, error)
 	GetByID(ctx context.Context, id, clinicID uuid.UUID) (*professionalModel.Professional, error)
 }
 
@@ -126,7 +127,7 @@ func (s *bookingService) GetProfessionals(ctx context.Context, slug string) ([]*
 		return nil, errors.ErrValidationInstance.WithMessage("Agendamento online nao habilitado para esta clinica")
 	}
 
-	professionals, _, err := s.professionalRepo.GetByClinicID(ctx, clinic.ID, true, 100, 0)
+	professionals, _, err := s.professionalRepo.List(ctx, clinic.ID, pagination.Filter{Status: "active", Limit: 100})
 	if err != nil {
 		return nil, err
 	}
