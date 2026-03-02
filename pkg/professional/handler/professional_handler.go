@@ -20,6 +20,7 @@ type ProfessionalHandler interface {
 	List(c *gin.Context)
 	Update(c *gin.Context)
 	Delete(c *gin.Context)
+	BulkDelete(c *gin.Context)
 }
 
 // professionalHandler implements ProfessionalHandler
@@ -41,6 +42,7 @@ func (h *professionalHandler) RegisterRoutes(router gin.IRouter) {
 		professionals.GET("/:id", h.GetByID)
 		professionals.PUT("/:id", h.Update)
 		professionals.DELETE("/:id", h.Delete)
+		professionals.POST("/bulk-delete", h.BulkDelete)
 	}
 }
 
@@ -156,4 +158,26 @@ func (h *professionalHandler) Delete(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "Professional deleted successfully"})
+}
+
+// BulkDelete handles deleting multiple professionals
+func (h *professionalHandler) BulkDelete(c *gin.Context) {
+	clinicID, _ := c.Get("clinic_id")
+
+	var req struct {
+		IDs []uuid.UUID `json:"ids" binding:"required,min=1"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, errors.ToResponse(errors.ErrValidationInstance.WithError(err)))
+		return
+	}
+
+	if err := h.service.BulkDelete(c.Request.Context(), req.IDs, clinicID.(uuid.UUID)); err != nil {
+		statusCode := errors.GetStatusCode(err)
+		c.JSON(statusCode, errors.ToResponse(err))
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Professionals deleted successfully"})
 }

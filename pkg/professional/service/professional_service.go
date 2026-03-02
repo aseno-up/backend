@@ -21,6 +21,7 @@ type ProfessionalService interface {
 	List(ctx context.Context, clinicID uuid.UUID, filter pagination.Filter) (pagination.Response[*model.ProfessionalResponse], error)
 	Update(ctx context.Context, id, clinicID uuid.UUID, req *model.UpdateProfessionalRequest) (*model.ProfessionalResponse, error)
 	Delete(ctx context.Context, id, clinicID uuid.UUID) error
+	BulkDelete(ctx context.Context, ids []uuid.UUID, clinicID uuid.UUID) error
 }
 
 // professionalService implements ProfessionalService
@@ -181,4 +182,12 @@ func (s *professionalService) Update(ctx context.Context, id, clinicID uuid.UUID
 // Delete deletes a professional
 func (s *professionalService) Delete(ctx context.Context, id, clinicID uuid.UUID) error {
 	return s.repo.Delete(ctx, id, clinicID)
+}
+
+// BulkDelete soft deletes multiple professionals
+func (s *professionalService) BulkDelete(ctx context.Context, ids []uuid.UUID, clinicID uuid.UUID) error {
+	if err := s.repo.BulkDelete(ctx, ids, clinicID); err != nil {
+		return err
+	}
+	return nil
 }

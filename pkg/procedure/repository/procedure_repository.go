@@ -16,6 +16,7 @@ type ProcedureRepository interface {
 	GetByIDs(ids []uuid.UUID, clinicID uuid.UUID) ([]*model.Procedure, error)
 	Update(procedure *model.Procedure) error
 	Delete(id uuid.UUID, clinicID uuid.UUID) error
+	BulkDelete(ids []uuid.UUID, clinicID uuid.UUID) error
 	List(ctx context.Context, clinicID uuid.UUID, filter pagination.Filter) ([]*model.Procedure, int64, error)
 }
 
@@ -59,6 +60,11 @@ func (r *procedureRepository) Update(procedure *model.Procedure) error {
 // Delete marks a procedure as deleted
 func (r *procedureRepository) Delete(id uuid.UUID, clinicID uuid.UUID) error {
 	return r.db.Where("id = ? AND clinic_id = ?", id, clinicID).Delete(&model.Procedure{}).Error
+}
+
+// BulkDelete marks multiple procedures as deleted
+func (r *procedureRepository) BulkDelete(ids []uuid.UUID, clinicID uuid.UUID) error {
+	return r.db.Where("id IN ? AND clinic_id = ?", ids, clinicID).Delete(&model.Procedure{}).Error
 }
 
 // List retrieves a paginated list of procedures for a clinic

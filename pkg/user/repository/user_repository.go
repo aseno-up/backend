@@ -23,6 +23,7 @@ type UserRepository interface {
 	ExistsByEmail(ctx context.Context, email string) (bool, error)
 	UpdateRefreshToken(ctx context.Context, userID uuid.UUID, token string) error
 	UpdateLastLogin(ctx context.Context, userID uuid.UUID) error
+	BulkDelete(ctx context.Context, clinicID uuid.UUID, ids []uuid.UUID) error
 }
 
 // userRepository implements UserRepository
@@ -149,7 +150,18 @@ func (r *userRepository) Delete(ctx context.Context, id uuid.UUID) error {
 	return nil
 }
 
-// ExistsByEmail checks if a user with the given email exists
+// BulkDelete soft deletes multiple users belonging to a clinic
+func (r *userRepository) BulkDelete(ctx context.Context, clinicID uuid.UUID, ids []uuid.UUID) error {
+	result := r.db.WithContext(ctx).
+		Where("id IN ? AND clinic_id = ?", ids, clinicID).
+		Delete(&model.User{})
+	if result.Error != nil {
+		return errors.ErrInternalInstance.WithError(result.Error)
+	}
+	return nil
+}
+
+// ExistsByEmail checks if an email is already registeredn email exists
 func (r *userRepository) ExistsByEmail(ctx context.Context, email string) (bool, error) {
 	var count int64
 	result := r.db.WithContext(ctx).Model(&model.User{}).Where("email = ? AND deleted_at IS NULL", email).Count(&count)

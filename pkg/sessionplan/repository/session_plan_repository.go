@@ -25,6 +25,7 @@ type SessionPlanRepository interface {
 	IncrementSessionsDone(ctx context.Context, clinicID, id uuid.UUID) error
 	UpdateLastGenerated(ctx context.Context, id uuid.UUID, lastGenerated time.Time) error
 	Delete(ctx context.Context, clinicID, id uuid.UUID) error
+	BulkCancel(ctx context.Context, clinicID uuid.UUID, ids []uuid.UUID) error
 }
 
 // sessionPlanRepository implements SessionPlanRepository
@@ -281,4 +282,15 @@ func (r *sessionPlanRepository) loadRelations(ctx context.Context, plan *model.S
 		Where("id = ?", plan.ProfessionalID).
 		Scan(&professionalName)
 	plan.ProfessionalName = professionalName
+}
+
+// BulkCancel cancels multiple session plans
+func (r *sessionPlanRepository) BulkCancel(ctx context.Context, clinicID uuid.UUID, ids []uuid.UUID) error {
+	if err := r.db.WithContext(ctx).
+		Model(&model.SessionPlan{}).
+		Where("clinic_id = ? AND id IN ? AND status NOT IN ?", clinicID, ids, []model.PlanStatus{model.PlanStatusCancelled, model.PlanStatusCompleted}).
+		Update("status", model.PlanStatusCancelled).Error; err != nil {
+		return errors.ErrInternalInstance.WithError(err)
+	}
+	return nil
 }

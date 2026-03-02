@@ -31,6 +31,7 @@ func (h *ProcedureHandler) RegisterRoutes(r *gin.RouterGroup) {
 		procedures.GET("/:id", h.GetByID)
 		procedures.PUT("/:id", h.Update)
 		procedures.DELETE("/:id", h.Delete)
+		procedures.POST("/bulk-delete", h.BulkDelete)
 	}
 }
 
@@ -179,4 +180,29 @@ func (h *ProcedureHandler) Delete(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "Procedimento removido com sucesso"})
+}
+
+// BulkDelete handles removing multiple procedures
+func (h *ProcedureHandler) BulkDelete(c *gin.Context) {
+	clinicID, err := getClinicID(c)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
+		return
+	}
+
+	var req struct {
+		IDs []uuid.UUID `json:"ids" binding:"required,min=1"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Dados inválidos: " + err.Error()})
+		return
+	}
+
+	if err := h.service.BulkDelete(clinicID, req.IDs); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Procedimentos removidos com sucesso"})
 }

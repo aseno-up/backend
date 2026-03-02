@@ -20,6 +20,7 @@ type PatientHandler interface {
 	List(c *gin.Context)
 	Update(c *gin.Context)
 	Delete(c *gin.Context)
+	BulkDelete(c *gin.Context)
 	// Risk assessment endpoints
 	GetRisk(c *gin.Context)
 	RecalculateRisk(c *gin.Context)
@@ -46,6 +47,7 @@ func (h *patientHandler) RegisterRoutes(router gin.IRouter) {
 		patients.GET("/:id", h.GetByID)
 		patients.PUT("/:id", h.Update)
 		patients.DELETE("/:id", h.Delete)
+		patients.POST("/bulk-delete", h.BulkDelete)
 		patients.GET("/:id/risk", h.GetRisk)
 		patients.POST("/:id/risk/recalculate", h.RecalculateRisk)
 	}
@@ -157,6 +159,28 @@ func (h *patientHandler) Delete(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "Patient deleted successfully"})
+}
+
+// BulkDelete handles deleting multiple patients
+func (h *patientHandler) BulkDelete(c *gin.Context) {
+	clinicID, _ := c.Get("clinic_id")
+
+	var req struct {
+		IDs []uuid.UUID `json:"ids" binding:"required,min=1"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, errors.ToResponse(errors.ErrValidationInstance.WithError(err)))
+		return
+	}
+
+	if err := h.service.BulkDelete(c.Request.Context(), req.IDs, clinicID.(uuid.UUID)); err != nil {
+		statusCode := errors.GetStatusCode(err)
+		c.JSON(statusCode, errors.ToResponse(err))
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Patients deleted successfully"})
 }
 
 // GetRisk handles getting a patient's risk assessment

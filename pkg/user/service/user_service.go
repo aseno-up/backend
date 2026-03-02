@@ -20,6 +20,7 @@ type UserService interface {
 	DeactivateUser(ctx context.Context, clinicID, userID, currentUserID uuid.UUID) error
 	ReactivateUser(ctx context.Context, clinicID, userID uuid.UUID) error
 	RemoveUser(ctx context.Context, clinicID, userID, currentUserID uuid.UUID) error
+	BulkRemoveUsers(ctx context.Context, clinicID uuid.UUID, currentUserID uuid.UUID, userIDs []uuid.UUID) error
 }
 
 // UserListResponse is now deprecated and defined by pagination.Response
@@ -225,4 +226,23 @@ func (s *userService) RemoveUser(ctx context.Context, clinicID, userID, currentU
 	}
 
 	return s.userRepo.Delete(ctx, userID)
+}
+
+// BulkRemoveUsers soft deletes multiple users (skip the current user if they accidentally included themselves)
+func (s *userService) BulkRemoveUsers(ctx context.Context, clinicID uuid.UUID, currentUserID uuid.UUID, userIDs []uuid.UUID) error {
+	var idsToDelete []uuid.UUID
+	for _, id := range userIDs {
+		if id != currentUserID {
+			idsToDelete = append(idsToDelete, id)
+		}
+	}
+
+	if len(idsToDelete) == 0 {
+		return errors.ErrValidationInstance.WithMessage("Não é possível remover a si próprio desta forma")
+	}
+
+	if err := s.userRepo.BulkDelete(ctx, clinicID, idsToDelete); err != nil {
+		return err
+	}
+	return nil
 }

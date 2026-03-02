@@ -24,6 +24,7 @@ type SessionPlanHandler interface {
 	Resume(c *gin.Context)
 	Cancel(c *gin.Context)
 	Delete(c *gin.Context)
+	BulkCancel(c *gin.Context)
 	GenerateAppointments(c *gin.Context)
 }
 
@@ -51,6 +52,7 @@ func (h *sessionPlanHandler) RegisterRoutes(router gin.IRouter) {
 		plans.PUT("/:id/pause", h.Pause)
 		plans.PUT("/:id/resume", h.Resume)
 		plans.PUT("/:id/cancel", h.Cancel)
+		plans.POST("/bulk-cancel", h.BulkCancel)
 		plans.POST("/:id/generate", h.GenerateAppointments)
 		plans.GET("/patient/:patient_id", h.GetByPatient)
 	}
@@ -334,8 +336,31 @@ func (h *sessionPlanHandler) GenerateAppointments(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"message":              "Appointments generated successfully",
-		"appointments_created": count,
-	})
+	c.JSON(http.StatusOK, gin.H{"message": "Appointments generated successfully", "count": count})
+}
+
+// BulkCancel handles cancelling multiple session plans
+func (h *sessionPlanHandler) BulkCancel(c *gin.Context) {
+	clinicID, exists := c.Get("clinic_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, errors.ToResponse(errors.ErrUnauthorizedInstance))
+		return
+	}
+
+	var req struct {
+		IDs []uuid.UUID `json:"ids" binding:"required,min=1"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, errors.ToResponse(errors.ErrValidationInstance.WithError(err)))
+		return
+	}
+
+	if err := h.service.BulkCancel(c.Request.Context(), clinicID.(uuid.UUID), req.IDs); err != nil {
+		statusCode := errors.GetStatusCode(err)
+		c.JSON(statusCode, errors.ToResponse(err))
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Planos de sessão cancelados com sucesso"})
 }

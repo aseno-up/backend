@@ -21,6 +21,7 @@ type ProcedureService interface {
 	GetByID(clinicID, id uuid.UUID) (*model.ProcedureResponse, error)
 	Update(clinicID, id uuid.UUID, req *model.UpdateProcedureRequest) (*model.ProcedureResponse, error)
 	Delete(clinicID, id uuid.UUID) error
+	BulkDelete(clinicID uuid.UUID, ids []uuid.UUID) error
 	List(ctx context.Context, clinicID uuid.UUID, filter pagination.Filter) (pagination.Response[*model.ProcedureResponse], error)
 }
 
@@ -86,6 +87,10 @@ func (s *procedureService) Delete(clinicID, id uuid.UUID) error {
 		return err // Or map to ErrProcedureNotFound based on db error
 	}
 	return nil
+}
+
+func (s *procedureService) BulkDelete(clinicID uuid.UUID, ids []uuid.UUID) error {
+	return s.repo.BulkDelete(ids, clinicID)
 }
 
 func (s *procedureService) List(ctx context.Context, clinicID uuid.UUID, filter pagination.Filter) (pagination.Response[*model.ProcedureResponse], error) {

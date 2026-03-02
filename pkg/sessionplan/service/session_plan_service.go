@@ -27,6 +27,7 @@ type SessionPlanService interface {
 	Resume(ctx context.Context, clinicID, id uuid.UUID) error
 	Cancel(ctx context.Context, clinicID, id uuid.UUID) error
 	Delete(ctx context.Context, clinicID, id uuid.UUID) error
+	BulkCancel(ctx context.Context, clinicID uuid.UUID, ids []uuid.UUID) error
 	GenerateAppointments(ctx context.Context, plan *model.SessionPlan, weeksAhead int) (int, error)
 	GenerateAllPending(ctx context.Context, weeksAhead int) error
 	OnAppointmentCompleted(ctx context.Context, clinicID uuid.UUID, appointmentID uuid.UUID) error
@@ -241,6 +242,11 @@ func (s *sessionPlanService) Cancel(ctx context.Context, clinicID, id uuid.UUID)
 // Delete deletes a session plan
 func (s *sessionPlanService) Delete(ctx context.Context, clinicID, id uuid.UUID) error {
 	return s.repo.Delete(ctx, clinicID, id)
+}
+
+// BulkCancel cancels multiple session plans
+func (s *sessionPlanService) BulkCancel(ctx context.Context, clinicID uuid.UUID, ids []uuid.UUID) error {
+	return s.repo.BulkCancel(ctx, clinicID, ids)
 }
 
 // GenerateAppointments generates appointments for a session plan
