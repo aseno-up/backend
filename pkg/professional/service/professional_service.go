@@ -55,7 +55,11 @@ func (s *professionalService) Create(ctx context.Context, clinicID uuid.UUID, re
 	}
 
 	// Get limit from settings service
-	limit := s.settings.GetPlanLimit(ctx, string(clinic.Plan))
+	planName := "basic"
+	if clinic.Account != nil {
+		planName = string(clinic.Account.Plan)
+	}
+	limit := s.settings.GetPlanLimit(ctx, planName)
 
 	// Check if limit is exceeded (-1 means unlimited)
 	if !s.settings.IsUnlimited(limit) && int(count) >= limit {
@@ -63,7 +67,7 @@ func (s *professionalService) Create(ctx context.Context, clinicID uuid.UUID, re
 		if !s.settings.IsExcessBillingEnabled(ctx) {
 			return nil, errors.ErrValidationInstance.WithMessage(
 				fmt.Sprintf("Limite de %d profissionais do plano %s atingido. Faça upgrade para adicionar mais.",
-					limit, clinic.Plan))
+					limit, planName))
 		}
 		// Future: allow excess with billing (not implemented yet)
 	}

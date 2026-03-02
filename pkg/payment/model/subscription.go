@@ -10,7 +10,7 @@ import (
 // Subscription represents a recurring subscription in Asaas
 type Subscription struct {
 	ID                  uuid.UUID          `json:"id" gorm:"type:uuid;primary_key;default:gen_random_uuid()"`
-	ClinicID            uuid.UUID          `json:"clinic_id" gorm:"type:uuid;not null;index"`
+	AccountID           uuid.UUID          `json:"account_id" gorm:"type:uuid;index"`
 	CustomerID          uuid.UUID          `json:"customer_id" gorm:"type:uuid;not null;index"`
 	AsaasSubscriptionID string             `json:"asaas_subscription_id" gorm:"uniqueIndex;not null"`
 	Value               float64            `json:"value" gorm:"not null"`

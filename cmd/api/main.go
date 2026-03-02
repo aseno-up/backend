@@ -20,6 +20,8 @@ import (
 	"github.com/aseno/backend/internal/queue"
 	redisClient "github.com/aseno/backend/internal/redis"
 	"github.com/aseno/backend/internal/worker"
+	account_model "github.com/aseno/backend/pkg/account/model"
+	account_repository "github.com/aseno/backend/pkg/account/repository"
 	analytics_handler "github.com/aseno/backend/pkg/analytics/handler"
 	analytics_repository "github.com/aseno/backend/pkg/analytics/repository"
 	analytics_service "github.com/aseno/backend/pkg/analytics/service"
@@ -143,6 +145,7 @@ func main() {
 	}
 
 	// Initialize repositories
+	accountRepo := account_repository.NewAccountRepository(db.GetDB())
 	clinicRepo := clinic_repository.NewClinicRepository(db.GetDB())
 	userRepo := user_repository.NewUserRepository(db.GetDB())
 	professionalRepo := professional_repository.NewProfessionalRepository(db.GetDB())
@@ -288,9 +291,9 @@ func main() {
 	// Initialize auth service with or without Google OAuth
 	var authService auth_service.AuthService
 	if googleAuthClient != nil {
-		authService = auth_service.NewAuthServiceWithGoogle(userRepo, clinicRepo, passwordResetRepo, emailVerificationRepo, jwtService, &googleAuthAdapter{client: googleAuthClient}, emailSvc, cfg.GetFrontendURL())
+		authService = auth_service.NewAuthServiceWithGoogle(userRepo, clinicRepo, accountRepo, passwordResetRepo, emailVerificationRepo, jwtService, &googleAuthAdapter{client: googleAuthClient}, emailSvc, cfg.GetFrontendURL())
 	} else {
-		authService = auth_service.NewAuthService(userRepo, clinicRepo, passwordResetRepo, emailVerificationRepo, jwtService, emailSvc, cfg.GetFrontendURL())
+		authService = auth_service.NewAuthService(userRepo, clinicRepo, accountRepo, passwordResetRepo, emailVerificationRepo, jwtService, emailSvc, cfg.GetFrontendURL())
 	}
 	professionalService := professional_service.NewProfessionalService(professionalRepo, clinicRepo, settingsSvc)
 	patientService := patient_service.NewPatientService(patientRepo, clinicRepo)
@@ -428,7 +431,7 @@ func main() {
 	// Initialize Payment service (if Asaas client is configured)
 	var paymentService payment_service.PaymentService
 	if asaasClient != nil {
-		paymentService = payment_service.NewPaymentService(asaasClient, customerRepo, paymentRepo, subscriptionRepo)
+		paymentService = payment_service.NewPaymentService(asaasClient, customerRepo, paymentRepo, subscriptionRepo, clinicRepo)
 
 		// Inject payment service into auth service for subscription creation during registration
 		authService.SetPaymentService(paymentService)
@@ -834,9 +837,11 @@ func setupRouter(
 				whatsappHandler.RegisterRoutes(protected)
 			}
 
-			// Payment routes (protected endpoints)
+			// Payment routes (protected endpoints - requires financial access)
 			if paymentHandler != nil {
-				paymentHandler.RegisterRoutes(protected)
+				billingProtected := protected.Group("")
+				billingProtected.Use(authMiddleware.RequireFinancialAccess())
+				paymentHandler.RegisterRoutes(billingProtected)
 			}
 
 			// Calendar routes (protected endpoints)
@@ -947,6 +952,7 @@ func runMigrations(db *database.Database) error {
 	// Add all models that need migration here
 	// Order matters due to foreign key constraints
 	models := []interface{}{
+		&account_model.Account{},
 		&clinic_model.Clinic{},
 		&user_model.User{},
 		&professional_model.Professional{},
@@ -982,6 +988,46 @@ func runMigrations(db *database.Database) error {
 	if err := db.AutoMigrate(models...); err != nil {
 		return err
 	}
+
+	// Data Migration: Migrando plan, status, e asaas id da tabela clinics para a nova accounts
+	if err := db.GetDB().Exec(`
+		DO $$
+		DECLARE
+			c RECORD;
+			new_account_id UUID;
+			owner_id UUID;
+			column_exists BOOLEAN;
+		BEGIN
+			-- Check se a coluna asaas_customer_id ainda existe na tabela clinics
+			SELECT EXISTS (
+				SELECT FROM information_schema.columns 
+				WHERE table_name = 'clinics' AND column_name = 'asaas_customer_id'
+			) INTO column_exists;
+
+			IF column_exists THEN
+				-- Query dynamic para evitar erro de compilacao se a coluna sumir
+				FOR c IN EXECUTE 'SELECT id, asaas_customer_id, plan, subscription_status, trial_ends_at, subscription_ends_at FROM clinics WHERE account_id IS NULL OR account_id = ''00000000-0000-0000-0000-000000000000'''
+				LOOP
+					-- Encontre o dono clinica
+					SELECT id INTO owner_id FROM users WHERE clinic_id = c.id AND role = 'owner' LIMIT 1;
+					
+					IF owner_id IS NOT NULL THEN
+						new_account_id := gen_random_uuid();
+						
+						INSERT INTO accounts (id, owner_id, asaas_customer_id, plan, subscription_status, trial_ends_at, subscription_ends_at, created_at, updated_at)
+						VALUES (new_account_id, owner_id, c.asaas_customer_id, c.plan, c.subscription_status, c.trial_ends_at, c.subscription_ends_at, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
+						
+						UPDATE clinics SET account_id = new_account_id WHERE id = c.id;
+					END IF;
+				END LOOP;
+			END IF;
+		END $$;
+	`).Error; err != nil {
+		logger.Printf("Data migration error: %v (Pode ser ignorado se já migrado)", err)
+	}
+
+	// Definir account_id como NOT NULL se possível
+	db.GetDB().Exec("ALTER TABLE clinics ALTER COLUMN account_id SET NOT NULL")
 
 	logger.Println("Database migrations completed")
 	return nil

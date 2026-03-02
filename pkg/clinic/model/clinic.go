@@ -6,26 +6,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-)
 
-// SubscriptionStatus represents the subscription state
-type SubscriptionStatus string
-
-const (
-	SubscriptionStatusTrial    SubscriptionStatus = "trial"
-	SubscriptionStatusActive   SubscriptionStatus = "active"
-	SubscriptionStatusPastDue  SubscriptionStatus = "past_due"
-	SubscriptionStatusCanceled SubscriptionStatus = "canceled"
-	SubscriptionStatusExpired  SubscriptionStatus = "expired"
-)
-
-// PlanType represents the subscription plan
-type PlanType string
-
-const (
-	PlanTypeBasic        PlanType = "basic"
-	PlanTypeProfessional PlanType = "professional"
-	PlanTypeAdvanced     PlanType = "advanced"
+	account_model "github.com/aseno/backend/pkg/account/model"
 )
 
 // ClinicType represents the type of clinic account
@@ -38,31 +20,28 @@ const (
 
 // Clinic represents a clinic/tenant in the system
 type Clinic struct {
-	ID                 uuid.UUID          `json:"id" gorm:"type:uuid;primary_key;default:gen_random_uuid()"`
-	Name               string             `json:"name" gorm:"not null"`
-	Slug               string             `json:"slug" gorm:"uniqueIndex;not null"`
-	Type               ClinicType         `json:"type" gorm:"default:'standard'"`
-	Email              string             `json:"email" gorm:"uniqueIndex;not null"`
-	Phone              string             `json:"phone"`
-	Document           string             `json:"document"` // CNPJ or CPF
-	Address            string             `json:"address"`
-	City               string             `json:"city"`
-	State              string             `json:"state"`
-	ZipCode            string             `json:"zip_code"`
-	LogoURL            string             `json:"logo_url"`
-	PrimaryColor       string             `json:"primary_color" gorm:"default:'#7C3AED'"`
-	Plan               PlanType           `json:"plan" gorm:"default:'basic'"`
-	SubscriptionStatus SubscriptionStatus `json:"subscription_status" gorm:"default:'trial'"`
-	TrialEndsAt        *time.Time         `json:"trial_ends_at"`
-	SubscriptionEndsAt *time.Time         `json:"subscription_ends_at"`
-	AsaasCustomerID    string             `json:"-"` // Asaas customer ID (hidden from JSON)
+	ID           uuid.UUID  `json:"id" gorm:"type:uuid;primary_key;default:gen_random_uuid()"`
+	Name         string     `json:"name" gorm:"not null"`
+	Slug         string     `json:"slug" gorm:"uniqueIndex;not null"`
+	Type         ClinicType `json:"type" gorm:"default:'standard'"`
+	Email        string     `json:"email" gorm:"uniqueIndex;not null"`
+	Phone        string     `json:"phone"`
+	Document     string     `json:"document"` // CNPJ or CPF
+	Address      string     `json:"address"`
+	City         string     `json:"city"`
+	State        string     `json:"state"`
+	ZipCode      string     `json:"zip_code"`
+	LogoURL      string     `json:"logo_url"`
+	PrimaryColor string     `json:"primary_color" gorm:"default:'#7C3AED'"`
+	AccountID    uuid.UUID  `json:"account_id" gorm:"type:uuid;index"`
 	// Computed fields — populated by the repository via JOIN; NOT persisted to clinics table
-	WhatsAppConnected bool           `json:"whatsapp_connected" gorm:"-"`
-	GoogleConnected   bool           `json:"google_connected" gorm:"-"`
-	Settings          ClinicSettings `json:"settings" gorm:"type:jsonb;serializer:json"`
-	CreatedAt         time.Time      `json:"created_at"`
-	UpdatedAt         time.Time      `json:"updated_at"`
-	DeletedAt         *time.Time     `json:"deleted_at,omitempty" gorm:"index"`
+	Account           *account_model.Account `json:"account,omitempty" gorm:"foreignKey:AccountID"`
+	WhatsAppConnected bool                   `json:"whatsapp_connected" gorm:"-"`
+	GoogleConnected   bool                   `json:"google_connected" gorm:"-"`
+	Settings          ClinicSettings         `json:"settings" gorm:"type:jsonb;serializer:json"`
+	CreatedAt         time.Time              `json:"created_at"`
+	UpdatedAt         time.Time              `json:"updated_at"`
+	DeletedAt         *time.Time             `json:"deleted_at,omitempty" gorm:"index"`
 }
 
 // DaySchedule define o horário de um dia específico
@@ -108,64 +87,54 @@ func (Clinic) TableName() string {
 
 // ClinicResponse represents the API response for a clinic
 type ClinicResponse struct {
-	ID                 uuid.UUID          `json:"id"`
-	Name               string             `json:"name"`
-	Slug               string             `json:"slug"`
-	Type               ClinicType         `json:"type"`
-	Email              string             `json:"email"`
-	Phone              string             `json:"phone"`
-	Address            string             `json:"address"`
-	City               string             `json:"city"`
-	State              string             `json:"state"`
-	LogoURL            string             `json:"logo_url"`
-	PrimaryColor       string             `json:"primary_color"`
-	Plan               PlanType           `json:"plan"`
-	SubscriptionStatus SubscriptionStatus `json:"subscription_status"`
-	TrialEndsAt        *time.Time         `json:"trial_ends_at,omitempty"`
-	WhatsAppConnected  bool               `json:"whatsapp_connected"`
-	GoogleConnected    bool               `json:"google_connected"`
-	Settings           ClinicSettings     `json:"settings"`
-	BookingURL         string             `json:"booking_url,omitempty"`
-	CreatedAt          time.Time          `json:"created_at"`
+	ID                uuid.UUID                      `json:"id"`
+	Name              string                         `json:"name"`
+	Slug              string                         `json:"slug"`
+	Type              ClinicType                     `json:"type"`
+	Email             string                         `json:"email"`
+	Phone             string                         `json:"phone"`
+	Address           string                         `json:"address"`
+	City              string                         `json:"city"`
+	State             string                         `json:"state"`
+	LogoURL           string                         `json:"logo_url"`
+	PrimaryColor      string                         `json:"primary_color"`
+	AccountID         uuid.UUID                      `json:"account_id"`
+	Account           *account_model.AccountResponse `json:"account,omitempty"`
+	WhatsAppConnected bool                           `json:"whatsapp_connected"`
+	GoogleConnected   bool                           `json:"google_connected"`
+	Settings          ClinicSettings                 `json:"settings"`
+	BookingURL        string                         `json:"booking_url,omitempty"`
+	CreatedAt         time.Time                      `json:"created_at"`
 }
 
 // ToResponse converts Clinic to ClinicResponse
 func (c *Clinic) ToResponse() *ClinicResponse {
 	return &ClinicResponse{
-		ID:                 c.ID,
-		Name:               c.Name,
-		Slug:               c.Slug,
-		Type:               c.Type,
-		Email:              c.Email,
-		Phone:              c.Phone,
-		Address:            c.Address,
-		City:               c.City,
-		State:              c.State,
-		LogoURL:            c.LogoURL,
-		PrimaryColor:       c.PrimaryColor,
-		Plan:               c.Plan,
-		SubscriptionStatus: c.SubscriptionStatus,
-		TrialEndsAt:        c.TrialEndsAt,
-		WhatsAppConnected:  c.WhatsAppConnected,
-		GoogleConnected:    c.GoogleConnected,
-		Settings:           c.Settings,
-		CreatedAt:          c.CreatedAt,
+		ID:                c.ID,
+		Name:              c.Name,
+		Slug:              c.Slug,
+		Type:              c.Type,
+		Email:             c.Email,
+		Phone:             c.Phone,
+		Address:           c.Address,
+		City:              c.City,
+		State:             c.State,
+		LogoURL:           c.LogoURL,
+		PrimaryColor:      c.PrimaryColor,
+		AccountID:         c.AccountID,
+		WhatsAppConnected: c.WhatsAppConnected,
+		GoogleConnected:   c.GoogleConnected,
+		Settings:          c.Settings,
+		CreatedAt:         c.CreatedAt,
 	}
 }
 
-// IsSubscriptionActive checks if the clinic has an active subscription
+// IsSubscriptionActive checks if the clinic has an active subscription via Account
 func (c *Clinic) IsSubscriptionActive() bool {
-	switch c.SubscriptionStatus {
-	case SubscriptionStatusActive:
-		return true
-	case SubscriptionStatusTrial:
-		if c.TrialEndsAt != nil {
-			return time.Now().Before(*c.TrialEndsAt)
-		}
-		return false
-	default:
-		return false
+	if c.Account != nil {
+		return c.Account.IsSubscriptionActive()
 	}
+	return false
 }
 
 // CreateClinicRequest represents the request to create a clinic

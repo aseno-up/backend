@@ -7,6 +7,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/aseno/backend/internal/errors"
+	clinic_repository "github.com/aseno/backend/pkg/clinic/repository"
 	"github.com/aseno/backend/pkg/payment/model"
 )
 
@@ -38,7 +39,7 @@ type PaymentClient interface {
 type CustomerRepository interface {
 	Create(ctx context.Context, customer *model.Customer) error
 	GetByID(ctx context.Context, id uuid.UUID) (*model.Customer, error)
-	GetByClinicID(ctx context.Context, clinicID uuid.UUID) (*model.Customer, error)
+	GetByAccountID(ctx context.Context, accountID uuid.UUID) (*model.Customer, error)
 	GetByAsaasID(ctx context.Context, asaasID string) (*model.Customer, error)
 	Update(ctx context.Context, customer *model.Customer) error
 	Delete(ctx context.Context, id uuid.UUID) error
@@ -49,7 +50,7 @@ type PaymentRepository interface {
 	Create(ctx context.Context, payment *model.Payment) error
 	GetByID(ctx context.Context, id uuid.UUID) (*model.Payment, error)
 	GetByAsaasID(ctx context.Context, asaasID string) (*model.Payment, error)
-	GetByClinicID(ctx context.Context, clinicID uuid.UUID, limit, offset int) ([]*model.Payment, int64, error)
+	GetByAccountID(ctx context.Context, accountID uuid.UUID, limit, offset int) ([]*model.Payment, int64, error)
 	GetByCustomerID(ctx context.Context, customerID uuid.UUID, limit, offset int) ([]*model.Payment, int64, error)
 	Update(ctx context.Context, payment *model.Payment) error
 	UpdateStatus(ctx context.Context, id uuid.UUID, status model.PaymentStatus) error
@@ -60,7 +61,7 @@ type SubscriptionRepository interface {
 	Create(ctx context.Context, subscription *model.Subscription) error
 	GetByID(ctx context.Context, id uuid.UUID) (*model.Subscription, error)
 	GetByAsaasID(ctx context.Context, asaasID string) (*model.Subscription, error)
-	GetByClinicID(ctx context.Context, clinicID uuid.UUID) (*model.Subscription, error)
+	GetByAccountID(ctx context.Context, accountID uuid.UUID) (*model.Subscription, error)
 	GetByCustomerID(ctx context.Context, customerID uuid.UUID) ([]*model.Subscription, error)
 	Update(ctx context.Context, subscription *model.Subscription) error
 	UpdateStatus(ctx context.Context, id uuid.UUID, status model.SubscriptionStatus) error
@@ -128,6 +129,7 @@ type paymentService struct {
 	customerRepo     CustomerRepository
 	paymentRepo      PaymentRepository
 	subscriptionRepo SubscriptionRepository
+	clinicRepo       clinic_repository.ClinicRepository
 }
 
 // NewPaymentService creates a new payment service
@@ -136,19 +138,26 @@ func NewPaymentService(
 	customerRepo CustomerRepository,
 	paymentRepo PaymentRepository,
 	subscriptionRepo SubscriptionRepository,
+	clinicRepo clinic_repository.ClinicRepository,
 ) PaymentService {
 	return &paymentService{
 		client:           client,
 		customerRepo:     customerRepo,
 		paymentRepo:      paymentRepo,
 		subscriptionRepo: subscriptionRepo,
+		clinicRepo:       clinicRepo,
 	}
 }
 
 // CreateOrGetCustomer creates a new customer or returns existing one
 func (s *paymentService) CreateOrGetCustomer(ctx context.Context, clinicID uuid.UUID, req *CreateCustomerInput) (*model.Customer, error) {
+	clinic, err := s.clinicRepo.GetByID(ctx, clinicID)
+	if err != nil {
+		return nil, errors.ErrNotFoundInstance.WithMessage("Clinic not found")
+	}
+
 	// Check if customer already exists for this clinic
-	existing, err := s.customerRepo.GetByClinicID(ctx, clinicID)
+	existing, err := s.customerRepo.GetByAccountID(ctx, clinic.AccountID)
 	if err == nil && existing != nil {
 		return existing, nil
 	}
@@ -181,7 +190,7 @@ func (s *paymentService) CreateOrGetCustomer(ctx context.Context, clinicID uuid.
 
 	// Save customer to database
 	customer := &model.Customer{
-		ClinicID:        clinicID,
+		AccountID:       clinic.AccountID,
 		AsaasCustomerID: asaasCustomer.ID,
 		Name:            req.Name,
 		Email:           req.Email,
@@ -206,13 +215,22 @@ func (s *paymentService) CreateOrGetCustomer(ctx context.Context, clinicID uuid.
 
 // GetCustomerByClinic retrieves the customer for a clinic
 func (s *paymentService) GetCustomerByClinic(ctx context.Context, clinicID uuid.UUID) (*model.Customer, error) {
-	return s.customerRepo.GetByClinicID(ctx, clinicID)
+	clinic, err := s.clinicRepo.GetByID(ctx, clinicID)
+	if err != nil {
+		return nil, err
+	}
+	return s.customerRepo.GetByAccountID(ctx, clinic.AccountID)
 }
 
 // CreatePayment creates a new payment
 func (s *paymentService) CreatePayment(ctx context.Context, clinicID uuid.UUID, req *CreatePaymentInput) (*model.Payment, error) {
+	clinic, err := s.clinicRepo.GetByID(ctx, clinicID)
+	if err != nil {
+		return nil, errors.ErrNotFoundInstance.WithMessage("Clinic not found")
+	}
+
 	// Get customer for clinic
-	customer, err := s.customerRepo.GetByClinicID(ctx, clinicID)
+	customer, err := s.customerRepo.GetByAccountID(ctx, clinic.AccountID)
 	if err != nil {
 		return nil, errors.ErrNotFoundInstance.WithMessage("Customer not found. Please create billing profile first.")
 	}
@@ -237,7 +255,7 @@ func (s *paymentService) CreatePayment(ctx context.Context, clinicID uuid.UUID, 
 
 	// Save payment to database
 	payment := &model.Payment{
-		ClinicID:       clinicID,
+		AccountID:      clinic.AccountID,
 		CustomerID:     customer.ID,
 		AsaasPaymentID: asaasPayment.ID,
 		Value:          asaasPayment.Value,
@@ -260,13 +278,18 @@ func (s *paymentService) CreatePayment(ctx context.Context, clinicID uuid.UUID, 
 
 // GetPayment retrieves a payment
 func (s *paymentService) GetPayment(ctx context.Context, clinicID uuid.UUID, paymentID uuid.UUID) (*model.Payment, error) {
+	clinic, err := s.clinicRepo.GetByID(ctx, clinicID)
+	if err != nil {
+		return nil, err
+	}
+
 	payment, err := s.paymentRepo.GetByID(ctx, paymentID)
 	if err != nil {
 		return nil, err
 	}
 
 	// Verify clinic ownership
-	if payment.ClinicID != clinicID {
+	if payment.AccountID != clinic.AccountID {
 		return nil, errors.ErrForbiddenInstance
 	}
 
@@ -275,8 +298,12 @@ func (s *paymentService) GetPayment(ctx context.Context, clinicID uuid.UUID, pay
 
 // GetPayments retrieves payments for a clinic
 func (s *paymentService) GetPayments(ctx context.Context, clinicID uuid.UUID, page, perPage int) ([]*model.Payment, int64, error) {
+	clinic, err := s.clinicRepo.GetByID(ctx, clinicID)
+	if err != nil {
+		return nil, 0, err
+	}
 	offset := (page - 1) * perPage
-	return s.paymentRepo.GetByClinicID(ctx, clinicID, perPage, offset)
+	return s.paymentRepo.GetByAccountID(ctx, clinic.AccountID, perPage, offset)
 }
 
 // GetPixQRCode retrieves the PIX QR code for a payment
@@ -305,14 +332,19 @@ func (s *paymentService) CancelPayment(ctx context.Context, clinicID uuid.UUID, 
 
 // CreateSubscription creates a new subscription
 func (s *paymentService) CreateSubscription(ctx context.Context, clinicID uuid.UUID, req *CreateSubscriptionInput) (*model.Subscription, error) {
+	clinic, err := s.clinicRepo.GetByID(ctx, clinicID)
+	if err != nil {
+		return nil, errors.ErrNotFoundInstance.WithMessage("Clinic not found")
+	}
+
 	// Get customer for clinic
-	customer, err := s.customerRepo.GetByClinicID(ctx, clinicID)
+	customer, err := s.customerRepo.GetByAccountID(ctx, clinic.AccountID)
 	if err != nil {
 		return nil, errors.ErrNotFoundInstance.WithMessage("Customer not found. Please create billing profile first.")
 	}
 
 	// Check if subscription already exists
-	existing, _ := s.subscriptionRepo.GetByClinicID(ctx, clinicID)
+	existing, _ := s.subscriptionRepo.GetByAccountID(ctx, clinic.AccountID)
 	if existing != nil && existing.Status == model.SubscriptionStatusActive {
 		return nil, errors.ErrConflictInstance.WithMessage("Clinic already has an active subscription")
 	}
@@ -339,7 +371,7 @@ func (s *paymentService) CreateSubscription(ctx context.Context, clinicID uuid.U
 
 	// Save subscription to database
 	subscription := &model.Subscription{
-		ClinicID:            clinicID,
+		AccountID:           clinic.AccountID,
 		CustomerID:          customer.ID,
 		AsaasSubscriptionID: asaasSub.ID,
 		Value:               asaasSub.Value,
@@ -360,12 +392,20 @@ func (s *paymentService) CreateSubscription(ctx context.Context, clinicID uuid.U
 
 // GetSubscription retrieves the subscription for a clinic
 func (s *paymentService) GetSubscription(ctx context.Context, clinicID uuid.UUID) (*model.Subscription, error) {
-	return s.subscriptionRepo.GetByClinicID(ctx, clinicID)
+	clinic, err := s.clinicRepo.GetByID(ctx, clinicID)
+	if err != nil {
+		return nil, err
+	}
+	return s.subscriptionRepo.GetByAccountID(ctx, clinic.AccountID)
 }
 
 // CancelSubscription cancels a subscription
 func (s *paymentService) CancelSubscription(ctx context.Context, clinicID uuid.UUID) error {
-	subscription, err := s.subscriptionRepo.GetByClinicID(ctx, clinicID)
+	clinic, err := s.clinicRepo.GetByID(ctx, clinicID)
+	if err != nil {
+		return err
+	}
+	subscription, err := s.subscriptionRepo.GetByAccountID(ctx, clinic.AccountID)
 	if err != nil {
 		return err
 	}
@@ -410,8 +450,13 @@ func (s *paymentService) HandleWebhook(ctx context.Context, payload *model.Asaas
 
 // CreateCustomerForClinic creates an Asaas customer for a clinic during registration
 func (s *paymentService) CreateCustomerForClinic(ctx context.Context, clinicID uuid.UUID, req *model.CreateCustomerRequest) error {
+	clinic, err := s.clinicRepo.GetByID(ctx, clinicID)
+	if err != nil {
+		return err
+	}
+
 	// Check if customer already exists
-	existing, _ := s.customerRepo.GetByClinicID(ctx, clinicID)
+	existing, _ := s.customerRepo.GetByAccountID(ctx, clinic.AccountID)
 	if existing != nil {
 		return nil // Customer already exists, nothing to do
 	}
@@ -424,7 +469,7 @@ func (s *paymentService) CreateCustomerForClinic(ctx context.Context, clinicID u
 
 	// Save customer in database
 	customer := &model.Customer{
-		ClinicID:        clinicID,
+		AccountID:       clinic.AccountID,
 		AsaasCustomerID: asaasCustomer.ID,
 		Name:            asaasCustomer.Name,
 		Email:           asaasCustomer.Email,
@@ -443,8 +488,13 @@ func (s *paymentService) CreateCustomerForClinic(ctx context.Context, clinicID u
 
 // CreateSubscriptionForClinic creates an Asaas subscription for a clinic during registration
 func (s *paymentService) CreateSubscriptionForClinic(ctx context.Context, clinicID uuid.UUID, plan string, billing string) error {
+	clinic, err := s.clinicRepo.GetByID(ctx, clinicID)
+	if err != nil {
+		return err
+	}
+
 	// Get customer
-	customer, err := s.customerRepo.GetByClinicID(ctx, clinicID)
+	customer, err := s.customerRepo.GetByAccountID(ctx, clinic.AccountID)
 	if err != nil {
 		return errors.ErrNotFoundInstance.WithMessage("Customer not found")
 	}
@@ -494,7 +544,7 @@ func (s *paymentService) CreateSubscriptionForClinic(ctx context.Context, clinic
 
 	// Save subscription in database
 	subscription := &model.Subscription{
-		ClinicID:            clinicID,
+		AccountID:           clinic.AccountID,
 		CustomerID:          customer.ID,
 		AsaasSubscriptionID: asaasSubscription.ID,
 		Status:              model.SubscriptionStatus(asaasSubscription.Status),

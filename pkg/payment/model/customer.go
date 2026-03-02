@@ -10,7 +10,7 @@ import (
 // Customer represents an Asaas customer linked to a clinic
 type Customer struct {
 	ID               uuid.UUID      `json:"id" gorm:"type:uuid;primary_key;default:gen_random_uuid()"`
-	ClinicID         uuid.UUID      `json:"clinic_id" gorm:"type:uuid;not null;uniqueIndex"`
+	AccountID        uuid.UUID      `json:"account_id" gorm:"type:uuid;index"`
 	AsaasCustomerID  string         `json:"asaas_customer_id" gorm:"uniqueIndex;not null"`
 	Name             string         `json:"name" gorm:"not null"`
 	Email            string         `json:"email" gorm:"not null"`

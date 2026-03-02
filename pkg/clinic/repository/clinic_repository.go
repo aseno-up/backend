@@ -45,6 +45,7 @@ func (r *clinicRepository) getWithConnections(ctx context.Context, whereClause s
 	var row clinicWithConnections
 	result := r.db.WithContext(ctx).
 		Table("clinics c").
+		Preload("Account").
 		Select(`c.*,
 			(SELECT connected FROM whatsapp_connections wc
 			 WHERE wc.clinic_id = c.id AND wc.is_active = true AND wc.deleted_at IS NULL
@@ -95,7 +96,7 @@ func (r *clinicRepository) GetBySlug(ctx context.Context, slug string) (*model.C
 // GetByEmail retrieves a clinic by email
 func (r *clinicRepository) GetByEmail(ctx context.Context, email string) (*model.Clinic, error) {
 	var clinic model.Clinic
-	result := r.db.WithContext(ctx).Where("email = ? AND deleted_at IS NULL", email).First(&clinic)
+	result := r.db.WithContext(ctx).Preload("Account").Where("email = ? AND deleted_at IS NULL", email).First(&clinic)
 	if result.Error != nil {
 		if result.Error == gorm.ErrRecordNotFound {
 			return nil, errors.ErrClinicNotFoundInstance
@@ -136,8 +137,8 @@ func (r *clinicRepository) List(ctx context.Context, limit, offset int) ([]*mode
 		return nil, 0, errors.ErrInternalInstance.WithError(err)
 	}
 
-	// Get paginated results (no JOIN needed for list — computed fields not critical here)
 	result := r.db.WithContext(ctx).
+		Preload("Account").
 		Where("deleted_at IS NULL").
 		Order("created_at DESC").
 		Limit(limit).

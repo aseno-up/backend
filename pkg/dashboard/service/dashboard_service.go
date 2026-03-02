@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	clinic_model "github.com/aseno/backend/pkg/clinic/model"
+	account_model "github.com/aseno/backend/pkg/account/model"
 	clinic_repository "github.com/aseno/backend/pkg/clinic/repository"
 	"github.com/aseno/backend/pkg/dashboard/model"
 	"github.com/aseno/backend/pkg/dashboard/repository"
@@ -176,7 +176,7 @@ func (s *dashboardService) GetMetrics(ctx context.Context, clinicID uuid.UUID, s
 
 	// Check plan and mask financial data if Basic
 	clinic, err := s.clinicRepo.GetByID(ctx, clinicID)
-	if err == nil && clinic.Plan == clinic_model.PlanTypeBasic {
+	if err == nil && clinic.Account != nil && clinic.Account.Plan == account_model.PlanTypeBasic {
 		metrics.EstimatedRevenue = 0
 		metrics.EstimatedLostRevenue = 0
 		metrics.PotentialRevenue = 0
