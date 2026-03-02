@@ -8,8 +8,8 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/aseno/backend/internal/errors"
+	account_model "github.com/aseno/backend/pkg/account/model"
 	"github.com/aseno/backend/pkg/calendar/model"
-	clinic_model "github.com/aseno/backend/pkg/clinic/model"
 	clinic_repository "github.com/aseno/backend/pkg/clinic/repository"
 )
 
@@ -112,7 +112,7 @@ func (s *calendarService) GetAuthURL(ctx context.Context, clinicID uuid.UUID) (s
 	}
 
 	// Allow access for trial users or non-basic plans
-	if clinic.Plan == clinic_model.PlanTypeBasic && clinic.SubscriptionStatus != clinic_model.SubscriptionStatusTrial {
+	if clinic.Account != nil && clinic.Account.Plan == account_model.PlanTypeBasic && clinic.Account.SubscriptionStatus != account_model.SubscriptionStatusTrial {
 		return "", errors.ErrValidationInstance.WithMessage("Integração com Google Calendar disponível apenas nos planos Profissional e Avançado.")
 	}
 
@@ -128,7 +128,7 @@ func (s *calendarService) HandleCallback(ctx context.Context, clinicID uuid.UUID
 	}
 
 	// Allow access for trial users or non-basic plans
-	if clinic.Plan == clinic_model.PlanTypeBasic && clinic.SubscriptionStatus != clinic_model.SubscriptionStatusTrial {
+	if clinic.Account != nil && clinic.Account.Plan == account_model.PlanTypeBasic && clinic.Account.SubscriptionStatus != account_model.SubscriptionStatusTrial {
 		return nil, errors.ErrValidationInstance.WithMessage("Integração com Google Calendar disponível apenas nos planos Profissional e Avançado.")
 	}
 

@@ -12,6 +12,8 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/aseno/backend/internal/errors"
+	account_model "github.com/aseno/backend/pkg/account/model"
+	account_repository "github.com/aseno/backend/pkg/account/repository"
 	"github.com/aseno/backend/pkg/auth/model"
 	auth_repository "github.com/aseno/backend/pkg/auth/repository"
 	clinic_model "github.com/aseno/backend/pkg/clinic/model"
@@ -67,6 +69,7 @@ type GoogleUserInfo struct {
 type authService struct {
 	userRepo              user_repository.UserRepository
 	clinicRepo            clinic_repository.ClinicRepository
+	accountRepo           account_repository.AccountRepository
 	passwordResetRepo     auth_repository.PasswordResetRepository
 	emailVerificationRepo auth_repository.EmailVerificationRepository
 	jwtService            JWTService
@@ -80,6 +83,7 @@ type authService struct {
 func NewAuthService(
 	userRepo user_repository.UserRepository,
 	clinicRepo clinic_repository.ClinicRepository,
+	accountRepo account_repository.AccountRepository,
 	passwordResetRepo auth_repository.PasswordResetRepository,
 	emailVerificationRepo auth_repository.EmailVerificationRepository,
 	jwtService JWTService,
@@ -89,6 +93,7 @@ func NewAuthService(
 	return &authService{
 		userRepo:              userRepo,
 		clinicRepo:            clinicRepo,
+		accountRepo:           accountRepo,
 		passwordResetRepo:     passwordResetRepo,
 		emailVerificationRepo: emailVerificationRepo,
 		jwtService:            jwtService,
@@ -101,6 +106,7 @@ func NewAuthService(
 func NewAuthServiceWithGoogle(
 	userRepo user_repository.UserRepository,
 	clinicRepo clinic_repository.ClinicRepository,
+	accountRepo account_repository.AccountRepository,
 	passwordResetRepo auth_repository.PasswordResetRepository,
 	emailVerificationRepo auth_repository.EmailVerificationRepository,
 	jwtService JWTService,
@@ -111,6 +117,7 @@ func NewAuthServiceWithGoogle(
 	return &authService{
 		userRepo:              userRepo,
 		clinicRepo:            clinicRepo,
+		accountRepo:           accountRepo,
 		passwordResetRepo:     passwordResetRepo,
 		emailVerificationRepo: emailVerificationRepo,
 		jwtService:            jwtService,
@@ -149,41 +156,58 @@ func (s *authService) Register(ctx context.Context, req *model.RegisterRequest) 
 	}
 
 	// Determine plan and subscription status based on request
-	var planType clinic_model.PlanType
-	var subscriptionStatus clinic_model.SubscriptionStatus
+	var planType account_model.PlanType
+	var subscriptionStatus account_model.SubscriptionStatus
 	var trialEndsAt *time.Time
 
 	// Set plan based on selection
 	switch req.Plan {
 	case "basic":
-		planType = clinic_model.PlanTypeBasic
+		planType = account_model.PlanTypeBasic
 	case "professional":
-		planType = clinic_model.PlanTypeProfessional
+		planType = account_model.PlanTypeProfessional
 	case "advanced":
-		planType = clinic_model.PlanTypeAdvanced
+		planType = account_model.PlanTypeAdvanced
 	default: // "trial" or empty - defaults to professional with trial
-		planType = clinic_model.PlanTypeProfessional
+		planType = account_model.PlanTypeProfessional
 	}
 
 	// If document provided, set as active (will create Asaas subscription)
 	// Otherwise, give 14-day trial period regardless of plan selected
 	if req.Document != "" && req.Plan != "" && req.Plan != "trial" {
-		subscriptionStatus = clinic_model.SubscriptionStatusActive
+		subscriptionStatus = account_model.SubscriptionStatusActive
 	} else {
-		subscriptionStatus = clinic_model.SubscriptionStatusTrial
+		subscriptionStatus = account_model.SubscriptionStatusTrial
 		trial := time.Now().AddDate(0, 0, 14)
 		trialEndsAt = &trial
 	}
 
-	// Create clinic
-	clinic := &clinic_model.Clinic{
-		Name:               req.ClinicName,
-		Slug:               slug,
-		Email:              req.Email,
-		Phone:              req.Phone,
+	// Pre-generate UUIDs for circular references
+	userID := uuid.New()
+	accountID := uuid.New()
+	clinicID := uuid.New()
+
+	// Create Account
+	account := &account_model.Account{
+		ID:                 accountID,
+		OwnerID:            userID,
 		Plan:               planType,
 		SubscriptionStatus: subscriptionStatus,
 		TrialEndsAt:        trialEndsAt,
+	}
+
+	if err := s.accountRepo.Create(ctx, account); err != nil {
+		return nil, err
+	}
+
+	// Create clinic
+	clinic := &clinic_model.Clinic{
+		ID:        clinicID,
+		AccountID: accountID,
+		Name:      req.ClinicName,
+		Slug:      slug,
+		Email:     req.Email,
+		Phone:     req.Phone,
 		Settings: clinic_model.ClinicSettings{
 			Timezone:                  "America/Sao_Paulo",
 			DefaultAppointmentMinutes: 30,
@@ -195,11 +219,14 @@ func (s *authService) Register(ctx context.Context, req *model.RegisterRequest) 
 	}
 
 	if err := s.clinicRepo.Create(ctx, clinic); err != nil {
+		// Clean up account on failure
+		_ = s.accountRepo.Delete(ctx, accountID)
 		return nil, err
 	}
 
 	// Create owner user
 	user := &user_model.User{
+		ID:            userID,
 		ClinicID:      clinic.ID,
 		Email:         req.Email,
 		Name:          req.Name,
@@ -210,10 +237,14 @@ func (s *authService) Register(ctx context.Context, req *model.RegisterRequest) 
 	}
 
 	if err := user.SetPassword(req.Password); err != nil {
+		_ = s.clinicRepo.Delete(ctx, clinicID)
+		_ = s.accountRepo.Delete(ctx, accountID)
 		return nil, errors.ErrInternalInstance.WithError(err)
 	}
 
 	if err := s.userRepo.Create(ctx, user); err != nil {
+		_ = s.clinicRepo.Delete(ctx, clinicID)
+		_ = s.accountRepo.Delete(ctx, accountID)
 		return nil, err
 	}
 
@@ -265,6 +296,9 @@ func (s *authService) Register(ctx context.Context, req *model.RegisterRequest) 
 		}
 	}()
 
+	// Preload Account for the response
+	clinic.Account = account
+
 	return &model.AuthResponse{
 		User:         user.ToResponse(),
 		Clinic:       clinic.ToResponse(),
@@ -300,6 +334,13 @@ func (s *authService) Login(ctx context.Context, req *model.LoginRequest) (*mode
 	if err != nil {
 		return nil, err
 	}
+
+	// Load account
+	account, err := s.accountRepo.GetByID(ctx, clinic.AccountID)
+	if err != nil {
+		return nil, err
+	}
+	clinic.Account = account
 
 	if !clinic.IsSubscriptionActive() {
 		return nil, errors.ErrForbiddenInstance.WithMessage("Clinic subscription has expired")
@@ -363,14 +404,30 @@ func (s *authService) GoogleLogin(ctx context.Context, req *model.GoogleLoginReq
 		// Calculate trial end date (14 days from now)
 		trialEndsAt := time.Now().AddDate(0, 0, 14)
 
+		userID := uuid.New()
+		accountID := uuid.New()
+		clinicID := uuid.New()
+
+		// Create Account
+		account := &account_model.Account{
+			ID:                 accountID,
+			OwnerID:            userID,
+			Plan:               account_model.PlanTypeProfessional,
+			SubscriptionStatus: account_model.SubscriptionStatusTrial,
+			TrialEndsAt:        &trialEndsAt,
+		}
+
+		if err := s.accountRepo.Create(ctx, account); err != nil {
+			return nil, err
+		}
+
 		// Create clinic
 		clinic := &clinic_model.Clinic{
-			Name:               googleUser.Name + "'s Clinic",
-			Slug:               slug,
-			Email:              googleUser.Email,
-			Plan:               clinic_model.PlanTypeProfessional,
-			SubscriptionStatus: clinic_model.SubscriptionStatusTrial,
-			TrialEndsAt:        &trialEndsAt,
+			ID:        clinicID,
+			AccountID: accountID,
+			Name:      googleUser.Name + "'s Clinic",
+			Slug:      slug,
+			Email:     googleUser.Email,
 			Settings: clinic_model.ClinicSettings{
 				Timezone:                  "America/Sao_Paulo",
 				DefaultAppointmentMinutes: 30,
@@ -382,11 +439,13 @@ func (s *authService) GoogleLogin(ctx context.Context, req *model.GoogleLoginReq
 		}
 
 		if err := s.clinicRepo.Create(ctx, clinic); err != nil {
+			_ = s.accountRepo.Delete(ctx, accountID)
 			return nil, err
 		}
 
 		// Create owner user (without password - Google-only login)
 		user = &user_model.User{
+			ID:            userID,
 			ClinicID:      clinic.ID,
 			Email:         googleUser.Email,
 			Name:          googleUser.Name,
@@ -398,6 +457,8 @@ func (s *authService) GoogleLogin(ctx context.Context, req *model.GoogleLoginReq
 		}
 
 		if err := s.userRepo.Create(ctx, user); err != nil {
+			_ = s.clinicRepo.Delete(ctx, clinicID)
+			_ = s.accountRepo.Delete(ctx, accountID)
 			return nil, err
 		}
 	} else {
@@ -417,11 +478,18 @@ func (s *authService) GoogleLogin(ctx context.Context, req *model.GoogleLoginReq
 			return nil, err
 		}
 
-		// Check if clinic subscription is active
+		// Check if clinic exists and get it
 		clinic, err := s.clinicRepo.GetByID(ctx, user.ClinicID)
 		if err != nil {
 			return nil, err
 		}
+
+		// Load account
+		account, err := s.accountRepo.GetByID(ctx, clinic.AccountID)
+		if err != nil {
+			return nil, err
+		}
+		clinic.Account = account
 
 		if !clinic.IsSubscriptionActive() {
 			return nil, errors.ErrForbiddenInstance.WithMessage("Clinic subscription has expired")
