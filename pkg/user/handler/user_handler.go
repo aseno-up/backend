@@ -22,6 +22,7 @@ type UserHandler interface {
 	DeactivateUser(c *gin.Context)
 	ReactivateUser(c *gin.Context)
 	RemoveUser(c *gin.Context)
+	BulkRemoveUsers(c *gin.Context)
 }
 
 // userHandler implements UserHandler
@@ -47,6 +48,7 @@ func (h *userHandler) RegisterRoutes(router gin.IRouter) {
 		users.POST("/:id/deactivate", h.DeactivateUser)
 		users.POST("/:id/reactivate", h.ReactivateUser)
 		users.DELETE("/:id", h.RemoveUser)
+		users.POST("/bulk-delete", h.BulkRemoveUsers)
 	}
 }
 
@@ -331,4 +333,36 @@ func (h *userHandler) RemoveUser(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "User removed successfully"})
+}
+
+// BulkRemoveUsers handles removing multiple users
+func (h *userHandler) BulkRemoveUsers(c *gin.Context) {
+	clinicID, exists := c.Get("clinic_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, errors.ToResponse(errors.ErrUnauthorizedInstance))
+		return
+	}
+
+	currentUserID, exists := c.Get("user_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, errors.ToResponse(errors.ErrUnauthorizedInstance))
+		return
+	}
+
+	var req struct {
+		IDs []uuid.UUID `json:"ids" binding:"required,min=1"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, errors.ToResponse(errors.ErrValidationInstance.WithError(err)))
+		return
+	}
+
+	if err := h.userService.BulkRemoveUsers(c.Request.Context(), clinicID.(uuid.UUID), currentUserID.(uuid.UUID), req.IDs); err != nil {
+		statusCode := errors.GetStatusCode(err)
+		c.JSON(statusCode, errors.ToResponse(err))
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Users removed successfully"})
 }

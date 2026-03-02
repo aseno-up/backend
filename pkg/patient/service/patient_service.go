@@ -20,6 +20,7 @@ type PatientService interface {
 	List(ctx context.Context, clinicID uuid.UUID, filter pagination.Filter) (pagination.Response[*model.PatientResponse], error)
 	Update(ctx context.Context, id, clinicID uuid.UUID, req *model.UpdatePatientRequest) (*model.PatientResponse, error)
 	Delete(ctx context.Context, id, clinicID uuid.UUID) error
+	BulkDelete(ctx context.Context, ids []uuid.UUID, clinicID uuid.UUID) error
 	// Risk assessment methods
 	GetRisk(ctx context.Context, id, clinicID uuid.UUID) (*model.PatientRiskResponse, error)
 	CalculateRiskScore(ctx context.Context, patientID, clinicID uuid.UUID) error
@@ -193,6 +194,14 @@ func (s *patientService) Update(ctx context.Context, id, clinicID uuid.UUID, req
 // Delete deletes a patient
 func (s *patientService) Delete(ctx context.Context, id, clinicID uuid.UUID) error {
 	return s.repo.Delete(ctx, id, clinicID)
+}
+
+// BulkDelete soft deletes multiple patients
+func (s *patientService) BulkDelete(ctx context.Context, ids []uuid.UUID, clinicID uuid.UUID) error {
+	if err := s.repo.BulkDelete(ctx, ids, clinicID); err != nil {
+		return err
+	}
+	return nil
 }
 
 // GetRisk retrieves the risk assessment for a patient

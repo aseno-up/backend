@@ -18,6 +18,7 @@ type PatientRepository interface {
 	List(ctx context.Context, clinicID uuid.UUID, filter pagination.Filter) ([]*model.Patient, int64, error)
 	Update(ctx context.Context, patient *model.Patient) error
 	Delete(ctx context.Context, id, clinicID uuid.UUID) error
+	BulkDelete(ctx context.Context, ids []uuid.UUID, clinicID uuid.UUID) error
 	GetByPhone(ctx context.Context, phone string, clinicID uuid.UUID) (*model.Patient, error)
 	GetByDocument(ctx context.Context, document string, clinicID uuid.UUID) (*model.Patient, error)
 	// Risk assessment methods
@@ -135,7 +136,19 @@ func (r *patientRepository) Delete(ctx context.Context, id, clinicID uuid.UUID) 
 	return nil
 }
 
-// GetByPhone retrieves a patient by phone number
+// BulkDelete soft deletes multiple patients belonging to a clinic
+func (r *patientRepository) BulkDelete(ctx context.Context, ids []uuid.UUID, clinicID uuid.UUID) error {
+	result := r.db.WithContext(ctx).
+		Where("id IN ? AND clinic_id = ?", ids, clinicID).
+		Delete(&model.Patient{})
+
+	if result.Error != nil {
+		return errors.ErrInternalInstance.WithError(result.Error)
+	}
+	return nil
+}
+
+// GetByPhone retrieves a patient by phone number within a clinic
 func (r *patientRepository) GetByPhone(ctx context.Context, phone string, clinicID uuid.UUID) (*model.Patient, error) {
 	var patient model.Patient
 	result := r.db.WithContext(ctx).

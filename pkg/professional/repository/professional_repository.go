@@ -18,6 +18,7 @@ type ProfessionalRepository interface {
 	List(ctx context.Context, clinicID uuid.UUID, filter pagination.Filter) ([]*model.Professional, int64, error)
 	Update(ctx context.Context, professional *model.Professional) error
 	Delete(ctx context.Context, id, clinicID uuid.UUID) error
+	BulkDelete(ctx context.Context, ids []uuid.UUID, clinicID uuid.UUID) error
 	GetByUserID(ctx context.Context, userID, clinicID uuid.UUID) (*model.Professional, error)
 }
 
@@ -128,6 +129,18 @@ func (r *professionalRepository) Delete(ctx context.Context, id, clinicID uuid.U
 	}
 	if result.RowsAffected == 0 {
 		return errors.ErrProfessionalNotFoundInstance
+	}
+	return nil
+}
+
+// BulkDelete soft deletes multiple professionals belonging to a clinic
+func (r *professionalRepository) BulkDelete(ctx context.Context, ids []uuid.UUID, clinicID uuid.UUID) error {
+	result := r.db.WithContext(ctx).
+		Where("id IN ? AND clinic_id = ?", ids, clinicID).
+		Delete(&model.Professional{})
+
+	if result.Error != nil {
+		return errors.ErrInternalInstance.WithError(result.Error)
 	}
 	return nil
 }
