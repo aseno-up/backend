@@ -264,9 +264,8 @@ func (s *authService) Register(ctx context.Context, req *model.RegisterRequest) 
 		// Non-critical error, just log it
 	}
 
-	// Create Asaas customer and subscription if document provided and not trial
-	if s.paymentService != nil && req.Document != "" && req.Plan != "" && req.Plan != "trial" {
-		// Create customer in Asaas
+	// Create Asaas customer (always, if payment service is available)
+	if s.paymentService != nil {
 		customerReq := &payment_model.CreateCustomerRequest{
 			Name:     req.Name,
 			Email:    req.Email,
@@ -278,12 +277,14 @@ func (s *authService) Register(ctx context.Context, req *model.RegisterRequest) 
 			// Log error but don't fail registration - user can set up payment later
 			fmt.Printf("[AUTH] Failed to create Asaas customer for clinic %s: %v\n", clinic.ID, err)
 		} else {
-			// Customer created successfully, now create subscription
-			if err := s.paymentService.CreateSubscriptionForClinic(ctx, clinic.ID, req.Plan, req.Billing); err != nil {
-				// Log error but don't fail registration
-				fmt.Printf("[AUTH] Failed to create Asaas subscription for clinic %s: %v\n", clinic.ID, err)
-			} else {
-				fmt.Printf("[AUTH] Successfully created Asaas subscription for clinic %s (plan: %s, billing: %s)\n", clinic.ID, req.Plan, req.Billing)
+			// Customer created successfully, now create subscription if a paid plan is selected
+			if req.Plan != "" && req.Plan != "trial" {
+				if err := s.paymentService.CreateSubscriptionForClinic(ctx, clinic.ID, req.Plan, req.Billing); err != nil {
+					// Log error but don't fail registration
+					fmt.Printf("[AUTH] Failed to create Asaas subscription for clinic %s: %v\n", clinic.ID, err)
+				} else {
+					fmt.Printf("[AUTH] Successfully created Asaas subscription for clinic %s (plan: %s, billing: %s)\n", clinic.ID, req.Plan, req.Billing)
+				}
 			}
 		}
 	}
@@ -460,6 +461,17 @@ func (s *authService) GoogleLogin(ctx context.Context, req *model.GoogleLoginReq
 			_ = s.clinicRepo.Delete(ctx, clinicID)
 			_ = s.accountRepo.Delete(ctx, accountID)
 			return nil, err
+		}
+
+		// Create Asaas customer unconditionally for the new account
+		if s.paymentService != nil {
+			customerReq := &payment_model.CreateCustomerRequest{
+				Name:  googleUser.Name,
+				Email: googleUser.Email,
+			}
+			if err := s.paymentService.CreateCustomerForClinic(ctx, clinic.ID, customerReq); err != nil {
+				fmt.Printf("[AUTH] Failed to create Asaas customer for clinic via Google Login %s: %v\n", clinic.ID, err)
+			}
 		}
 	} else {
 		// User exists - check if active
