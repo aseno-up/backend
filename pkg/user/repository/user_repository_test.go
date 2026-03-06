@@ -19,7 +19,26 @@ func setupTestDB(t *testing.T) *gorm.DB {
 	db, err := gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{})
 	require.NoError(t, err)
 
-	err = db.AutoMigrate(&model.User{})
+	// SQLite doesn't support 'gen_random_uuid()' default
+	err = db.Exec(`CREATE TABLE users (
+		id text PRIMARY KEY,
+		clinic_id text NOT NULL,
+		email text NOT NULL UNIQUE,
+		password_hash text,
+		name text NOT NULL,
+		phone text,
+		avatar_url text,
+		role text NOT NULL DEFAULT 'receptionist',
+		google_id text,
+		refresh_token text,
+		email_verified numeric DEFAULT 0,
+		is_active numeric DEFAULT 1,
+		last_login_at datetime,
+		professional_id text,
+		created_at datetime,
+		updated_at datetime,
+		deleted_at datetime
+	)`).Error
 	require.NoError(t, err)
 
 	return db

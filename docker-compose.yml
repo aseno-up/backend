@@ -19,6 +19,8 @@ services:
     restart: unless-stopped
     ports:
       - "4901:8080"
+    env_file:
+      - ./.env
     environment:
       - TZ=America/Sao_Paulo
       - PORT=8080
@@ -119,6 +121,12 @@ services:
       - CONVERSATION_MAX_TURNS=${CONVERSATION_MAX_TURNS}
       - CONVERSATION_REDIS_TTL=${CONVERSATION_REDIS_TTL}
       - CONVERSATION_POSTGRES_TTL=${CONVERSATION_POSTGRES_TTL}
+
+      # Asaas Payment Gateway
+      # NOTE: $$ is used to escape $ in Docker Compose (ASAAS_API_KEY starts with $)
+      - ASAAS_API_URL=https://sandbox.asaas.com/api/v3
+      - ASAAS_API_KEY=$$aact_hmlg_000MzkwODA2MWY2OGM3MWRlMDU2NWM3MzJlNzZmNGZhZGY6OjExNTYwNGNiLTNlZmItNDdkNC1iZWUxLTJkZTMwMmNkMGViMTo6JGFhY2hfYzY4OTU0Y2YtNjliYi00NDE5LTgzMGUtYjlhNGMyMzA0ZDRl
+      - ASAAS_SANDBOX=true
 
     networks:
       - aseno-network

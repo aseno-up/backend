@@ -58,20 +58,20 @@ type CreateCustomerRequest struct {
 
 // AsaasCustomerResponse represents the response from Asaas API when creating/getting a customer
 type AsaasCustomerResponse struct {
-	ID               string `json:"id"`
-	Name             string `json:"name"`
-	Email            string `json:"email"`
-	Phone            string `json:"phone"`
-	MobilePhone      string `json:"mobilePhone"`
-	Document         string `json:"cpfCnpj"`
-	PostalCode       string `json:"postalCode"`
-	Address          string `json:"address"`
-	AddressNumber    string `json:"addressNumber"`
-	Complement       string `json:"complement"`
-	Province         string `json:"province"`
-	City             string `json:"city"`
-	State            string `json:"state"`
-	ExternalRef      string `json:"externalReference"`
-	AdditionalEmails string `json:"additionalEmails"`
-	DateCreated      string `json:"dateCreated"`
+	ID               string      `json:"id"`
+	Name             string      `json:"name"`
+	Email            string      `json:"email"`
+	Phone            string      `json:"phone"`
+	MobilePhone      string      `json:"mobilePhone"`
+	Document         string      `json:"cpfCnpj"`
+	PostalCode       string      `json:"postalCode"`
+	Address          string      `json:"address"`
+	AddressNumber    string      `json:"addressNumber"`
+	Complement       string      `json:"complement"`
+	Province         string      `json:"province"`
+	City             interface{} `json:"city"`
+	State            interface{} `json:"state"`
+	ExternalRef      string      `json:"externalReference"`
+	AdditionalEmails string      `json:"additionalEmails"`
+	DateCreated      string      `json:"dateCreated"`
 }

@@ -48,6 +48,7 @@ const (
 	ErrPatientRecordNotFound = "PATIENT_RECORD_NOT_FOUND"
 	ErrSessionNoteNotFound   = "SESSION_NOTE_NOT_FOUND"
 	ErrUpgradeRequired       = "UPGRADE_REQUIRED"
+	ErrSubscriptionExpired   = "SUBSCRIPTION_EXPIRED"
 )
 
 // AppError represents an application error with context
@@ -164,6 +165,7 @@ var (
 	ErrPatientRecordNotFoundInstance = NewError(ErrPatientRecordNotFound, "Patient record not found", http.StatusNotFound)
 	ErrSessionNoteNotFoundInstance   = NewError(ErrSessionNoteNotFound, "Session note not found", http.StatusNotFound)
 	ErrUpgradeRequiredInstance       = NewError(ErrUpgradeRequired, "Upgrade required to access this feature", http.StatusForbidden)
+	ErrSubscriptionExpiredInstance   = NewError(ErrSubscriptionExpired, "Subscription has expired. Please renew to continue.", http.StatusPaymentRequired)
 )
 
 // IsNotFound checks if error is a not found error

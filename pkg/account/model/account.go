@@ -12,6 +12,7 @@ type SubscriptionStatus string
 const (
 	SubscriptionStatusTrial    SubscriptionStatus = "trial"
 	SubscriptionStatusActive   SubscriptionStatus = "active"
+	SubscriptionStatusPending  SubscriptionStatus = "pending"
 	SubscriptionStatusPastDue  SubscriptionStatus = "past_due"
 	SubscriptionStatusCanceled SubscriptionStatus = "canceled"
 	SubscriptionStatusExpired  SubscriptionStatus = "expired"
@@ -46,9 +47,10 @@ func (Account) TableName() string {
 }
 
 // IsSubscriptionActive checks if the account has an active subscription
+// pending is treated as active so the user can reach billing pages to complete payment
 func (a *Account) IsSubscriptionActive() bool {
 	switch a.SubscriptionStatus {
-	case SubscriptionStatusActive:
+	case SubscriptionStatusActive, SubscriptionStatusPending:
 		return true
 	case SubscriptionStatusTrial:
 		if a.TrialEndsAt != nil {
