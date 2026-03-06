@@ -54,15 +54,35 @@ const (
 
 // CreateSubscriptionRequest represents a request to create a subscription in Asaas
 type CreateSubscriptionRequest struct {
-	CustomerID  string       `json:"customer" binding:"required"`
-	BillingType BillingType  `json:"billingType" binding:"required"`
-	Value       float64      `json:"value" binding:"required"`
-	NextDueDate string       `json:"nextDueDate" binding:"required"` // Format: YYYY-MM-DD
-	Cycle       BillingCycle `json:"cycle" binding:"required"`
-	Description string       `json:"description"`
-	ExternalRef string       `json:"externalReference"`
-	EndDate     string       `json:"endDate,omitempty"`
-	MaxPayments *int         `json:"maxPayments,omitempty"`
+	CustomerID           string                `json:"customer" binding:"required"`
+	BillingType          BillingType           `json:"billingType" binding:"required"`
+	Value                float64               `json:"value" binding:"required"`
+	NextDueDate          string                `json:"nextDueDate" binding:"required"` // Format: YYYY-MM-DD
+	Cycle                BillingCycle          `json:"cycle" binding:"required"`
+	Description          string                `json:"description"`
+	ExternalRef          string                `json:"externalReference"`
+	EndDate              string                `json:"endDate,omitempty"`
+	MaxPayments          *int                  `json:"maxPayments,omitempty"`
+	CreditCard           *CreditCardInfo       `json:"creditCard,omitempty"`
+	CreditCardHolderInfo *CreditCardHolderInfo `json:"creditCardHolderInfo,omitempty"`
+}
+
+// CreditCardInfo represents credit card data for Asaas
+type CreditCardInfo struct {
+	HolderName  string `json:"holderName"`
+	Number      string `json:"number"`
+	ExpiryMonth string `json:"expiryMonth"`
+	ExpiryYear  string `json:"expiryYear"`
+	Ccv         string `json:"ccv"`
+}
+
+// CreditCardHolderInfo represents credit card holder data for Asaas
+type CreditCardHolderInfo struct {
+	Name       string `json:"name"`
+	Email      string `json:"email"`
+	CpfCnpj    string `json:"cpfCnpj"`
+	PostalCode string `json:"postalCode"`
+	Phone      string `json:"phone"`
 }
 
 // AsaasSubscriptionResponse represents the response from Asaas API

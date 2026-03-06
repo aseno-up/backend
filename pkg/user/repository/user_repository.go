@@ -93,7 +93,7 @@ func (r *userRepository) GetByClinicID(ctx context.Context, clinicID uuid.UUID, 
 
 	if filter.Search != "" {
 		searchQuery := "%" + filter.Search + "%"
-		query = query.Where("name ILIKE ? OR email ILIKE ?", searchQuery, searchQuery)
+		query = query.Where("LOWER(name) LIKE LOWER(?) OR LOWER(email) LIKE LOWER(?)", searchQuery, searchQuery)
 	}
 
 	if filter.Status != "" && filter.Status != "all" {

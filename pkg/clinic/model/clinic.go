@@ -104,12 +104,16 @@ type ClinicResponse struct {
 	GoogleConnected   bool                           `json:"google_connected"`
 	Settings          ClinicSettings                 `json:"settings"`
 	BookingURL        string                         `json:"booking_url,omitempty"`
-	CreatedAt         time.Time                      `json:"created_at"`
+	// Subscription fields (flattened from Account for frontend convenience)
+	Plan               account_model.PlanType           `json:"plan"`
+	SubscriptionStatus account_model.SubscriptionStatus `json:"subscription_status"`
+	TrialEndsAt        *time.Time                       `json:"trial_ends_at,omitempty"`
+	CreatedAt          time.Time                        `json:"created_at"`
 }
 
 // ToResponse converts Clinic to ClinicResponse
 func (c *Clinic) ToResponse() *ClinicResponse {
-	return &ClinicResponse{
+	resp := &ClinicResponse{
 		ID:                c.ID,
 		Name:              c.Name,
 		Slug:              c.Slug,
@@ -127,6 +131,16 @@ func (c *Clinic) ToResponse() *ClinicResponse {
 		Settings:          c.Settings,
 		CreatedAt:         c.CreatedAt,
 	}
+
+	// Populate subscription fields from Account if available
+	if c.Account != nil {
+		resp.Account = c.Account.ToResponse()
+		resp.Plan = c.Account.Plan
+		resp.SubscriptionStatus = c.Account.SubscriptionStatus
+		resp.TrialEndsAt = c.Account.TrialEndsAt
+	}
+
+	return resp
 }
 
 // IsSubscriptionActive checks if the clinic has an active subscription via Account

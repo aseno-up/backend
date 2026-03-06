@@ -172,10 +172,10 @@ func (s *authService) Register(ctx context.Context, req *model.RegisterRequest) 
 		planType = account_model.PlanTypeProfessional
 	}
 
-	// If document provided, set as active (will create Asaas subscription)
+	// If document provided, set as pending (requires payment confirmation)
 	// Otherwise, give 14-day trial period regardless of plan selected
 	if req.Document != "" && req.Plan != "" && req.Plan != "trial" {
-		subscriptionStatus = account_model.SubscriptionStatusActive
+		subscriptionStatus = account_model.SubscriptionStatusPending
 	} else {
 		subscriptionStatus = account_model.SubscriptionStatusTrial
 		trial := time.Now().AddDate(0, 0, 14)
@@ -405,6 +405,26 @@ func (s *authService) GoogleLogin(ctx context.Context, req *model.GoogleLoginReq
 		// Calculate trial end date (14 days from now)
 		trialEndsAt := time.Now().AddDate(0, 0, 14)
 
+		// Determine plan based on request
+		var planType account_model.PlanType
+		var subscriptionStatus account_model.SubscriptionStatus
+		var trialEndsAtPtr *time.Time
+
+		switch req.Plan {
+		case "basic":
+			planType = account_model.PlanTypeBasic
+		case "professional":
+			planType = account_model.PlanTypeProfessional
+		case "advanced":
+			planType = account_model.PlanTypeAdvanced
+		default: // "trial" or empty
+			planType = account_model.PlanTypeProfessional
+		}
+
+		// Google login registrations always start with a 14-day trial (billing setup will follow if they upgrade)
+		subscriptionStatus = account_model.SubscriptionStatusTrial
+		trialEndsAtPtr = &trialEndsAt
+
 		userID := uuid.New()
 		accountID := uuid.New()
 		clinicID := uuid.New()
@@ -413,9 +433,9 @@ func (s *authService) GoogleLogin(ctx context.Context, req *model.GoogleLoginReq
 		account := &account_model.Account{
 			ID:                 accountID,
 			OwnerID:            userID,
-			Plan:               account_model.PlanTypeProfessional,
-			SubscriptionStatus: account_model.SubscriptionStatusTrial,
-			TrialEndsAt:        &trialEndsAt,
+			Plan:               planType,
+			SubscriptionStatus: subscriptionStatus,
+			TrialEndsAt:        trialEndsAtPtr,
 		}
 
 		if err := s.accountRepo.Create(ctx, account); err != nil {

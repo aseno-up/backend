@@ -66,6 +66,8 @@ type RefreshRequest struct {
 // GoogleAuthRequest represents the Google OAuth request body
 type GoogleAuthRequest struct {
 	IDToken string `json:"id_token" binding:"required"`
+	Plan    string `json:"plan"`    // optional: trial, basic, professional, advanced
+	Billing string `json:"billing"` // optional: monthly, annually
 }
 
 // GoogleLoginRequest is an alias for GoogleAuthRequest (for auth service)

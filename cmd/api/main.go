@@ -431,7 +431,7 @@ func main() {
 	// Initialize Payment service (if Asaas client is configured)
 	var paymentService payment_service.PaymentService
 	if asaasClient != nil {
-		paymentService = payment_service.NewPaymentService(asaasClient, customerRepo, paymentRepo, subscriptionRepo, clinicRepo)
+		paymentService = payment_service.NewPaymentService(asaasClient, customerRepo, subscriptionRepo, paymentRepo, clinicRepo, accountRepo, settingsRepo)
 
 		// Inject payment service into auth service for subscription creation during registration
 		authService.SetPaymentService(paymentService)
@@ -796,13 +796,14 @@ func setupRouter(
 		// Public SSE stream route (uses token in query param for auth)
 		notificationHandler.RegisterPublicRoutes(v1)
 
-		// Protected routes (auth required)
-		protected := v1.Group("")
-		protected.Use(authMiddleware.Authenticate())
-		protected.Use(tenantMiddleware.ValidateSubscription())
+		// Auth-only routes (auth required, NO subscription check)
+		// These routes MUST work even when subscription is expired
+		// so users can view their account, pay, and manage billing
+		authOnly := v1.Group("")
+		authOnly.Use(authMiddleware.Authenticate())
 		{
-			// Protected auth routes
-			auth := protected.Group("/auth")
+			// Auth routes that must work with expired subscription
+			auth := authOnly.Group("/auth")
 			{
 				auth.POST("/logout", func(c *gin.Context) {
 					authHandler.Logout(c)
@@ -815,6 +816,19 @@ func setupRouter(
 				})
 			}
 
+			// Billing routes must work with expired subscription so users can pay
+			if paymentHandler != nil {
+				billingAuthOnly := authOnly.Group("")
+				billingAuthOnly.Use(authMiddleware.RequireFinancialAccess())
+				paymentHandler.RegisterRoutes(billingAuthOnly)
+			}
+		}
+
+		// Protected routes (auth required + active subscription required)
+		protected := v1.Group("")
+		protected.Use(authMiddleware.Authenticate())
+		protected.Use(tenantMiddleware.ValidateSubscription())
+		{
 			// Professional routes
 			professionalHandler.RegisterRoutes(protected)
 
@@ -822,7 +836,6 @@ func setupRouter(
 			patientHandler.RegisterRoutes(protected)
 
 			// Appointment routes (with professional access control)
-			// Professional role can only see their own appointments
 			appointmentsProtected := protected.Group("")
 			appointmentsProtected.Use(authMiddleware.RequireProfessionalAccess())
 			{
@@ -835,13 +848,6 @@ func setupRouter(
 			// WhatsApp routes (protected endpoints)
 			if whatsappHandler != nil {
 				whatsappHandler.RegisterRoutes(protected)
-			}
-
-			// Payment routes (protected endpoints - requires financial access)
-			if paymentHandler != nil {
-				billingProtected := protected.Group("")
-				billingProtected.Use(authMiddleware.RequireFinancialAccess())
-				paymentHandler.RegisterRoutes(billingProtected)
 			}
 
 			// Calendar routes (protected endpoints)
