@@ -82,8 +82,8 @@ func (m *tenantMiddleware) ValidateSubscription() gin.HandlerFunc {
 		}
 
 		if !clinic.IsSubscriptionActive() {
-			c.JSON(http.StatusForbidden, errors.ToResponse(
-				errors.ErrForbiddenInstance.WithMessage("Subscription has expired. Please renew to continue using the service."),
+			c.JSON(http.StatusPaymentRequired, errors.ToResponse(
+				errors.ErrSubscriptionExpiredInstance,
 			))
 			c.Abort()
 			return

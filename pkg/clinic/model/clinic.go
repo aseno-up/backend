@@ -104,7 +104,11 @@ type ClinicResponse struct {
 	GoogleConnected   bool                           `json:"google_connected"`
 	Settings          ClinicSettings                 `json:"settings"`
 	BookingURL        string                         `json:"booking_url,omitempty"`
-	CreatedAt         time.Time                      `json:"created_at"`
+	// Subscription fields (flattened from Account for frontend convenience)
+	Plan               account_model.PlanType           `json:"plan"`
+	SubscriptionStatus account_model.SubscriptionStatus `json:"subscription_status"`
+	TrialEndsAt        *time.Time                       `json:"trial_ends_at,omitempty"`
+	CreatedAt          time.Time                        `json:"created_at"`
 }
 
 // ToResponse converts Clinic to ClinicResponse

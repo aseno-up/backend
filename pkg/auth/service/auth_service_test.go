@@ -213,7 +213,7 @@ func TestAuthService_Register_CreatesAsaasCustomerUnconditionally(t *testing.T) 
 	}
 
 	// Setup mocks
-	mockPlanRepo.On("GetBySlug", ctx, "basic").Return(&plan_model.Plan{ID: uuid.New(), Slug: "basic", Name: "Basic"}, nil)
+	mockPlanRepo.On("GetBySlug", mock.Anything, mock.Anything).Return(&plan_model.Plan{ID: uuid.New(), Slug: "basic", Name: "Basic"}, nil)
 	mockUserRepo.On("ExistsByEmail", ctx, req.Email).Return(false, nil)
 	mockClinicRepo.On("ExistsBySlug", ctx, mock.Anything).Return(false, nil)
 	mockAccountRepo.On("Create", ctx, mock.Anything).Return(nil)
@@ -290,7 +290,7 @@ func TestAuthService_GoogleLogin_CreatesAsaasCustomerUnconditionally(t *testing.
 	}
 
 	// Setup mocks
-	mockPlanRepo.On("GetBySlug", ctx, "basic").Return(&plan_model.Plan{ID: uuid.New(), Slug: "basic", Name: "Basic"}, nil)
+	mockPlanRepo.On("GetBySlug", mock.Anything, mock.Anything).Return(&plan_model.Plan{ID: uuid.New(), Slug: "basic", Name: "Basic"}, nil)
 	mockGoogleAuth.On("VerifyIDToken", ctx, req.IDToken).Return(googleUser, nil)
 
 	mockUserRepo.On("GetByEmail", ctx, googleUser.Email).Return(nil, errors.ErrNotFoundInstance)

@@ -30,6 +30,7 @@ func TestPlanService_CalculateBestPrice(t *testing.T) {
 
 	validOffer := &model.Offer{
 		ID:       uuid.New(),
+		PlanID:   plan.ID,
 		IsActive: true,
 		Cycles: []model.OfferCycle{
 			{

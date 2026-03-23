@@ -89,6 +89,12 @@ func (h *authHandler) Register(c *gin.Context) {
 		return
 	}
 
+	// Set HttpOnly cookies
+	// MaxAge: 15 minutes for access token, 7 days for refresh token
+	// Secure: false (dev), HttpOnly: true
+	c.SetCookie("access_token", response.AccessToken, 900, "/", "", false, true)
+	c.SetCookie("refresh_token", response.RefreshToken, 604800, "/", "", false, true)
+
 	c.JSON(http.StatusCreated, response)
 }
 

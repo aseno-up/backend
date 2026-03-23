@@ -30,6 +30,8 @@ type PaymentHandler interface {
 	GetSubscription(c *gin.Context)
 	CreateSubscription(c *gin.Context)
 	CancelSubscription(c *gin.Context)
+	GetSubscriptionPayments(c *gin.Context)
+	SwitchPlan(c *gin.Context)
 	Webhook(c *gin.Context)
 }
 
@@ -66,6 +68,8 @@ func (h *paymentHandler) RegisterRoutes(router gin.IRouter) {
 		billing.GET("/subscription", h.GetSubscription)
 		billing.POST("/subscription", h.CreateSubscription)
 		billing.DELETE("/subscription", h.CancelSubscription)
+		billing.GET("/subscription/payments", h.GetSubscriptionPayments)
+		billing.POST("/switch-plan", h.SwitchPlan)
 	}
 }
 
@@ -227,8 +231,8 @@ func (h *paymentHandler) GetPayment(c *gin.Context) {
 		return
 	}
 
-	paymentID, err := uuid.Parse(c.Param("id"))
-	if err != nil {
+	paymentID := c.Param("id")
+	if paymentID == "" {
 		c.JSON(http.StatusBadRequest, errors.ToResponse(errors.ErrInvalidInstance.WithMessage("Invalid payment ID")))
 		return
 	}
@@ -251,8 +255,8 @@ func (h *paymentHandler) GetPixQRCode(c *gin.Context) {
 		return
 	}
 
-	paymentID, err := uuid.Parse(c.Param("id"))
-	if err != nil {
+	paymentID := c.Param("id")
+	if paymentID == "" {
 		c.JSON(http.StatusBadRequest, errors.ToResponse(errors.ErrInvalidInstance.WithMessage("Invalid payment ID")))
 		return
 	}
@@ -368,6 +372,57 @@ func (h *paymentHandler) CancelSubscription(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"status": "canceled"})
+}
+
+// SwitchPlanRequest represents the request to switch plans
+type SwitchPlanRequest struct {
+	Plan                 string                      `json:"plan" binding:"required,oneof=basic professional advanced"`
+	BillingType          string                      `json:"billing_type" binding:"required"`
+	Cycle                string                      `json:"cycle" binding:"required"`
+	CreditCard           *model.CreditCardInfo       `json:"credit_card,omitempty"`
+	CreditCardHolderInfo *model.CreditCardHolderInfo `json:"credit_card_holder_info,omitempty"`
+}
+
+// SwitchPlan handles plan switching (cancel current + create new)
+func (h *paymentHandler) SwitchPlan(c *gin.Context) {
+	clinicID, exists := c.Get("clinic_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, errors.ToResponse(errors.ErrUnauthorizedInstance))
+		return
+	}
+
+	var req SwitchPlanRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, errors.ToResponse(errors.ErrValidationInstance.WithError(err)))
+		return
+	}
+
+	subscription, err := h.service.SwitchPlan(c.Request.Context(), clinicID.(uuid.UUID), req.Plan, req.BillingType, req.Cycle, req.CreditCard, req.CreditCardHolderInfo)
+	if err != nil {
+		statusCode := errors.GetStatusCode(err)
+		c.JSON(statusCode, errors.ToResponse(err))
+		return
+	}
+
+	c.JSON(http.StatusCreated, subscription)
+}
+
+// GetSubscriptionPayments returns payments for the current subscription
+func (h *paymentHandler) GetSubscriptionPayments(c *gin.Context) {
+	clinicID, exists := c.Get("clinic_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, errors.ToResponse(errors.ErrUnauthorizedInstance))
+		return
+	}
+
+	payments, err := h.service.GetSubscriptionPayments(c.Request.Context(), clinicID.(uuid.UUID))
+	if err != nil {
+		statusCode := errors.GetStatusCode(err)
+		c.JSON(statusCode, errors.ToResponse(err))
+		return
+	}
+
+	c.JSON(http.StatusOK, payments)
 }
 
 // Webhook handles incoming webhooks from Asaas

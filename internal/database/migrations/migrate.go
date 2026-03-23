@@ -95,25 +95,3 @@ func MigrateConversations(db *gorm.DB) error {
 	logger.Println("[Migration] Conversation tables migrated successfully")
 	return nil
 }
-
-// RollbackConversations rolls back conversation-related tables
-func RollbackConversations(db *gorm.DB) error {
-	logger.Println("[Migration] Rolling back conversation_contexts and tool_call_logs migrations...")
-
-	// Drop trigger and function
-	if err := db.Exec(`DROP TRIGGER IF EXISTS trigger_conversation_updated_at ON conversation_contexts`).Error; err != nil {
-		logger.Printf("[Migration] Warning: failed to drop trigger: %v", err)
-	}
-
-	if err := db.Exec(`DROP FUNCTION IF EXISTS update_conversation_updated_at()`).Error; err != nil {
-		logger.Printf("[Migration] Warning: failed to drop function: %v", err)
-	}
-
-	// Drop tables
-	if err := db.Migrator().DropTable(&conversation.ToolCallLog{}, &conversation.ConversationContext{}); err != nil {
-		return fmt.Errorf("failed to drop conversation tables: %w", err)
-	}
-
-	logger.Println("[Migration] Conversation tables rolled back successfully")
-	return nil
-}

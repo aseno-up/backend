@@ -181,7 +181,7 @@ func (s *authService) Register(ctx context.Context, req *model.RegisterRequest) 
 	// If document provided, set as active (will create Asaas subscription)
 	// Otherwise, give 14-day trial period regardless of plan selected
 	if req.Document != "" && req.Plan != "" && req.Plan != "trial" {
-		subscriptionStatus = account_model.SubscriptionStatusActive
+		subscriptionStatus = account_model.SubscriptionStatusPending
 	} else {
 		subscriptionStatus = account_model.SubscriptionStatusTrial
 		trial := time.Now().AddDate(0, 0, 14)
@@ -431,8 +431,12 @@ func (s *authService) GoogleLogin(ctx context.Context, req *model.GoogleLoginReq
 		accountID := uuid.New()
 		clinicID := uuid.New()
 
-		// Fetch default plan for Google Login
-		plan, err := s.planRepo.GetBySlug(ctx, "basic")
+		// Fetch requested plan or default to basic
+		planSlug := req.Plan
+		if planSlug == "" || planSlug == "trial" {
+			planSlug = "basic"
+		}
+		plan, err := s.planRepo.GetBySlug(ctx, planSlug)
 		if err != nil {
 			// Prevent constraint failures if plan isn't found
 			return nil, errors.ErrInternalInstance.WithMessage("Default basic plan not found").WithError(err)
