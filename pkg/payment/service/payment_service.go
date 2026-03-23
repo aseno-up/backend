@@ -7,8 +7,11 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/aseno/backend/internal/errors"
+	account_repository "github.com/aseno/backend/pkg/account/repository"
 	clinic_repository "github.com/aseno/backend/pkg/clinic/repository"
 	"github.com/aseno/backend/pkg/payment/model"
+	plan_model "github.com/aseno/backend/pkg/plan/model"
+	plan_service "github.com/aseno/backend/pkg/plan/service"
 )
 
 // PaymentClient defines the interface for payment gateway operations
@@ -87,7 +90,7 @@ type PaymentService interface {
 
 	// Helper methods for registration flow
 	CreateCustomerForClinic(ctx context.Context, clinicID uuid.UUID, req *model.CreateCustomerRequest) error
-	CreateSubscriptionForClinic(ctx context.Context, clinicID uuid.UUID, plan string, billing string) error
+	CreateSubscriptionForClinic(ctx context.Context, clinicID uuid.UUID, planID uuid.UUID, offerToken *string, billing string) error
 
 	// Webhook handling
 	HandleWebhook(ctx context.Context, payload *model.AsaasWebhookPayload) error
@@ -118,9 +121,9 @@ type CreatePaymentInput struct {
 // CreateSubscriptionInput represents input for creating a subscription
 type CreateSubscriptionInput struct {
 	BillingType model.BillingType
-	Value       float64
+	PlanID      uuid.UUID
+	OfferToken  *string
 	Cycle       model.BillingCycle
-	Description string
 }
 
 // paymentService implements PaymentService
@@ -130,6 +133,8 @@ type paymentService struct {
 	paymentRepo      PaymentRepository
 	subscriptionRepo SubscriptionRepository
 	clinicRepo       clinic_repository.ClinicRepository
+	accountRepo      account_repository.AccountRepository
+	planService      plan_service.PlanService
 }
 
 // NewPaymentService creates a new payment service
@@ -139,6 +144,8 @@ func NewPaymentService(
 	paymentRepo PaymentRepository,
 	subscriptionRepo SubscriptionRepository,
 	clinicRepo clinic_repository.ClinicRepository,
+	accountRepo account_repository.AccountRepository,
+	planService plan_service.PlanService,
 ) PaymentService {
 	return &paymentService{
 		client:           client,
@@ -146,6 +153,8 @@ func NewPaymentService(
 		paymentRepo:      paymentRepo,
 		subscriptionRepo: subscriptionRepo,
 		clinicRepo:       clinicRepo,
+		accountRepo:      accountRepo,
+		planService:      planService,
 	}
 }
 
@@ -349,15 +358,43 @@ func (s *paymentService) CreateSubscription(ctx context.Context, clinicID uuid.U
 		return nil, errors.ErrConflictInstance.WithMessage("Clinic already has an active subscription")
 	}
 
+	// Get actual Plan Price
+	plan, err := s.planService.GetPlanByID(ctx, req.PlanID)
+	if err != nil {
+		return nil, errors.ErrBadRequestInstance.WithMessage("Invalid plan")
+	}
+
+	var planCycleType plan_model.CycleType
+	if req.Cycle == model.BillingCycleYearly {
+		planCycleType = plan_model.CycleTypeYearly
+	} else {
+		planCycleType = plan_model.CycleTypeMonthly
+	}
+
+	var offer *plan_model.Offer
+	if req.OfferToken != nil && *req.OfferToken != "" {
+		o, err := s.planService.ValidateOffer(ctx, *req.OfferToken)
+		if err == nil {
+			offer = o
+		}
+	}
+
+	value, err := s.planService.CalculateBestPrice(ctx, plan, offer, planCycleType)
+	if err != nil {
+		return nil, errors.ErrBadRequestInstance.WithMessage(err.Error())
+	}
+
+	description := "Assinatura " + plan.Name
+
 	// Create subscription in Asaas
 	nextDueDate := time.Now().AddDate(0, 0, 1) // Tomorrow
 	asaasReq := &model.CreateSubscriptionRequest{
 		CustomerID:  customer.AsaasCustomerID,
 		BillingType: req.BillingType,
-		Value:       req.Value,
+		Value:       value,
 		NextDueDate: nextDueDate.Format("2006-01-02"),
 		Cycle:       req.Cycle,
-		Description: req.Description,
+		Description: description,
 		ExternalRef: clinicID.String(),
 	}
 
@@ -368,6 +405,26 @@ func (s *paymentService) CreateSubscription(ctx context.Context, clinicID uuid.U
 
 	// Parse next due date
 	parsedNextDueDate, _ := time.Parse("2006-01-02", asaasSub.NextDueDate)
+
+	// Determine OfferID for tracking usages
+	var offerID *uuid.UUID
+	if offer != nil {
+		offerID = &offer.ID
+		// Consume offer
+		_ = s.planService.UseOffer(ctx, *offerID)
+	}
+
+	// Calculate absolute limits based on Plan or Custom via Offer
+	maxClinics := plan.MaxClinics
+	maxProfessionals := plan.MaxProfessionals
+	if offer != nil {
+		if offer.CustomMaxClinics != nil {
+			maxClinics = *offer.CustomMaxClinics
+		}
+		if offer.CustomMaxProfessionals != nil {
+			maxProfessionals = *offer.CustomMaxProfessionals
+		}
+	}
 
 	// Save subscription to database
 	subscription := &model.Subscription{
@@ -381,6 +438,14 @@ func (s *paymentService) CreateSubscription(ctx context.Context, clinicID uuid.U
 		NextDueDate:         parsedNextDueDate,
 		Description:         asaasSub.Description,
 		ExternalRef:         asaasSub.ExternalRef,
+
+		PlanID:                     &plan.ID,
+		OfferID:                    offerID,
+		PriceAtContract:            value,
+		MaxClinicsAtContract:       maxClinics,
+		MaxProfessionalsAtContract: maxProfessionals,
+		MaxWhatsappAtContract:      plan.MaxWhatsappConnections,
+		MaxGoogleAtContract:        plan.MaxGoogleCalendars,
 	}
 
 	if err := s.subscriptionRepo.Create(ctx, subscription); err != nil {
@@ -439,8 +504,23 @@ func (s *paymentService) HandleWebhook(ctx context.Context, payload *model.Asaas
 	// Handle specific events
 	switch payload.Event {
 	case model.WebhookEventPaymentReceived, model.WebhookEventPaymentConfirmed:
-		// Payment was received - could update clinic subscription status here
-		// This would require injecting a clinic service/repository
+		if payment.SubscriptionID != nil {
+			// Find subscription
+			subscription, err := s.subscriptionRepo.GetByID(ctx, *payment.SubscriptionID)
+			if err != nil {
+				return err
+			}
+
+			// Update Account with Price Lock values
+			account, err := s.accountRepo.GetByID(ctx, payment.AccountID)
+			if err == nil {
+				account.MaxClinics = subscription.MaxClinicsAtContract
+				account.MaxProfessionals = subscription.MaxProfessionalsAtContract
+				account.MaxWhatsappConnections = subscription.MaxWhatsappAtContract
+				account.MaxGoogleCalendars = subscription.MaxGoogleAtContract
+				s.accountRepo.Update(ctx, account)
+			}
+		}
 	case model.WebhookEventPaymentOverdue:
 		// Payment is overdue - could notify the clinic
 	}
@@ -487,7 +567,7 @@ func (s *paymentService) CreateCustomerForClinic(ctx context.Context, clinicID u
 }
 
 // CreateSubscriptionForClinic creates an Asaas subscription for a clinic during registration
-func (s *paymentService) CreateSubscriptionForClinic(ctx context.Context, clinicID uuid.UUID, plan string, billing string) error {
+func (s *paymentService) CreateSubscriptionForClinic(ctx context.Context, clinicID uuid.UUID, planID uuid.UUID, offerToken *string, billing string) error {
 	clinic, err := s.clinicRepo.GetByID(ctx, clinicID)
 	if err != nil {
 		return err
@@ -499,26 +579,34 @@ func (s *paymentService) CreateSubscriptionForClinic(ctx context.Context, clinic
 		return errors.ErrNotFoundInstance.WithMessage("Customer not found")
 	}
 
-	// Map plan to price (you should get this from config/database)
-	var value float64
-	switch plan {
-	case "basic":
-		value = 99.00
-	case "professional":
-		value = 199.00
-	case "advanced":
-		value = 349.00
-	default:
+	// Fetch Plan
+	plan, err := s.planService.GetPlanByID(ctx, planID)
+	if err != nil {
 		return errors.ErrBadRequestInstance.WithMessage("Invalid plan")
 	}
 
-	// Adjust for billing cycle
+	// Validate Plan and Offer to get Price
+	var planCycleType plan_model.CycleType
 	var cycle model.BillingCycle
 	if billing == "annually" {
+		planCycleType = plan_model.CycleTypeYearly
 		cycle = model.BillingCycleYearly
-		value = value * 10 // 2 months free on annual billing
 	} else {
+		planCycleType = plan_model.CycleTypeMonthly
 		cycle = model.BillingCycleMonthly
+	}
+
+	var offer *plan_model.Offer
+	if offerToken != nil && *offerToken != "" {
+		o, err := s.planService.ValidateOffer(ctx, *offerToken)
+		if err == nil {
+			offer = o
+		}
+	}
+
+	value, err := s.planService.CalculateBestPrice(ctx, plan, offer, planCycleType)
+	if err != nil {
+		return errors.ErrBadRequestInstance.WithMessage(err.Error())
 	}
 
 	// Calculate next due date (immediate charge)
@@ -531,7 +619,7 @@ func (s *paymentService) CreateSubscriptionForClinic(ctx context.Context, clinic
 		Value:       value,
 		NextDueDate: nextDueDate,
 		Cycle:       cycle,
-		Description: "Assinatura " + plan,
+		Description: "Assinatura " + plan.Name,
 	}
 
 	asaasSubscription, err := s.client.CreateSubscription(ctx, asaasReq)
@@ -541,6 +629,24 @@ func (s *paymentService) CreateSubscriptionForClinic(ctx context.Context, clinic
 
 	// Parse next due date
 	nextDue, _ := time.Parse("2006-01-02", asaasSubscription.NextDueDate)
+
+	var offerID *uuid.UUID
+	if offer != nil {
+		offerID = &offer.ID
+		_ = s.planService.UseOffer(ctx, *offerID)
+	}
+
+	// Calculate absolute limits based on Plan or Custom via Offer
+	maxClinics := plan.MaxClinics
+	maxProfessionals := plan.MaxProfessionals
+	if offer != nil {
+		if offer.CustomMaxClinics != nil {
+			maxClinics = *offer.CustomMaxClinics
+		}
+		if offer.CustomMaxProfessionals != nil {
+			maxProfessionals = *offer.CustomMaxProfessionals
+		}
+	}
 
 	// Save subscription in database
 	subscription := &model.Subscription{
@@ -553,6 +659,14 @@ func (s *paymentService) CreateSubscriptionForClinic(ctx context.Context, clinic
 		NextDueDate:         nextDue,
 		Cycle:               model.BillingCycle(asaasSubscription.Cycle),
 		Description:         asaasSubscription.Description,
+
+		PlanID:                     &plan.ID,
+		OfferID:                    offerID,
+		PriceAtContract:            value,
+		MaxClinicsAtContract:       maxClinics,
+		MaxProfessionalsAtContract: maxProfessionals,
+		MaxWhatsappAtContract:      plan.MaxWhatsappConnections,
+		MaxGoogleAtContract:        plan.MaxGoogleCalendars,
 	}
 
 	return s.subscriptionRepo.Create(ctx, subscription)

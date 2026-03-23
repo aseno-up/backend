@@ -6,7 +6,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/aseno/backend/internal/errors"
-	account_model "github.com/aseno/backend/pkg/account/model"
 	clinic_repository "github.com/aseno/backend/pkg/clinic/repository"
 	"github.com/aseno/backend/pkg/pagination"
 	"github.com/aseno/backend/pkg/patient/model"
@@ -49,8 +48,8 @@ func (s *patientService) checkPlanForRiskData(ctx context.Context, clinicID uuid
 	}
 
 	// Risk data is available for Professional and Advanced plans
-	if clinic.Account != nil {
-		return clinic.Account.Plan != account_model.PlanTypeBasic, nil
+	if clinic.Account != nil && clinic.Account.Plan != nil {
+		return clinic.Account.Plan.HasApiAccess, nil
 	}
 	return false, nil
 }

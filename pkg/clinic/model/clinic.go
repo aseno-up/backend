@@ -109,7 +109,7 @@ type ClinicResponse struct {
 
 // ToResponse converts Clinic to ClinicResponse
 func (c *Clinic) ToResponse() *ClinicResponse {
-	return &ClinicResponse{
+	resp := &ClinicResponse{
 		ID:                c.ID,
 		Name:              c.Name,
 		Slug:              c.Slug,
@@ -127,6 +127,10 @@ func (c *Clinic) ToResponse() *ClinicResponse {
 		Settings:          c.Settings,
 		CreatedAt:         c.CreatedAt,
 	}
+	if c.Account != nil {
+		resp.Account = c.Account.ToResponse()
+	}
+	return resp
 }
 
 // IsSubscriptionActive checks if the clinic has an active subscription via Account

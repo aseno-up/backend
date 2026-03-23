@@ -112,7 +112,7 @@ func (s *calendarService) GetAuthURL(ctx context.Context, clinicID uuid.UUID) (s
 	}
 
 	// Allow access for trial users or non-basic plans
-	if clinic.Account != nil && clinic.Account.Plan == account_model.PlanTypeBasic && clinic.Account.SubscriptionStatus != account_model.SubscriptionStatusTrial {
+	if clinic.Account != nil && clinic.Account.Plan != nil && !clinic.Account.Plan.HasApiAccess && clinic.Account.SubscriptionStatus != account_model.SubscriptionStatusTrial {
 		return "", errors.ErrValidationInstance.WithMessage("Integração com Google Calendar disponível apenas nos planos Profissional e Avançado.")
 	}
 
@@ -128,7 +128,7 @@ func (s *calendarService) HandleCallback(ctx context.Context, clinicID uuid.UUID
 	}
 
 	// Allow access for trial users or non-basic plans
-	if clinic.Account != nil && clinic.Account.Plan == account_model.PlanTypeBasic && clinic.Account.SubscriptionStatus != account_model.SubscriptionStatusTrial {
+	if clinic.Account != nil && clinic.Account.Plan != nil && !clinic.Account.Plan.HasApiAccess && clinic.Account.SubscriptionStatus != account_model.SubscriptionStatusTrial {
 		return nil, errors.ErrValidationInstance.WithMessage("Integração com Google Calendar disponível apenas nos planos Profissional e Avançado.")
 	}
 

@@ -9,6 +9,7 @@ import (
 	clinicModel "github.com/aseno/backend/pkg/clinic/model"
 	patientModel "github.com/aseno/backend/pkg/patient/model"
 	paymentModel "github.com/aseno/backend/pkg/payment/model"
+	planModel "github.com/aseno/backend/pkg/plan/model"
 	procedureModel "github.com/aseno/backend/pkg/procedure/model"
 	professionalModel "github.com/aseno/backend/pkg/professional/model"
 	sessionPlanModel "github.com/aseno/backend/pkg/sessionplan/model"
@@ -24,6 +25,12 @@ func MigrateConversations(db *gorm.DB) error {
 	if err := db.AutoMigrate(
 		&conversation.ConversationContext{},
 		&conversation.ToolCallLog{},
+
+		// Plan models
+		&planModel.Plan{},
+		&planModel.PlanCycle{},
+		&planModel.Offer{},
+		&planModel.OfferCycle{},
 
 		// Clinic models
 		&clinicModel.Clinic{},

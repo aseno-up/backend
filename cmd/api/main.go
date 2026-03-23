@@ -13,6 +13,7 @@ import (
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 
 	"github.com/aseno/backend/internal/config"
 	"github.com/aseno/backend/internal/database"
@@ -73,6 +74,10 @@ import (
 	payment_model "github.com/aseno/backend/pkg/payment/model"
 	payment_repository "github.com/aseno/backend/pkg/payment/repository"
 	payment_service "github.com/aseno/backend/pkg/payment/service"
+	plan_handler "github.com/aseno/backend/pkg/plan/handler"
+	plan_model "github.com/aseno/backend/pkg/plan/model"
+	plan_repository "github.com/aseno/backend/pkg/plan/repository"
+	plan_service "github.com/aseno/backend/pkg/plan/service"
 	procedure_handler "github.com/aseno/backend/pkg/procedure/handler"
 	procedure_model "github.com/aseno/backend/pkg/procedure/model"
 	procedure_repository "github.com/aseno/backend/pkg/procedure/repository"
@@ -163,6 +168,8 @@ func main() {
 	sessionPlanRepo := sessionplan_repository.NewSessionPlanRepository(db.GetDB())
 	inviteRepo := invite_repository.NewInviteRepository(db.GetDB())
 	patientRecordRepo := patientrecord_repository.NewPatientRecordRepository(db.GetDB())
+	planRepo := plan_repository.NewPlanRepository(db.GetDB())
+	offerRepo := plan_repository.NewOfferRepository(db.GetDB())
 	dashboardRepo := dashboard_repository.NewDashboardRepository(db.GetDB())
 	passwordResetRepo := auth_repository.NewPasswordResetRepository(db.GetDB())
 	emailVerificationRepo := auth_repository.NewEmailVerificationRepository(db.GetDB())
@@ -175,6 +182,11 @@ func main() {
 	// Seed default settings (if not exist)
 	if err := settingsRepo.SeedDefaults(context.Background()); err != nil {
 		logger.Printf("Warning: Failed to seed default settings: %v", err)
+	}
+
+	// Seed default plans (if not exist)
+	if err := seedDefaultPlans(db.GetDB()); err != nil {
+		logger.Printf("Warning: Failed to seed default plans: %v", err)
 	}
 
 	// Initialize Settings service (used by professional service and public config)
@@ -291,9 +303,9 @@ func main() {
 	// Initialize auth service with or without Google OAuth
 	var authService auth_service.AuthService
 	if googleAuthClient != nil {
-		authService = auth_service.NewAuthServiceWithGoogle(userRepo, clinicRepo, accountRepo, passwordResetRepo, emailVerificationRepo, jwtService, &googleAuthAdapter{client: googleAuthClient}, emailSvc, cfg.GetFrontendURL())
+		authService = auth_service.NewAuthServiceWithGoogle(userRepo, clinicRepo, accountRepo, passwordResetRepo, emailVerificationRepo, planRepo, jwtService, &googleAuthAdapter{client: googleAuthClient}, emailSvc, cfg.GetFrontendURL())
 	} else {
-		authService = auth_service.NewAuthService(userRepo, clinicRepo, accountRepo, passwordResetRepo, emailVerificationRepo, jwtService, emailSvc, cfg.GetFrontendURL())
+		authService = auth_service.NewAuthService(userRepo, clinicRepo, accountRepo, passwordResetRepo, emailVerificationRepo, planRepo, jwtService, emailSvc, cfg.GetFrontendURL())
 	}
 	professionalService := professional_service.NewProfessionalService(professionalRepo, clinicRepo, settingsSvc)
 	patientService := patient_service.NewPatientService(patientRepo, clinicRepo)
@@ -428,10 +440,15 @@ func main() {
 		}
 	}
 
+	// Initialize Plan service and handler
+	planService := plan_service.NewPlanService(planRepo, offerRepo)
+	planHandler := plan_handler.NewPlanHandler(planService)
+	offerHandler := plan_handler.NewOfferHandler(planService)
+
 	// Initialize Payment service (if Asaas client is configured)
 	var paymentService payment_service.PaymentService
 	if asaasClient != nil {
-		paymentService = payment_service.NewPaymentService(asaasClient, customerRepo, paymentRepo, subscriptionRepo, clinicRepo)
+		paymentService = payment_service.NewPaymentService(asaasClient, customerRepo, paymentRepo, subscriptionRepo, clinicRepo, accountRepo, planService)
 
 		// Inject payment service into auth service for subscription creation during registration
 		authService.SetPaymentService(paymentService)
@@ -647,7 +664,7 @@ func main() {
 	settingsHdlr := settings_handler.NewSettingsHandler(settingsSvc)
 
 	// Initialize Public handler (no auth required - landing page config)
-	publicHdlr := public_handler.NewPublicHandler(settingsSvc)
+	publicHdlr := public_handler.NewPublicHandler(settingsSvc, planService)
 
 	// Booking service already initialized earlier (for AI Agent)
 	// bookingSvc already exists
@@ -678,6 +695,8 @@ func main() {
 		settingsHdlr,
 		publicHdlr,
 		bookingHdlr,
+		planHandler,
+		offerHandler,
 		authMiddleware,
 		tenantMiddleware,
 	)
@@ -756,6 +775,8 @@ func setupRouter(
 	settingsHandler settings_handler.SettingsHandler,
 	publicHandler public_handler.PublicHandler,
 	bookingHandler booking_handler.BookingHandler,
+	planHandler *plan_handler.PlanHandler,
+	offerHandler *plan_handler.OfferHandler,
 	authMiddleware auth_middleware.AuthMiddleware,
 	tenantMiddleware auth_middleware.TenantMiddleware,
 ) *gin.Engine {
@@ -792,6 +813,9 @@ func setupRouter(
 
 		// Public booking routes (no auth required - online booking)
 		bookingHandler.RegisterRoutes(v1)
+
+		// Public plan routes (no auth required)
+		planHandler.RegisterPublicRoutes(v1)
 
 		// Public SSE stream route (uses token in query param for auth)
 		notificationHandler.RegisterPublicRoutes(v1)
@@ -831,6 +855,10 @@ func setupRouter(
 
 			// Procedure routes
 			procedureHandler.RegisterRoutes(protected)
+
+			// Plan routes (protected endpoints inside PlanHandler/OfferHandler for admins)
+			planHandler.RegisterRoutes(protected, authMiddleware)
+			offerHandler.RegisterRoutes(protected, authMiddleware)
 
 			// WhatsApp routes (protected endpoints)
 			if whatsappHandler != nil {
@@ -952,6 +980,10 @@ func runMigrations(db *database.Database) error {
 	// Add all models that need migration here
 	// Order matters due to foreign key constraints
 	models := []interface{}{
+		&plan_model.Plan{},
+		&plan_model.PlanCycle{},
+		&plan_model.Offer{},
+		&plan_model.OfferCycle{},
 		&account_model.Account{},
 		&clinic_model.Clinic{},
 		&user_model.User{},
@@ -1030,6 +1062,117 @@ func runMigrations(db *database.Database) error {
 	db.GetDB().Exec("ALTER TABLE clinics ALTER COLUMN account_id SET NOT NULL")
 
 	logger.Println("Database migrations completed")
+	return nil
+}
+
+// seedDefaultPlans creates the default plans with pricing cycles if they don't exist
+func seedDefaultPlans(db *gorm.DB) error {
+	plans := []plan_model.Plan{
+		{
+			Name:                   "Básico",
+			Slug:                   "basic",
+			IsActive:               true,
+			MaxClinics:             1,
+			MaxProfessionals:       5,
+			MaxWhatsappConnections: 1,
+			MaxGoogleCalendars:     0,
+			HasApiAccess:           false,
+			Features: plan_model.StringArray{
+				"Até 5 profissionais",
+				"Agenda ilimitada",
+				"Confirmações WhatsApp",
+				"Sessões recorrentes",
+				"Gestão de pacientes",
+				"Histórico de atendimentos",
+				"Acesso via celular/computador",
+				"Suporte por email",
+			},
+			Cycles: []plan_model.PlanCycle{
+				{CycleType: plan_model.CycleTypeMonthly, PriceBRL: 99},
+				{CycleType: plan_model.CycleTypeYearly, PriceBRL: 990},
+			},
+		},
+		{
+			Name:                   "Profissional",
+			Slug:                   "professional",
+			IsActive:               true,
+			MaxClinics:             1,
+			MaxProfessionals:       15,
+			MaxWhatsappConnections: 1,
+			MaxGoogleCalendars:     1,
+			HasApiAccess:           false,
+			Features: plan_model.StringArray{
+				"Até 15 profissionais",
+				"Tudo do Básico",
+				"Integração Google Calendar",
+				"Lista de Espera Automática",
+				"Detector de Risco de Faltas",
+				"Relatórios de Prejuízo",
+				"Relatórios de Faltas",
+				"Personalização de mensagens",
+				"Suporte prioritário WhatsApp",
+			},
+			Cycles: []plan_model.PlanCycle{
+				{CycleType: plan_model.CycleTypeMonthly, PriceBRL: 199},
+				{CycleType: plan_model.CycleTypeYearly, PriceBRL: 1990},
+			},
+		},
+		{
+			Name:                   "Avançado",
+			Slug:                   "advanced",
+			IsActive:               true,
+			MaxClinics:             -1,
+			MaxProfessionals:       -1,
+			MaxWhatsappConnections: -1,
+			MaxGoogleCalendars:     -1,
+			HasApiAccess:           true,
+			Features: plan_model.StringArray{
+				"Profissionais ilimitados",
+				"Tudo do Profissional",
+				"API de integração",
+				"Treinamento da equipe",
+				"Importação de dados",
+				"SLA de 99.9%",
+				"Backup diário automático",
+			},
+			Cycles: []plan_model.PlanCycle{
+				{CycleType: plan_model.CycleTypeMonthly, PriceBRL: 349},
+				{CycleType: plan_model.CycleTypeYearly, PriceBRL: 3490},
+			},
+		},
+	}
+
+	for _, p := range plans {
+		var existing plan_model.Plan
+		result := db.Where("slug = ?", p.Slug).First(&existing)
+		if result.Error == gorm.ErrRecordNotFound {
+			// Plan doesn't exist, create with cycles
+			if err := db.Create(&p).Error; err != nil {
+				return err
+			}
+			logger.Printf("Seeded plan: %s", p.Name)
+		} else if result.Error == nil {
+			// Plan exists, ensure it has cycles
+			var cycleCount int64
+			db.Model(&plan_model.PlanCycle{}).Where("plan_id = ?", existing.ID).Count(&cycleCount)
+			if cycleCount == 0 {
+				for i := range p.Cycles {
+					p.Cycles[i].PlanID = existing.ID
+				}
+				if err := db.Create(&p.Cycles).Error; err != nil {
+					return err
+				}
+				logger.Printf("Seeded cycles for existing plan: %s", existing.Name)
+			}
+			// Seed features and is_active for existing plans that don't have them
+			updates := map[string]interface{}{"is_active": true}
+			if len(existing.Features) == 0 && len(p.Features) > 0 {
+				updates["features"] = p.Features
+			}
+			db.Model(&existing).Updates(updates)
+		}
+	}
+
 	return nil
 }
 

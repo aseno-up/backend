@@ -5,6 +5,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	plan_model "github.com/aseno/backend/pkg/plan/model"
+	plan_service "github.com/aseno/backend/pkg/plan/service"
 	settings_service "github.com/aseno/backend/pkg/settings/service"
 )
 
@@ -14,15 +16,16 @@ type PublicHandler interface {
 	GetConfig(c *gin.Context)
 }
 
-// publicHandler implements PublicHandler
 type publicHandler struct {
 	settings settings_service.SettingsService
+	planSvc  plan_service.PlanService
 }
 
 // NewPublicHandler creates a new public handler
-func NewPublicHandler(settings settings_service.SettingsService) PublicHandler {
+func NewPublicHandler(settings settings_service.SettingsService, planSvc plan_service.PlanService) PublicHandler {
 	return &publicHandler{
 		settings: settings,
+		planSvc:  planSvc,
 	}
 }
 
@@ -38,6 +41,7 @@ func (h *publicHandler) RegisterRoutes(router gin.IRouter) {
 type PlanConfigResponse struct {
 	LimitProfessionals int      `json:"limit_professionals"` // -1 = unlimited
 	PriceMonthly       int      `json:"price_monthly"`
+	PriceYearly        int      `json:"price_yearly"`
 	ExcessPrice        int      `json:"excess_price_per_professional"`
 	Features           []string `json:"features"`
 }
@@ -56,58 +60,95 @@ type PublicConfigResponse struct {
 func (h *publicHandler) GetConfig(c *gin.Context) {
 	ctx := c.Request.Context()
 
-	response := PublicConfigResponse{
-		TrialDays: h.settings.GetTrialDays(ctx),
-		Plans: map[string]PlanConfigResponse{
-			"basic": {
-				LimitProfessionals: h.settings.GetPlanLimit(ctx, "basic"),
-				PriceMonthly:       h.settings.GetPlanPrice(ctx, "basic"),
-				ExcessPrice:        h.settings.GetExcessPrice(ctx),
-				Features: []string{
-					"Até 5 profissionais",
-					"Agenda ilimitada",
-					"Confirmações WhatsApp",
-					"Sessões recorrentes",
-					"Gestão de pacientes",
-					"Histórico de atendimentos",
-					"Acesso via celular/computador",
-					"Suporte por email",
-				},
-			},
-			"professional": {
-				LimitProfessionals: h.settings.GetPlanLimit(ctx, "professional"),
-				PriceMonthly:       h.settings.GetPlanPrice(ctx, "professional"),
-				ExcessPrice:        h.settings.GetExcessPrice(ctx),
-				Features: []string{
-					"Até 15 profissionais",
-					"Tudo do Básico",
-					"Integração Google Calendar",
-					"Lista de Espera Automática",
-					"Detector de Risco de Faltas",
-					"Relatórios de Prejuízo",
-					"Relatórios de Faltas",
-					"Personalização de mensagens",
-					"Suporte prioritário WhatsApp",
-				},
-			},
-			"advanced": {
-				LimitProfessionals: h.settings.GetPlanLimit(ctx, "advanced"),
-				PriceMonthly:       h.settings.GetPlanPrice(ctx, "advanced"),
-				ExcessPrice:        0, // No excess for advanced plan (unlimited)
-				Features: []string{
-					"Profissionais ilimitados",
-					"Tudo do Profissional",
-					"API de integração",
-					"Treinamento da equipe",
-					"Importação de dados",
-					"SLA de 99.9%",
-					"Backup diário automático",
-				},
-			},
+	// Fallback features (used only if plan has no features in DB)
+	fallbackFeatures := map[string][]string{
+		"basic": {
+			"Até 5 profissionais",
+			"Agenda ilimitada",
+			"Confirmações WhatsApp",
+			"Sessões recorrentes",
+			"Gestão de pacientes",
+			"Histórico de atendimentos",
+			"Acesso via celular/computador",
+			"Suporte por email",
+		},
+		"professional": {
+			"Até 15 profissionais",
+			"Tudo do Básico",
+			"Integração Google Calendar",
+			"Lista de Espera Automática",
+			"Detector de Risco de Faltas",
+			"Relatórios de Prejuízo",
+			"Relatórios de Faltas",
+			"Personalização de mensagens",
+			"Suporte prioritário WhatsApp",
+		},
+		"advanced": {
+			"Profissionais ilimitados",
+			"Tudo do Profissional",
+			"API de integração",
+			"Treinamento da equipe",
+			"Importação de dados",
+			"SLA de 99.9%",
+			"Backup diário automático",
 		},
 	}
 
-	// Add cache headers for CDN/browser caching (5 minutes)
-	c.Header("Cache-Control", "public, max-age=300")
+	response := PublicConfigResponse{
+		TrialDays: h.settings.GetTrialDays(ctx),
+		Plans:     make(map[string]PlanConfigResponse),
+	}
+
+	// Fetch dynamic plans from DB
+	dbPlans, err := h.planSvc.ListPlans(ctx)
+	if err == nil && len(dbPlans) > 0 {
+		for _, p := range dbPlans {
+			var priceMonthly, priceYearly float64
+			for _, cycle := range p.Cycles {
+				switch cycle.CycleType {
+				case plan_model.CycleTypeMonthly:
+					priceMonthly = cycle.PriceBRL
+				case plan_model.CycleTypeYearly:
+					priceYearly = cycle.PriceBRL
+				}
+			}
+
+			features := []string(p.Features)
+			if len(features) == 0 {
+				features = fallbackFeatures[p.Slug]
+			}
+
+			excessPrice := 0
+			if p.Slug != "advanced" {
+				excessPrice = h.settings.GetExcessPrice(ctx)
+			}
+
+			response.Plans[p.Slug] = PlanConfigResponse{
+				LimitProfessionals: p.MaxProfessionals,
+				PriceMonthly:       int(priceMonthly),
+				PriceYearly:        int(priceYearly),
+				ExcessPrice:        excessPrice,
+				Features:           features,
+			}
+		}
+	} else {
+		// Fallback to settings if DB fails
+		for slug, features := range fallbackFeatures {
+			excessPrice := 0
+			if slug != "advanced" {
+				excessPrice = h.settings.GetExcessPrice(ctx)
+			}
+			response.Plans[slug] = PlanConfigResponse{
+				LimitProfessionals: h.settings.GetPlanLimit(ctx, slug),
+				PriceMonthly:       h.settings.GetPlanPrice(ctx, slug),
+				PriceYearly:        h.settings.GetPlanPrice(ctx, slug) * 10,
+				ExcessPrice:        excessPrice,
+				Features:           features,
+			}
+		}
+	}
+
+	// No cache — prices are managed dynamically via admin
+	c.Header("Cache-Control", "no-cache")
 	c.JSON(http.StatusOK, response)
 }

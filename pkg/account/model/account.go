@@ -4,6 +4,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	plan_model "github.com/aseno/backend/pkg/plan/model"
 )
 
 // SubscriptionStatus represents the subscription state
@@ -20,6 +22,7 @@ const (
 // PlanType represents the subscription plan
 type PlanType string
 
+// Deprecated: Migrating to dynamic Plan entity instead
 const (
 	PlanTypeBasic        PlanType = "basic"
 	PlanTypeProfessional PlanType = "professional"
@@ -28,16 +31,21 @@ const (
 
 // Account represents a multi-tenant billing profile
 type Account struct {
-	ID                 uuid.UUID          `json:"id" gorm:"type:uuid;primary_key;default:gen_random_uuid()"`
-	OwnerID            uuid.UUID          `json:"owner_id" gorm:"type:uuid;not null;index"`
-	AsaasCustomerID    string             `json:"-"`
-	Plan               PlanType           `json:"plan" gorm:"default:'basic'"`
-	SubscriptionStatus SubscriptionStatus `json:"subscription_status" gorm:"default:'trial'"`
-	TrialEndsAt        *time.Time         `json:"trial_ends_at"`
-	SubscriptionEndsAt *time.Time         `json:"subscription_ends_at"`
-	CreatedAt          time.Time          `json:"created_at"`
-	UpdatedAt          time.Time          `json:"updated_at"`
-	DeletedAt          *time.Time         `json:"deleted_at,omitempty" gorm:"index"`
+	ID                     uuid.UUID          `json:"id" gorm:"type:uuid;primary_key;default:gen_random_uuid()"`
+	OwnerID                uuid.UUID          `json:"owner_id" gorm:"type:uuid;not null;index"`
+	AsaasCustomerID        string             `json:"-"`
+	PlanID                 *uuid.UUID         `json:"plan_id,omitempty" gorm:"type:uuid;index"`
+	Plan                   *plan_model.Plan   `json:"plan,omitempty" gorm:"foreignKey:PlanID"`
+	SubscriptionStatus     SubscriptionStatus `json:"subscription_status" gorm:"default:'trial'"`
+	TrialEndsAt            *time.Time         `json:"trial_ends_at"`
+	SubscriptionEndsAt     *time.Time         `json:"subscription_ends_at"`
+	MaxClinics             int                `json:"max_clinics"`
+	MaxProfessionals       int                `json:"max_professionals"`
+	MaxWhatsappConnections int                `json:"max_whatsapp_connections"`
+	MaxGoogleCalendars     int                `json:"max_google_calendars"`
+	CreatedAt              time.Time          `json:"created_at"`
+	UpdatedAt              time.Time          `json:"updated_at"`
+	DeletedAt              *time.Time         `json:"deleted_at,omitempty" gorm:"index"`
 }
 
 // TableName returns the table name for GORM
@@ -62,24 +70,32 @@ func (a *Account) IsSubscriptionActive() bool {
 
 // AccountResponse represents the API response for an account
 type AccountResponse struct {
-	ID                 uuid.UUID          `json:"id"`
-	OwnerID            uuid.UUID          `json:"owner_id"`
-	Plan               PlanType           `json:"plan"`
-	SubscriptionStatus SubscriptionStatus `json:"subscription_status"`
-	TrialEndsAt        *time.Time         `json:"trial_ends_at,omitempty"`
-	SubscriptionEndsAt *time.Time         `json:"subscription_ends_at,omitempty"`
-	CreatedAt          time.Time          `json:"created_at"`
+	ID                     uuid.UUID          `json:"id"`
+	OwnerID                uuid.UUID          `json:"owner_id"`
+	Plan                   *plan_model.Plan   `json:"plan,omitempty"`
+	SubscriptionStatus     SubscriptionStatus `json:"subscription_status"`
+	TrialEndsAt            *time.Time         `json:"trial_ends_at,omitempty"`
+	SubscriptionEndsAt     *time.Time         `json:"subscription_ends_at,omitempty"`
+	MaxClinics             int                `json:"max_clinics"`
+	MaxProfessionals       int                `json:"max_professionals"`
+	MaxWhatsappConnections int                `json:"max_whatsapp_connections"`
+	MaxGoogleCalendars     int                `json:"max_google_calendars"`
+	CreatedAt              time.Time          `json:"created_at"`
 }
 
 // ToResponse converts Account to AccountResponse
 func (a *Account) ToResponse() *AccountResponse {
 	return &AccountResponse{
-		ID:                 a.ID,
-		OwnerID:            a.OwnerID,
-		Plan:               a.Plan,
-		SubscriptionStatus: a.SubscriptionStatus,
-		TrialEndsAt:        a.TrialEndsAt,
-		SubscriptionEndsAt: a.SubscriptionEndsAt,
-		CreatedAt:          a.CreatedAt,
+		ID:                     a.ID,
+		OwnerID:                a.OwnerID,
+		Plan:                   a.Plan,
+		SubscriptionStatus:     a.SubscriptionStatus,
+		TrialEndsAt:            a.TrialEndsAt,
+		SubscriptionEndsAt:     a.SubscriptionEndsAt,
+		MaxClinics:             a.MaxClinics,
+		MaxProfessionals:       a.MaxProfessionals,
+		MaxWhatsappConnections: a.MaxWhatsappConnections,
+		MaxGoogleCalendars:     a.MaxGoogleCalendars,
+		CreatedAt:              a.CreatedAt,
 	}
 }

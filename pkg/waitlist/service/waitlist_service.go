@@ -13,7 +13,6 @@ import (
 
 	"github.com/aseno/backend/internal/errors"
 	"github.com/aseno/backend/internal/queue"
-	account_model "github.com/aseno/backend/pkg/account/model"
 	clinic_repository "github.com/aseno/backend/pkg/clinic/repository"
 	"github.com/aseno/backend/pkg/waitlist/model"
 	"github.com/aseno/backend/pkg/waitlist/repository"
@@ -103,7 +102,7 @@ func (s *waitlistService) checkPlanRestriction(ctx context.Context, clinicID uui
 		return err
 	}
 
-	if clinic.Account != nil && clinic.Account.Plan == account_model.PlanTypeBasic {
+	if clinic.Account != nil && clinic.Account.Plan != nil && !clinic.Account.Plan.HasApiAccess {
 		return errors.ErrUpgradeRequiredInstance.WithMessage("Lista de encaixe disponível apenas nos planos Profissional e Avançado")
 	}
 

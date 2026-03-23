@@ -56,8 +56,8 @@ func (s *professionalService) Create(ctx context.Context, clinicID uuid.UUID, re
 
 	// Get limit from settings service
 	planName := "basic"
-	if clinic.Account != nil {
-		planName = string(clinic.Account.Plan)
+	if clinic.Account != nil && clinic.Account.Plan != nil {
+		planName = string(clinic.Account.Plan.Slug)
 	}
 	limit := s.settings.GetPlanLimit(ctx, planName)
 

@@ -18,6 +18,8 @@ import (
 	clinic_repository "github.com/aseno/backend/pkg/clinic/repository"
 	email_service "github.com/aseno/backend/pkg/email/service"
 	payment_model "github.com/aseno/backend/pkg/payment/model"
+	plan_model "github.com/aseno/backend/pkg/plan/model"
+	plan_repo "github.com/aseno/backend/pkg/plan/repository"
 	user_model "github.com/aseno/backend/pkg/user/model"
 	user_repository "github.com/aseno/backend/pkg/user/repository"
 )
@@ -33,8 +35,8 @@ func (m *MockPaymentService) CreateCustomerForClinic(ctx context.Context, clinic
 	return args.Error(0)
 }
 
-func (m *MockPaymentService) CreateSubscriptionForClinic(ctx context.Context, clinicID uuid.UUID, plan string, billing string) error {
-	args := m.Called(ctx, clinicID, plan, billing)
+func (m *MockPaymentService) CreateSubscriptionForClinic(ctx context.Context, clinicID uuid.UUID, planID uuid.UUID, offerToken *string, billing string) error {
+	args := m.Called(ctx, clinicID, planID, offerToken, billing)
 	return args.Error(0)
 }
 
@@ -97,6 +99,21 @@ func (m *MockClinicRepository) GetByID(ctx context.Context, id uuid.UUID) (*clin
 type MockAccountRepository struct {
 	account_repository.AccountRepository
 	mock.Mock
+}
+
+// MockPlanRepository
+type MockPlanRepository struct {
+	plan_repo.PlanRepository
+	mock.Mock
+}
+
+func (m *MockPlanRepository) GetBySlug(ctx context.Context, slug string) (*plan_model.Plan, error) {
+	args := m.Called(ctx, slug)
+	var plan *plan_model.Plan
+	if args.Get(0) != nil {
+		plan = args.Get(0).(*plan_model.Plan)
+	}
+	return plan, args.Error(1)
 }
 
 func (m *MockAccountRepository) Create(ctx context.Context, account *account_model.Account) error {
@@ -167,6 +184,7 @@ func TestAuthService_Register_CreatesAsaasCustomerUnconditionally(t *testing.T) 
 	mockEmailVerifRepo := new(MockEmailVerificationRepository)
 	mockPassResetRepo := new(MockPasswordResetRepository)
 	mockPaymentService := new(MockPaymentService)
+	mockPlanRepo := new(MockPlanRepository)
 
 	svc := NewAuthService(
 		mockUserRepo,
@@ -174,6 +192,7 @@ func TestAuthService_Register_CreatesAsaasCustomerUnconditionally(t *testing.T) 
 		mockAccountRepo,
 		mockPassResetRepo,
 		mockEmailVerifRepo,
+		mockPlanRepo,
 		mockJWTService,
 		mockEmailService,
 		"http://localhost:3000",
@@ -194,6 +213,7 @@ func TestAuthService_Register_CreatesAsaasCustomerUnconditionally(t *testing.T) 
 	}
 
 	// Setup mocks
+	mockPlanRepo.On("GetBySlug", ctx, "basic").Return(&plan_model.Plan{ID: uuid.New(), Slug: "basic", Name: "Basic"}, nil)
 	mockUserRepo.On("ExistsByEmail", ctx, req.Email).Return(false, nil)
 	mockClinicRepo.On("ExistsBySlug", ctx, mock.Anything).Return(false, nil)
 	mockAccountRepo.On("Create", ctx, mock.Anything).Return(nil)
@@ -239,6 +259,7 @@ func TestAuthService_GoogleLogin_CreatesAsaasCustomerUnconditionally(t *testing.
 	mockPassResetRepo := new(MockPasswordResetRepository)
 	mockPaymentService := new(MockPaymentService)
 	mockGoogleAuth := new(MockGoogleAuthClient)
+	mockPlanRepo := new(MockPlanRepository)
 
 	svc := NewAuthServiceWithGoogle(
 		mockUserRepo,
@@ -246,6 +267,7 @@ func TestAuthService_GoogleLogin_CreatesAsaasCustomerUnconditionally(t *testing.
 		mockAccountRepo,
 		mockPassResetRepo,
 		mockEmailVerifRepo,
+		mockPlanRepo,
 		mockJWTService,
 		mockGoogleAuth,
 		mockEmailService,
@@ -268,6 +290,7 @@ func TestAuthService_GoogleLogin_CreatesAsaasCustomerUnconditionally(t *testing.
 	}
 
 	// Setup mocks
+	mockPlanRepo.On("GetBySlug", ctx, "basic").Return(&plan_model.Plan{ID: uuid.New(), Slug: "basic", Name: "Basic"}, nil)
 	mockGoogleAuth.On("VerifyIDToken", ctx, req.IDToken).Return(googleUser, nil)
 
 	mockUserRepo.On("GetByEmail", ctx, googleUser.Email).Return(nil, errors.ErrNotFoundInstance)
