@@ -1,0 +1,47 @@
+name: Deploy Backend
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+env:
+  IMAGE_NAME: ghcr.io/aseno-up/backend
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install doctl
+        uses: digitalocean/action-doctl@v2
+        with:
+          token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+
+      - name: Login no registry
+        run: doctl registry login --expiry-seconds 600
+
+      - name: Extrair versão da tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
+      - name: Build e push da imagem
+        run: |
+          docker build -t ${{ env.IMAGE_NAME }}:${{ steps.version.outputs.VERSION }} .
+          docker push ${{ env.IMAGE_NAME }}:${{ steps.version.outputs.VERSION }}
+          docker tag ${{ env.IMAGE_NAME }}:${{ steps.version.outputs.VERSION }} ${{ env.IMAGE_NAME }}:latest
+          docker push ${{ env.IMAGE_NAME }}:latest
+
+      - name: Salva kubeconfig
+        run: |
+          mkdir -p ~/.kube
+          echo "${{ secrets.KUBE_CONFIG }}" | base64 -d > ~/.kube/config
+
+      - name: Deploy no Kubernetes
+        run: |
+          kubectl set image deployment/backend \
+            backend=${{ env.IMAGE_NAME }}:${{ steps.version.outputs.VERSION }} \
+            -n aseno
+          kubectl rollout status deployment/backend -n aseno
