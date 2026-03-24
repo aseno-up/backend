@@ -85,7 +85,6 @@ func (_m *MockUserRepository) Delete(ctx context.Context, id uuid.UUID) error {
 	ret := _m.Called(ctx, id)
 	return ret.Error(0)
 }
-
 func (_m *MockUserRepository) BulkDelete(ctx context.Context, clinicID uuid.UUID, ids []uuid.UUID) error {
 	ret := _m.Called(ctx, clinicID, ids)
 	return ret.Error(0)

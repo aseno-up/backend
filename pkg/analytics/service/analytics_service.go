@@ -8,7 +8,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/aseno/backend/internal/errors"
-	account_model "github.com/aseno/backend/pkg/account/model"
 	"github.com/aseno/backend/pkg/analytics/model"
 	"github.com/aseno/backend/pkg/analytics/repository"
 	clinic_repository "github.com/aseno/backend/pkg/clinic/repository"
@@ -43,7 +42,7 @@ func (s *analyticsService) checkPlanRestriction(ctx context.Context, clinicID uu
 		return err
 	}
 
-	if clinic.Account != nil && clinic.Account.Plan == account_model.PlanTypeBasic {
+	if clinic.Account != nil && clinic.Account.Plan != nil && !clinic.Account.Plan.HasApiAccess {
 		return errors.ErrUpgradeRequiredInstance.WithMessage("Relatórios avançados disponíveis apenas nos planos Profissional e Avançado")
 	}
 

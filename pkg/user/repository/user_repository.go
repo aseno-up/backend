@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"strings"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -92,8 +93,8 @@ func (r *userRepository) GetByClinicID(ctx context.Context, clinicID uuid.UUID, 
 	query := r.db.WithContext(ctx).Model(&model.User{}).Where("clinic_id = ? AND deleted_at IS NULL", clinicID)
 
 	if filter.Search != "" {
-		searchQuery := "%" + filter.Search + "%"
-		query = query.Where("LOWER(name) LIKE LOWER(?) OR LOWER(email) LIKE LOWER(?)", searchQuery, searchQuery)
+		searchQuery := "%" + strings.ToLower(filter.Search) + "%"
+		query = query.Where("LOWER(name) LIKE ? OR LOWER(email) LIKE ?", searchQuery, searchQuery)
 	}
 
 	if filter.Status != "" && filter.Status != "all" {

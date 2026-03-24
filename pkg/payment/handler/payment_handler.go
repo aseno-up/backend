@@ -314,9 +314,10 @@ func (h *paymentHandler) GetSubscription(c *gin.Context) {
 
 // CreateSubscriptionRequest represents the request to create a subscription
 type CreateSubscriptionRequest struct {
-	BillingType string `json:"billing_type" binding:"required"`
-	Plan        string `json:"plan" binding:"required,oneof=basic professional advanced"`
-	Cycle       string `json:"cycle" binding:"required"`
+	BillingType string  `json:"billing_type" binding:"required"`
+	PlanID      string  `json:"plan_id" binding:"required,uuid"`
+	OfferToken  *string `json:"offer_token,omitempty"`
+	Cycle       string  `json:"cycle" binding:"required"`
 }
 
 // CreateSubscription creates a new subscription
@@ -333,27 +334,17 @@ func (h *paymentHandler) CreateSubscription(c *gin.Context) {
 		return
 	}
 
-	// Price lookup based on plan strategy
-	var value float64
-	var description string
-
-	switch req.Plan {
-	case "basic":
-		value = 99.00
-		description = "Plano Básico - Aseno"
-	case "professional":
-		value = 199.00
-		description = "Plano Profissional - Aseno"
-	case "advanced":
-		value = 349.00
-		description = "Plano Avançado - Aseno"
+	planID, err := uuid.Parse(req.PlanID)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, errors.ToResponse(errors.ErrValidationInstance.WithMessage("Invalid plan_id format")))
+		return
 	}
 
 	input := &service.CreateSubscriptionInput{
 		BillingType: model.BillingType(req.BillingType),
-		Value:       value,
+		PlanID:      planID,
+		OfferToken:  req.OfferToken,
 		Cycle:       model.BillingCycle(req.Cycle),
-		Description: description,
 	}
 
 	subscription, err := h.service.CreateSubscription(c.Request.Context(), clinicID.(uuid.UUID), input)

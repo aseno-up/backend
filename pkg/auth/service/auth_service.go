@@ -20,6 +20,7 @@ import (
 	clinic_repository "github.com/aseno/backend/pkg/clinic/repository"
 	email_service "github.com/aseno/backend/pkg/email/service"
 	payment_model "github.com/aseno/backend/pkg/payment/model"
+	plan_repo "github.com/aseno/backend/pkg/plan/repository"
 	user_model "github.com/aseno/backend/pkg/user/model"
 	user_repository "github.com/aseno/backend/pkg/user/repository"
 )
@@ -51,7 +52,7 @@ type GoogleAuthClient interface {
 // PaymentService defines minimal interface for payment operations during registration
 type PaymentService interface {
 	CreateCustomerForClinic(ctx context.Context, clinicID uuid.UUID, req *payment_model.CreateCustomerRequest) error
-	CreateSubscriptionForClinic(ctx context.Context, clinicID uuid.UUID, plan string, billing string) error
+	CreateSubscriptionForClinic(ctx context.Context, clinicID uuid.UUID, planID uuid.UUID, offerToken *string, billing string) error
 }
 
 // GoogleUserInfo represents user information from Google
@@ -72,6 +73,7 @@ type authService struct {
 	accountRepo           account_repository.AccountRepository
 	passwordResetRepo     auth_repository.PasswordResetRepository
 	emailVerificationRepo auth_repository.EmailVerificationRepository
+	planRepo              plan_repo.PlanRepository
 	jwtService            JWTService
 	googleClient          GoogleAuthClient
 	emailService          email_service.EmailService
@@ -86,6 +88,7 @@ func NewAuthService(
 	accountRepo account_repository.AccountRepository,
 	passwordResetRepo auth_repository.PasswordResetRepository,
 	emailVerificationRepo auth_repository.EmailVerificationRepository,
+	planRepo plan_repo.PlanRepository,
 	jwtService JWTService,
 	emailService email_service.EmailService,
 	frontendURL string,
@@ -96,6 +99,7 @@ func NewAuthService(
 		accountRepo:           accountRepo,
 		passwordResetRepo:     passwordResetRepo,
 		emailVerificationRepo: emailVerificationRepo,
+		planRepo:              planRepo,
 		jwtService:            jwtService,
 		emailService:          emailService,
 		frontendURL:           frontendURL,
@@ -109,6 +113,7 @@ func NewAuthServiceWithGoogle(
 	accountRepo account_repository.AccountRepository,
 	passwordResetRepo auth_repository.PasswordResetRepository,
 	emailVerificationRepo auth_repository.EmailVerificationRepository,
+	planRepo plan_repo.PlanRepository,
 	jwtService JWTService,
 	googleClient GoogleAuthClient,
 	emailService email_service.EmailService,
@@ -120,6 +125,7 @@ func NewAuthServiceWithGoogle(
 		accountRepo:           accountRepo,
 		passwordResetRepo:     passwordResetRepo,
 		emailVerificationRepo: emailVerificationRepo,
+		planRepo:              planRepo,
 		jwtService:            jwtService,
 		googleClient:          googleClient,
 		emailService:          emailService,
@@ -155,24 +161,24 @@ func (s *authService) Register(ctx context.Context, req *model.RegisterRequest) 
 		slug = slug + "-" + generateShortID()
 	}
 
-	// Determine plan and subscription status based on request
-	var planType account_model.PlanType
+	// Fetch requested plan
+	targetSlug := req.Plan
+	if targetSlug == "" || targetSlug == "trial" {
+		targetSlug = "professional"
+	}
+
+	plan, err := s.planRepo.GetBySlug(ctx, targetSlug)
+	if err != nil {
+		// Fallback if not found (or seed hasn't run), though ideally we should return an error
+		// We'll leave the error handling for now unless it breaks onboarding.
+		// Actually, returning error is safer if plan doesn't exist, preventing FK violations.
+		return nil, errors.ErrInternalInstance.WithMessage("Selected plan not found").WithError(err)
+	}
+
 	var subscriptionStatus account_model.SubscriptionStatus
 	var trialEndsAt *time.Time
 
-	// Set plan based on selection
-	switch req.Plan {
-	case "basic":
-		planType = account_model.PlanTypeBasic
-	case "professional":
-		planType = account_model.PlanTypeProfessional
-	case "advanced":
-		planType = account_model.PlanTypeAdvanced
-	default: // "trial" or empty - defaults to professional with trial
-		planType = account_model.PlanTypeProfessional
-	}
-
-	// If document provided, set as pending (requires payment confirmation)
+	// If document provided, set as active (will create Asaas subscription)
 	// Otherwise, give 14-day trial period regardless of plan selected
 	if req.Document != "" && req.Plan != "" && req.Plan != "trial" {
 		subscriptionStatus = account_model.SubscriptionStatusPending
@@ -187,11 +193,11 @@ func (s *authService) Register(ctx context.Context, req *model.RegisterRequest) 
 	accountID := uuid.New()
 	clinicID := uuid.New()
 
-	// Create Account
+	// Create Account (don't set Plan association to avoid GORM upsert conflict)
 	account := &account_model.Account{
 		ID:                 accountID,
 		OwnerID:            userID,
-		Plan:               planType,
+		PlanID:             &plan.ID,
 		SubscriptionStatus: subscriptionStatus,
 		TrialEndsAt:        trialEndsAt,
 	}
@@ -199,11 +205,13 @@ func (s *authService) Register(ctx context.Context, req *model.RegisterRequest) 
 	if err := s.accountRepo.Create(ctx, account); err != nil {
 		return nil, err
 	}
+	account.Plan = plan
 
 	// Create clinic
 	clinic := &clinic_model.Clinic{
 		ID:        clinicID,
 		AccountID: accountID,
+		Account:   account,
 		Name:      req.ClinicName,
 		Slug:      slug,
 		Email:     req.Email,
@@ -278,12 +286,26 @@ func (s *authService) Register(ctx context.Context, req *model.RegisterRequest) 
 			fmt.Printf("[AUTH] Failed to create Asaas customer for clinic %s: %v\n", clinic.ID, err)
 		} else {
 			// Customer created successfully, now create subscription if a paid plan is selected
+			// TEMPORAY: The Frontend sends strings instead of PlanIDs.
+			// So we attempt to parse it as an UUID or we skip subscription creation.
+			var planID uuid.UUID
 			if req.Plan != "" && req.Plan != "trial" {
-				if err := s.paymentService.CreateSubscriptionForClinic(ctx, clinic.ID, req.Plan, req.Billing); err != nil {
-					// Log error but don't fail registration
-					fmt.Printf("[AUTH] Failed to create Asaas subscription for clinic %s: %v\n", clinic.ID, err)
+				parsed, err := uuid.Parse(req.Plan)
+				if err == nil {
+					planID = parsed
+					var offerToken *string
+					if req.OfferToken != "" {
+						offerToken = &req.OfferToken
+					}
+
+					if err := s.paymentService.CreateSubscriptionForClinic(ctx, clinic.ID, planID, offerToken, req.Billing); err != nil {
+						// Log error but don't fail registration
+						fmt.Printf("[AUTH] Failed to create Asaas subscription for clinic %s: %v\n", clinic.ID, err)
+					} else {
+						fmt.Printf("[AUTH] Successfully created Asaas subscription for clinic %s (planID: %s, billing: %s)\n", clinic.ID, req.Plan, req.Billing)
+					}
 				} else {
-					fmt.Printf("[AUTH] Successfully created Asaas subscription for clinic %s (plan: %s, billing: %s)\n", clinic.ID, req.Plan, req.Billing)
+					fmt.Printf("[AUTH] Failed to create subscription because plan is not a boolean: %s\n", req.Plan)
 				}
 			}
 		}
@@ -405,42 +427,34 @@ func (s *authService) GoogleLogin(ctx context.Context, req *model.GoogleLoginReq
 		// Calculate trial end date (14 days from now)
 		trialEndsAt := time.Now().AddDate(0, 0, 14)
 
-		// Determine plan based on request
-		var planType account_model.PlanType
-		var subscriptionStatus account_model.SubscriptionStatus
-		var trialEndsAtPtr *time.Time
-
-		switch req.Plan {
-		case "basic":
-			planType = account_model.PlanTypeBasic
-		case "professional":
-			planType = account_model.PlanTypeProfessional
-		case "advanced":
-			planType = account_model.PlanTypeAdvanced
-		default: // "trial" or empty
-			planType = account_model.PlanTypeProfessional
-		}
-
-		// Google login registrations always start with a 14-day trial (billing setup will follow if they upgrade)
-		subscriptionStatus = account_model.SubscriptionStatusTrial
-		trialEndsAtPtr = &trialEndsAt
-
 		userID := uuid.New()
 		accountID := uuid.New()
 		clinicID := uuid.New()
 
-		// Create Account
+		// Fetch requested plan or default to basic
+		planSlug := req.Plan
+		if planSlug == "" || planSlug == "trial" {
+			planSlug = "basic"
+		}
+		plan, err := s.planRepo.GetBySlug(ctx, planSlug)
+		if err != nil {
+			// Prevent constraint failures if plan isn't found
+			return nil, errors.ErrInternalInstance.WithMessage("Default basic plan not found").WithError(err)
+		}
+
+		// Create Account (don't set Plan association to avoid GORM upsert conflict)
 		account := &account_model.Account{
 			ID:                 accountID,
 			OwnerID:            userID,
-			Plan:               planType,
-			SubscriptionStatus: subscriptionStatus,
-			TrialEndsAt:        trialEndsAtPtr,
+			PlanID:             &plan.ID,
+			SubscriptionStatus: account_model.SubscriptionStatusTrial,
+			TrialEndsAt:        &trialEndsAt,
 		}
 
 		if err := s.accountRepo.Create(ctx, account); err != nil {
 			return nil, err
 		}
+		account.Plan = plan
 
 		// Create clinic
 		clinic := &clinic_model.Clinic{

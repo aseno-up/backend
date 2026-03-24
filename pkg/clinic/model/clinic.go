@@ -131,15 +131,9 @@ func (c *Clinic) ToResponse() *ClinicResponse {
 		Settings:          c.Settings,
 		CreatedAt:         c.CreatedAt,
 	}
-
-	// Populate subscription fields from Account if available
 	if c.Account != nil {
 		resp.Account = c.Account.ToResponse()
-		resp.Plan = c.Account.Plan
-		resp.SubscriptionStatus = c.Account.SubscriptionStatus
-		resp.TrialEndsAt = c.Account.TrialEndsAt
 	}
-
 	return resp
 }
 

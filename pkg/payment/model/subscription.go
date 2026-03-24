@@ -12,19 +12,30 @@ type Subscription struct {
 	ID                  uuid.UUID          `json:"id" gorm:"type:uuid;primary_key;default:gen_random_uuid()"`
 	AccountID           uuid.UUID          `json:"account_id" gorm:"type:uuid;index"`
 	CustomerID          uuid.UUID          `json:"customer_id" gorm:"type:uuid;not null;index"`
+	PlanID              *uuid.UUID         `json:"plan_id,omitempty" gorm:"type:uuid"`
+	OfferID             *uuid.UUID         `json:"offer_id,omitempty" gorm:"type:uuid"`
 	AsaasSubscriptionID string             `json:"asaas_subscription_id" gorm:"uniqueIndex;not null"`
 	Value               float64            `json:"value" gorm:"not null"`
 	Status              SubscriptionStatus `json:"status" gorm:"not null;default:'ACTIVE'"`
 	BillingType         BillingType        `json:"billing_type" gorm:"not null"`
 	Cycle               BillingCycle       `json:"cycle" gorm:"not null;default:'MONTHLY'"`
-	NextDueDate         time.Time          `json:"next_due_date"`
-	Description         string             `json:"description"`
-	ExternalRef         string             `json:"external_ref"`
-	EndDate             *time.Time         `json:"end_date,omitempty"`
-	MaxPayments         *int               `json:"max_payments,omitempty"`
-	CreatedAt           time.Time          `json:"created_at" gorm:"autoCreateTime"`
-	UpdatedAt           time.Time          `json:"updated_at" gorm:"autoUpdateTime"`
-	DeletedAt           gorm.DeletedAt     `json:"-" gorm:"index"`
+
+	// Price Lock & Snapshot Fields (INV-002)
+	PriceAtContract            float64 `json:"price_at_contract" gorm:"not null"`
+	MaxClinicsAtContract       int     `json:"max_clinics_at_contract" gorm:"not null"`
+	MaxProfessionalsAtContract int     `json:"max_professionals_at_contract" gorm:"not null"`
+	MaxWhatsappAtContract      int     `json:"max_whatsapp_at_contract" gorm:"not null;default:1"`
+	MaxGoogleAtContract        int     `json:"max_google_at_contract" gorm:"not null;default:1"`
+
+	StartedAt   time.Time      `json:"started_at"`
+	NextDueDate time.Time      `json:"next_due_date"`
+	Description string         `json:"description"`
+	ExternalRef string         `json:"external_ref"`
+	EndDate     *time.Time     `json:"end_date,omitempty"`
+	MaxPayments *int           `json:"max_payments,omitempty"`
+	CreatedAt   time.Time      `json:"created_at" gorm:"autoCreateTime"`
+	UpdatedAt   time.Time      `json:"updated_at" gorm:"autoUpdateTime"`
+	DeletedAt   gorm.DeletedAt `json:"-" gorm:"index"`
 
 	// Relations
 	Customer *Customer `json:"customer,omitempty" gorm:"foreignKey:CustomerID"`

@@ -12,6 +12,7 @@ import (
 	account_model "github.com/aseno/backend/pkg/account/model"
 	clinic_model "github.com/aseno/backend/pkg/clinic/model"
 	"github.com/aseno/backend/pkg/payment/model"
+	plan_model "github.com/aseno/backend/pkg/plan/model"
 	settings_model "github.com/aseno/backend/pkg/settings/model"
 )
 
@@ -384,15 +385,48 @@ func (m *mockSettingsRepo) SeedDefaults(ctx context.Context) error {
 	return m.Called(ctx).Error(0)
 }
 
+// Mock PlanService
+type mockPlanService struct {
+	mock.Mock
+}
+
+func (m *mockPlanService) ListPlans(ctx context.Context) ([]plan_model.Plan, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]plan_model.Plan), args.Error(1)
+}
+func (m *mockPlanService) CalculateBestPrice(ctx context.Context, plan *plan_model.Plan, offer *plan_model.Offer, cycleType plan_model.CycleType) (float64, error) {
+	args := m.Called(ctx, plan, offer, cycleType)
+	return args.Get(0).(float64), args.Error(1)
+}
+
+// Add dummy methods to satisfy the interface if necessary
+func (m *mockPlanService) GetPlanByID(ctx context.Context, id uuid.UUID) (*plan_model.Plan, error) {
+	return nil, nil
+}
+func (m *mockPlanService) ValidateOffer(ctx context.Context, token string) (*plan_model.Offer, error) {
+	return nil, nil
+}
+func (m *mockPlanService) UseOffer(ctx context.Context, offerID uuid.UUID) error          { return nil }
+func (m *mockPlanService) CreatePlan(ctx context.Context, plan *plan_model.Plan) error    { return nil }
+func (m *mockPlanService) UpdatePlan(ctx context.Context, plan *plan_model.Plan) error    { return nil }
+func (m *mockPlanService) CreateOffer(ctx context.Context, offer *plan_model.Offer) error { return nil }
+func (m *mockPlanService) ListOffers(ctx context.Context) ([]plan_model.Offer, error) {
+	return nil, nil
+}
+func (m *mockPlanService) UpdateOffer(ctx context.Context, offer *plan_model.Offer) error { return nil }
+
 // Test helper to create service with mocks
-func setupTestService() (*paymentService, *mockPaymentClient, *mockCustomerRepo, *mockPaymentRepo, *mockSubscriptionRepo, *mockClinicRepo, *mockAccountRepo, *mockSettingsRepo) {
+func setupTestService() (*paymentService, *mockPaymentClient, *mockCustomerRepo, *mockPaymentRepo, *mockSubscriptionRepo, *mockClinicRepo, *mockAccountRepo, *mockPlanService) {
 	client := new(mockPaymentClient)
 	customerRepo := new(mockCustomerRepo)
 	paymentRepo := new(mockPaymentRepo)
 	subscriptionRepo := new(mockSubscriptionRepo)
 	clinicRepo := new(mockClinicRepo)
 	accountRepo := new(mockAccountRepo)
-	settingsRepo := new(mockSettingsRepo)
+	planService := new(mockPlanService)
 
 	svc := &paymentService{
 		client:           client,
@@ -401,16 +435,16 @@ func setupTestService() (*paymentService, *mockPaymentClient, *mockCustomerRepo,
 		subscriptionRepo: subscriptionRepo,
 		clinicRepo:       clinicRepo,
 		accountRepo:      accountRepo,
-		settingsRepo:     settingsRepo,
+		planService:      planService,
 	}
 
-	return svc, client, customerRepo, paymentRepo, subscriptionRepo, clinicRepo, accountRepo, settingsRepo
+	return svc, client, customerRepo, paymentRepo, subscriptionRepo, clinicRepo, accountRepo, planService
 }
 
 // --- SwitchPlan Tests ---
 
 func TestSwitchPlan_NewSubscription_FromTrial(t *testing.T) {
-	svc, client, customerRepo, _, subscriptionRepo, clinicRepo, accountRepo, settingsRepo := setupTestService()
+	svc, client, customerRepo, _, subscriptionRepo, clinicRepo, accountRepo, planServiceMock := setupTestService()
 	ctx := context.Background()
 
 	clinicID := uuid.New()
@@ -431,16 +465,12 @@ func TestSwitchPlan_NewSubscription_FromTrial(t *testing.T) {
 
 	// No existing subscription (trial user)
 	subscriptionRepo.On("GetByAccountID", ctx, accountID).Return(nil, assert.AnError)
-	// Mock settings
-	settingsRepo.On("Get", ctx, settings_model.SettingPlanProPrice).Return(&settings_model.SystemSetting{
-		Value: "199.00",
-	}, nil)
+	// Mock plans
+	professionalPlan := plan_model.Plan{ID: uuid.New(), Slug: "professional", Name: "Plano Profissional"}
+	planServiceMock.On("ListPlans", ctx).Return([]plan_model.Plan{professionalPlan}, nil)
+	planServiceMock.On("CalculateBestPrice", ctx, mock.Anything, mock.Anything, mock.Anything).Return(199.00, nil)
 
 	// Mock Asaas subscription creation
-	// Mock settings
-	settingsRepo.On("Get", ctx, settings_model.SettingPlanProPrice).Return(&settings_model.SystemSetting{
-		Value: "199.00",
-	}, nil)
 
 	client.On("CreateSubscription", ctx, mock.AnythingOfType("*model.CreateSubscriptionRequest")).Return(&model.AsaasSubscriptionResponse{
 		ID:          "sub_asaas_new",
@@ -458,7 +488,7 @@ func TestSwitchPlan_NewSubscription_FromTrial(t *testing.T) {
 	// Mock account update
 	accountRepo.On("GetByID", ctx, accountID).Return(&account_model.Account{
 		ID:                 accountID,
-		Plan:               account_model.PlanTypeProfessional,
+		Plan:               &plan_model.Plan{Slug: "professional"},
 		SubscriptionStatus: account_model.SubscriptionStatusTrial,
 	}, nil)
 	accountRepo.On("Update", ctx, mock.AnythingOfType("*model.Account")).Return(nil)
@@ -480,7 +510,7 @@ func TestSwitchPlan_NewSubscription_FromTrial(t *testing.T) {
 }
 
 func TestSwitchPlan_ExistingActiveSubscription_UsesNextDueDate(t *testing.T) {
-	svc, client, customerRepo, _, subscriptionRepo, clinicRepo, accountRepo, settingsRepo := setupTestService()
+	svc, client, customerRepo, _, subscriptionRepo, clinicRepo, accountRepo, planServiceMock := setupTestService()
 	ctx := context.Background()
 
 	clinicID := uuid.New()
@@ -508,10 +538,11 @@ func TestSwitchPlan_ExistingActiveSubscription_UsesNextDueDate(t *testing.T) {
 		Status:              model.SubscriptionStatusActive,
 		NextDueDate:         futureDate,
 	}, nil)
-	// Mock settings
-	settingsRepo.On("Get", ctx, settings_model.SettingPlanAdvancedPrice).Return(&settings_model.SystemSetting{
-		Value: "349.00",
-	}, nil)
+
+	// Mock plans
+	advancedPlan := plan_model.Plan{ID: uuid.New(), Slug: "advanced", Name: "Plano Avançado"}
+	planServiceMock.On("ListPlans", ctx).Return([]plan_model.Plan{advancedPlan}, nil)
+	planServiceMock.On("CalculateBestPrice", ctx, mock.Anything, mock.Anything, mock.Anything).Return(349.00, nil)
 
 	// Mock cancel old subscription in Asaas
 	client.On("DeleteSubscription", ctx, "sub_old").Return(nil)
@@ -520,10 +551,6 @@ func TestSwitchPlan_ExistingActiveSubscription_UsesNextDueDate(t *testing.T) {
 	subscriptionRepo.On("UpdateStatus", ctx, existingSubID, model.SubscriptionStatusInactive).Return(nil)
 
 	// Mock Asaas creates new subscription with future nextDueDate
-	// Mock settings
-	settingsRepo.On("Get", ctx, settings_model.SettingPlanProPrice).Return(&settings_model.SystemSetting{
-		Value: "199.00",
-	}, nil)
 
 	client.On("CreateSubscription", ctx, mock.MatchedBy(func(req *model.CreateSubscriptionRequest) bool {
 		// Verify nextDueDate is set to the existing subscription's next due date
@@ -544,7 +571,7 @@ func TestSwitchPlan_ExistingActiveSubscription_UsesNextDueDate(t *testing.T) {
 	// Mock account update
 	accountRepo.On("GetByID", ctx, accountID).Return(&account_model.Account{
 		ID:                 accountID,
-		Plan:               account_model.PlanTypeProfessional,
+		Plan:               &plan_model.Plan{Slug: "professional"},
 		SubscriptionStatus: account_model.SubscriptionStatusActive,
 	}, nil)
 	accountRepo.On("Update", ctx, mock.AnythingOfType("*model.Account")).Return(nil)
@@ -564,7 +591,7 @@ func TestSwitchPlan_ExistingActiveSubscription_UsesNextDueDate(t *testing.T) {
 }
 
 func TestSwitchPlan_InvalidPlan_ReturnsError(t *testing.T) {
-	svc, _, customerRepo, _, _, clinicRepo, _, _ := setupTestService()
+	svc, _, customerRepo, _, _, clinicRepo, _, planServiceMock := setupTestService()
 	ctx := context.Background()
 
 	clinicID := uuid.New()
@@ -580,6 +607,8 @@ func TestSwitchPlan_InvalidPlan_ReturnsError(t *testing.T) {
 		AsaasCustomerID: "cus_test",
 	}, nil)
 
+	planServiceMock.On("ListPlans", ctx).Return([]plan_model.Plan{}, nil)
+
 	// Execute with invalid plan
 	result, err := svc.SwitchPlan(ctx, clinicID, "invalid_plan", "PIX", "MONTHLY", nil, nil)
 
@@ -590,7 +619,7 @@ func TestSwitchPlan_InvalidPlan_ReturnsError(t *testing.T) {
 }
 
 func TestSwitchPlan_YearlyCycle_CalculatesAnnualPrice(t *testing.T) {
-	svc, client, customerRepo, _, subscriptionRepo, clinicRepo, accountRepo, settingsRepo := setupTestService()
+	svc, client, customerRepo, _, subscriptionRepo, clinicRepo, accountRepo, planServiceMock := setupTestService()
 	ctx := context.Background()
 
 	clinicID := uuid.New()
@@ -607,16 +636,12 @@ func TestSwitchPlan_YearlyCycle_CalculatesAnnualPrice(t *testing.T) {
 	}, nil)
 
 	subscriptionRepo.On("GetByAccountID", ctx, accountID).Return(nil, assert.AnError)
-	// Mock settings
-	settingsRepo.On("Get", ctx, settings_model.SettingPlanBasicPrice).Return(&settings_model.SystemSetting{
-		Value: "99.00",
-	}, nil)
+
+	basicPlan := plan_model.Plan{ID: uuid.New(), Slug: "basic", Name: "Plano Básico"}
+	planServiceMock.On("ListPlans", ctx).Return([]plan_model.Plan{basicPlan}, nil)
+	planServiceMock.On("CalculateBestPrice", ctx, mock.Anything, mock.Anything, mock.Anything).Return(990.00, nil)
 
 	// Verify annual price: basic = 99 * 10 = 990 (2 months free)
-	// Mock settings
-	settingsRepo.On("Get", ctx, settings_model.SettingPlanProPrice).Return(&settings_model.SystemSetting{
-		Value: "199.00",
-	}, nil)
 
 	client.On("CreateSubscription", ctx, mock.MatchedBy(func(req *model.CreateSubscriptionRequest) bool {
 		return req.Value == 990.00 && req.Cycle == model.BillingCycleYearly
@@ -788,7 +813,7 @@ func TestHandleWebhook_PaymentRefunded_CancelsAccount(t *testing.T) {
 }
 
 func TestSwitchPlan_SetsPendingNotActive(t *testing.T) {
-	svc, client, customerRepo, _, subscriptionRepo, clinicRepo, accountRepo, settingsRepo := setupTestService()
+	svc, client, customerRepo, _, subscriptionRepo, clinicRepo, accountRepo, planServiceMock := setupTestService()
 	ctx := context.Background()
 
 	clinicID := uuid.New()
@@ -805,10 +830,10 @@ func TestSwitchPlan_SetsPendingNotActive(t *testing.T) {
 	}, nil)
 
 	subscriptionRepo.On("GetByAccountID", ctx, accountID).Return(nil, assert.AnError)
-	// Mock settings
-	settingsRepo.On("Get", ctx, settings_model.SettingPlanBasicPrice).Return(&settings_model.SystemSetting{
-		Value: "99.00",
-	}, nil)
+
+	basicPlan := plan_model.Plan{ID: uuid.New(), Slug: "basic", Name: "Plano Básico"}
+	planServiceMock.On("ListPlans", ctx).Return([]plan_model.Plan{basicPlan}, nil)
+	planServiceMock.On("CalculateBestPrice", ctx, mock.Anything, mock.Anything, mock.Anything).Return(99.00, nil)
 
 	client.On("CreateSubscription", ctx, mock.AnythingOfType("*model.CreateSubscriptionRequest")).Return(&model.AsaasSubscriptionResponse{
 		ID:          "sub_pending_test",

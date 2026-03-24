@@ -19,7 +19,7 @@ const (
 
 // User represents a user in the system
 type User struct {
-	ID             uuid.UUID  `json:"id" gorm:"type:uuid;primary_key;default:gen_random_uuid()"`
+	ID             uuid.UUID  `json:"id" gorm:"type:uuid;primary_key"`
 	ClinicID       uuid.UUID  `json:"clinic_id" gorm:"type:uuid;not null;index"`
 	Email          string     `json:"email" gorm:"uniqueIndex;not null"`
 	PasswordHash   string     `json:"-" gorm:"column:password_hash"` // Hidden from JSON

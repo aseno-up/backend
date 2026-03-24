@@ -55,7 +55,8 @@ type RegisterRequest struct {
 	Plan    string `json:"plan"`    // trial, basic, professional, advanced
 	Billing string `json:"billing"` // monthly, annually
 	// Optional: Payment info for paid plans
-	Document string `json:"document"` // CPF or CNPJ for Asaas
+	Document   string `json:"document"` // CPF or CNPJ for Asaas
+	OfferToken string `json:"offer_token"`
 }
 
 // RefreshRequest represents the refresh token request body
