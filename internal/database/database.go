@@ -9,6 +9,7 @@ import (
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	gormlogger "gorm.io/gorm/logger"
+	"gorm.io/gorm/schema"
 )
 
 // Database wraps the GORM DB connection
@@ -38,6 +39,9 @@ func NewDatabase(dsn string, isDebug bool) (*Database, error) {
 		PreferSimpleProtocol: true, // disable prepared statements for connection pooler compatibility
 	}), &gorm.Config{
 		Logger: gormLogger,
+		NamingStrategy: schema.NamingStrategy{
+			TablePrefix: "public.", // force all queries to use public schema
+		},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to database: %w", err)
@@ -53,7 +57,7 @@ func NewDatabase(dsn string, isDebug bool) (*Database, error) {
 	sqlDB.SetMaxOpenConns(100)
 	sqlDB.SetConnMaxLifetime(time.Hour)
 
-	// Ensure search_path is set to public (connection poolers may override it)
+	// Ensure search_path is set to public (Supabase pooler defaults to "evolution")
 	db.Exec("SET search_path TO public")
 
 	return &Database{db: db}, nil
