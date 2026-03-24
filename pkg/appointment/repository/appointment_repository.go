@@ -338,18 +338,19 @@ func (r *appointmentRepository) GetPendingReminders(ctx context.Context, reminde
 		SELECT
 			a.*,
 			c.name as clinic_name,
-			c.whats_app_instance as whatsapp_instance,
-			c.whats_app_connected as whatsapp_connected
+			wc.instance as whatsapp_instance,
+			wc.connected as whatsapp_connected
 		FROM appointments a
 		INNER JOIN clinics c ON a.clinic_id = c.id
+		LEFT JOIN whatsapp_connections wc ON wc.clinic_id = c.id AND wc.is_active = true AND wc.deleted_at IS NULL
 		WHERE a.deleted_at IS NULL
 			AND a.status IN ('pending', 'no_response')
 			AND a.start_time >= ?
 			AND a.start_time < ?
 			AND a.` + reminderField + ` IS NULL
-			AND c.whats_app_connected = true
-			AND c.whats_app_instance IS NOT NULL
-			AND c.whats_app_instance != ''
+			AND wc.connected = true
+			AND wc.instance IS NOT NULL
+			AND wc.instance != ''
 			AND COALESCE((c.settings->>'whatsapp_reminders_enabled')::boolean, false) = true
 		ORDER BY a.start_time ASC
 		LIMIT 100
@@ -464,10 +465,11 @@ func (r *appointmentRepository) GetExpiredConfirmations(ctx context.Context, lim
 		SELECT
 			a.*,
 			c.name as clinic_name,
-			c.whats_app_instance as whatsapp_instance,
-			c.whats_app_connected as whatsapp_connected
+			wc.instance as whatsapp_instance,
+			wc.connected as whatsapp_connected
 		FROM appointments a
 		INNER JOIN clinics c ON a.clinic_id = c.id
+		LEFT JOIN whatsapp_connections wc ON wc.clinic_id = c.id AND wc.is_active = true AND wc.deleted_at IS NULL
 		WHERE a.deleted_at IS NULL
 			AND a.status = 'pending'
 			AND a.confirmation_expires_at IS NOT NULL

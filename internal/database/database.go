@@ -33,7 +33,10 @@ func NewDatabase(dsn string, isDebug bool) (*Database, error) {
 		},
 	)
 
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{
+	db, err := gorm.Open(postgres.New(postgres.Config{
+		DSN:                  dsn,
+		PreferSimpleProtocol: true, // disable prepared statements for connection pooler compatibility
+	}), &gorm.Config{
 		Logger: gormLogger,
 	})
 	if err != nil {
@@ -49,6 +52,9 @@ func NewDatabase(dsn string, isDebug bool) (*Database, error) {
 	sqlDB.SetMaxIdleConns(10)
 	sqlDB.SetMaxOpenConns(100)
 	sqlDB.SetConnMaxLifetime(time.Hour)
+
+	// Ensure search_path is set to public (connection poolers may override it)
+	db.Exec("SET search_path TO public")
 
 	return &Database{db: db}, nil
 }
