@@ -664,7 +664,7 @@ func main() {
 	settingsHdlr := settings_handler.NewSettingsHandler(settingsSvc)
 
 	// Initialize Public handler (no auth required - landing page config)
-	publicHdlr := public_handler.NewPublicHandler(settingsSvc, planService)
+	publicHdlr := public_handler.NewPublicHandler(settingsSvc, planService, emailSvc)
 
 	// Booking service already initialized earlier (for AI Agent)
 	// bookingSvc already exists

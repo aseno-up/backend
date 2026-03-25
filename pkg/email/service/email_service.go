@@ -16,6 +16,7 @@ type EmailService interface {
 	SendWelcome(ctx context.Context, data *WelcomeEmailData) error
 	SendPasswordReset(ctx context.Context, data *ResetPasswordEmailData) error
 	SendEmailVerification(ctx context.Context, data *EmailVerificationData) error
+	SendContactForm(ctx context.Context, data *ContactFormData) error
 }
 
 // InviteEmailData contains data for invite emails
@@ -48,6 +49,13 @@ type EmailVerificationData struct {
 	RecipientEmail   string
 	RecipientName    string
 	VerificationLink string
+}
+
+// ContactFormData contains data for contact form submissions
+type ContactFormData struct {
+	Name    string
+	Email   string
+	Message string
 }
 
 // SMTPConfig holds SMTP configuration
@@ -383,6 +391,27 @@ func (s *smtpEmailService) renderEmailVerificationTemplate(data *EmailVerificati
 	return buf.String(), nil
 }
 
+// SendContactForm sends a contact form submission to the support email via SMTP
+func (s *smtpEmailService) SendContactForm(ctx context.Context, data *ContactFormData) error {
+	subject := fmt.Sprintf("Contato via site — %s", data.Name)
+	body := fmt.Sprintf(`
+<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"></head>
+<body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
+    <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
+        <h2>Nova mensagem de contato</h2>
+        <p><strong>Nome:</strong> %s</p>
+        <p><strong>Email:</strong> %s</p>
+        <p><strong>Mensagem:</strong></p>
+        <p style="background: #f9fafb; padding: 15px; border-radius: 8px;">%s</p>
+    </div>
+</body>
+</html>`, data.Name, data.Email, data.Message)
+
+	return s.sendEmail(s.config.From, subject, body)
+}
+
 // NoOpEmailService is a no-operation email service for development
 type noOpEmailService struct{}
 
@@ -412,5 +441,11 @@ func (s *noOpEmailService) SendPasswordReset(ctx context.Context, data *ResetPas
 func (s *noOpEmailService) SendEmailVerification(ctx context.Context, data *EmailVerificationData) error {
 	fmt.Printf("[EMAIL] Would send email verification to %s (%s) (link: %s)\n",
 		data.RecipientEmail, data.RecipientName, data.VerificationLink)
+	return nil
+}
+
+func (s *noOpEmailService) SendContactForm(ctx context.Context, data *ContactFormData) error {
+	fmt.Printf("[EMAIL] Would send contact form from %s (%s): %s\n",
+		data.Name, data.Email, data.Message)
 	return nil
 }

@@ -205,13 +205,11 @@ func (s *authService) Register(ctx context.Context, req *model.RegisterRequest) 
 	if err := s.accountRepo.Create(ctx, account); err != nil {
 		return nil, err
 	}
-	account.Plan = plan
 
-	// Create clinic
+	// Create clinic (don't embed Account to prevent GORM cascading saves)
 	clinic := &clinic_model.Clinic{
 		ID:        clinicID,
 		AccountID: accountID,
-		Account:   account,
 		Name:      req.ClinicName,
 		Slug:      slug,
 		Email:     req.Email,
@@ -227,7 +225,6 @@ func (s *authService) Register(ctx context.Context, req *model.RegisterRequest) 
 	}
 
 	if err := s.clinicRepo.Create(ctx, clinic); err != nil {
-		// Clean up account on failure
 		_ = s.accountRepo.Delete(ctx, accountID)
 		return nil, err
 	}
@@ -255,6 +252,10 @@ func (s *authService) Register(ctx context.Context, req *model.RegisterRequest) 
 		_ = s.accountRepo.Delete(ctx, accountID)
 		return nil, err
 	}
+
+	// Attach associations for response serialization (after all DB operations)
+	account.Plan = plan
+	clinic.Account = account
 
 	// Generate tokens
 	tokenPair, err := s.jwtService.GenerateTokenPair(user)
@@ -318,9 +319,6 @@ func (s *authService) Register(ctx context.Context, req *model.RegisterRequest) 
 			fmt.Printf("[AUTH] Failed to send verification email to %s: %v\n", user.Email, err)
 		}
 	}()
-
-	// Preload Account for the response
-	clinic.Account = account
 
 	return &model.AuthResponse{
 		User:         user.ToResponse(),
@@ -454,9 +452,8 @@ func (s *authService) GoogleLogin(ctx context.Context, req *model.GoogleLoginReq
 		if err := s.accountRepo.Create(ctx, account); err != nil {
 			return nil, err
 		}
-		account.Plan = plan
 
-		// Create clinic
+		// Create clinic (don't embed Account to prevent GORM cascading saves)
 		clinic := &clinic_model.Clinic{
 			ID:        clinicID,
 			AccountID: accountID,
@@ -496,6 +493,10 @@ func (s *authService) GoogleLogin(ctx context.Context, req *model.GoogleLoginReq
 			_ = s.accountRepo.Delete(ctx, accountID)
 			return nil, err
 		}
+
+		// Attach associations for response serialization (after all DB operations)
+		account.Plan = plan
+		clinic.Account = account
 
 		// Create Asaas customer unconditionally for the new account
 		if s.paymentService != nil {

@@ -5,6 +5,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	email_service "github.com/aseno/backend/pkg/email/service"
 	plan_model "github.com/aseno/backend/pkg/plan/model"
 	plan_service "github.com/aseno/backend/pkg/plan/service"
 	settings_service "github.com/aseno/backend/pkg/settings/service"
@@ -14,18 +15,21 @@ import (
 type PublicHandler interface {
 	RegisterRoutes(router gin.IRouter)
 	GetConfig(c *gin.Context)
+	SubmitContact(c *gin.Context)
 }
 
 type publicHandler struct {
 	settings settings_service.SettingsService
 	planSvc  plan_service.PlanService
+	emailSvc email_service.EmailService
 }
 
 // NewPublicHandler creates a new public handler
-func NewPublicHandler(settings settings_service.SettingsService, planSvc plan_service.PlanService) PublicHandler {
+func NewPublicHandler(settings settings_service.SettingsService, planSvc plan_service.PlanService, emailSvc email_service.EmailService) PublicHandler {
 	return &publicHandler{
 		settings: settings,
 		planSvc:  planSvc,
+		emailSvc: emailSvc,
 	}
 }
 
@@ -34,7 +38,44 @@ func (h *publicHandler) RegisterRoutes(router gin.IRouter) {
 	public := router.Group("/public")
 	{
 		public.GET("/config", h.GetConfig)
+		public.POST("/contact", h.SubmitContact)
 	}
+}
+
+// ContactRequest represents the contact form request body
+type ContactRequest struct {
+	Name    string `json:"name" binding:"required,min=2"`
+	Email   string `json:"email" binding:"required,email"`
+	Message string `json:"message" binding:"required,min=10"`
+}
+
+// SubmitContact handles contact form submissions
+// @Summary Submit contact form
+// @Tags Public
+// @Accept json
+// @Produce json
+// @Param request body ContactRequest true "Contact form data"
+// @Success 200 {object} map[string]string
+// @Failure 400 {object} map[string]string
+// @Router /public/contact [post]
+func (h *publicHandler) SubmitContact(c *gin.Context) {
+	var req ContactRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Dados invalidos. Preencha todos os campos corretamente."})
+		return
+	}
+
+	err := h.emailSvc.SendContactForm(c.Request.Context(), &email_service.ContactFormData{
+		Name:    req.Name,
+		Email:   req.Email,
+		Message: req.Message,
+	})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Erro ao enviar mensagem. Tente novamente."})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Mensagem enviada com sucesso."})
 }
 
 // PlanConfigResponse represents a single plan's public configuration

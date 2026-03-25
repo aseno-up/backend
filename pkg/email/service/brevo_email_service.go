@@ -93,10 +93,79 @@ func (s *brevoEmailService) SendWelcome(ctx context.Context, data *WelcomeEmailD
 
 // SendEmailVerification sends an email verification email using Brevo
 func (s *brevoEmailService) SendEmailVerification(ctx context.Context, data *EmailVerificationData) error {
-	// For now, we'll just log this. Implementation can be added later.
-	fmt.Printf("[BREVO] Would send email verification to %s (%s) (link: %s)\n",
-		data.RecipientEmail,
-		data.RecipientName,
-		data.VerificationLink)
+	_, _, err := s.client.TransactionalEmailsApi.SendTransacEmail(ctx, lib.SendSmtpEmail{
+		Sender: &lib.SendSmtpEmailSender{
+			Name:  s.senderName,
+			Email: s.senderEmail,
+		},
+		To: []lib.SendSmtpEmailTo{
+			{
+				Email: data.RecipientEmail,
+				Name:  data.RecipientName,
+			},
+		},
+		Subject: "Confirme seu e-mail — Aseno",
+		HtmlContent: fmt.Sprintf(`
+			<div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto;padding:32px 24px;">
+				<h2 style="color:#0d1b2a;margin-bottom:8px;">Confirme seu e-mail</h2>
+				<p style="color:#607d94;font-size:15px;line-height:1.6;">
+					Olá, <strong>%s</strong>! Obrigado por se cadastrar no Aseno.
+				</p>
+				<p style="color:#607d94;font-size:15px;line-height:1.6;">
+					Clique no botão abaixo para confirmar seu endereço de e-mail e ativar sua conta:
+				</p>
+				<p style="text-align:center;margin:32px 0;">
+					<a href="%s"
+					   style="background:#38b6ff;color:#fff;text-decoration:none;padding:12px 32px;border-radius:8px;font-weight:600;font-size:15px;display:inline-block;">
+						Confirmar e-mail
+					</a>
+				</p>
+				<p style="color:#607d94;font-size:13px;line-height:1.6;">
+					Se o botão não funcionar, copie e cole este link no navegador:<br/>
+					<a href="%s" style="color:#38b6ff;word-break:break-all;">%s</a>
+				</p>
+				<p style="color:#a0aec0;font-size:12px;margin-top:32px;">
+					Este link expira em 24 horas. Se você não criou uma conta no Aseno, ignore este e-mail.
+				</p>
+			</div>
+		`, data.RecipientName, data.VerificationLink, data.VerificationLink, data.VerificationLink),
+	})
+
+	if err != nil {
+		return fmt.Errorf("failed to send email verification via Brevo: %w", err)
+	}
+	return nil
+}
+
+// SendContactForm sends a contact form submission to the support email using Brevo
+func (s *brevoEmailService) SendContactForm(ctx context.Context, data *ContactFormData) error {
+	_, _, err := s.client.TransactionalEmailsApi.SendTransacEmail(ctx, lib.SendSmtpEmail{
+		Sender: &lib.SendSmtpEmailSender{
+			Name:  data.Name,
+			Email: data.Email,
+		},
+		To: []lib.SendSmtpEmailTo{
+			{
+				Email: s.senderEmail,
+				Name:  s.senderName,
+			},
+		},
+		ReplyTo: &lib.SendSmtpEmailReplyTo{
+			Email: data.Email,
+			Name:  data.Name,
+		},
+		Subject: fmt.Sprintf("Contato via site — %s", data.Name),
+		HtmlContent: fmt.Sprintf(`
+			<h2>Nova mensagem de contato</h2>
+			<p><strong>Nome:</strong> %s</p>
+			<p><strong>Email:</strong> %s</p>
+			<p><strong>Mensagem:</strong></p>
+			<p style="background:#f4f8fb;padding:15px;border-radius:8px;">%s</p>
+		`, data.Name, data.Email, data.Message),
+	})
+
+	if err != nil {
+		return fmt.Errorf("failed to send contact form email via Brevo: %w", err)
+	}
 	return nil
 }
