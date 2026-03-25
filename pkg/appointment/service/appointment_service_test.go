@@ -62,7 +62,7 @@ func (m *mockAppointmentRepo) UpdateStatus(_ context.Context, _, _ uuid.UUID, _ 
 func (m *mockAppointmentRepo) GetPendingReminders(_ context.Context, _ string, _, _ time.Time) ([]*model.AppointmentWithClinic, error) {
 	return nil, nil
 }
-func (m *mockAppointmentRepo) MarkReminderSent(_ context.Context, _ uuid.UUID, _ string) error {
+func (m *mockAppointmentRepo) MarkReminderSent(_ context.Context, _, _ uuid.UUID, _ string) error {
 	return nil
 }
 func (m *mockAppointmentRepo) GetPendingByPhone(_ context.Context, _ uuid.UUID, _ string) (*model.Appointment, error) {
@@ -71,10 +71,10 @@ func (m *mockAppointmentRepo) GetPendingByPhone(_ context.Context, _ uuid.UUID, 
 func (m *mockAppointmentRepo) GetExpiredConfirmations(_ context.Context, _ int) ([]*model.AppointmentWithClinic, error) {
 	return nil, nil
 }
-func (m *mockAppointmentRepo) MarkConfirmationExpired(_ context.Context, _ uuid.UUID) error {
+func (m *mockAppointmentRepo) MarkConfirmationExpired(_ context.Context, _, _ uuid.UUID) error {
 	return nil
 }
-func (m *mockAppointmentRepo) SetConfirmationExpiresAt(_ context.Context, _ uuid.UUID, _ time.Time) error {
+func (m *mockAppointmentRepo) SetConfirmationExpiresAt(_ context.Context, _, _ uuid.UUID, _ time.Time) error {
 	return nil
 }
 func (m *mockAppointmentRepo) GetSlotPerformanceStats(_ context.Context, _, _ uuid.UUID) ([]*model.SlotPerformanceStats, error) {

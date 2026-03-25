@@ -26,15 +26,15 @@ type AppointmentRepository interface {
 
 	// Reminder-related methods
 	GetPendingReminders(ctx context.Context, reminderType string, windowStart, windowEnd time.Time) ([]*model.AppointmentWithClinic, error)
-	MarkReminderSent(ctx context.Context, id uuid.UUID, reminderType string) error
+	MarkReminderSent(ctx context.Context, clinicID, id uuid.UUID, reminderType string) error
 
 	// WhatsApp response handling
 	GetPendingByPhone(ctx context.Context, clinicID uuid.UUID, phone string) (*model.Appointment, error)
 
 	// Confirmation timeout methods
 	GetExpiredConfirmations(ctx context.Context, limit int) ([]*model.AppointmentWithClinic, error)
-	MarkConfirmationExpired(ctx context.Context, id uuid.UUID) error
-	SetConfirmationExpiresAt(ctx context.Context, id uuid.UUID, expiresAt time.Time) error
+	MarkConfirmationExpired(ctx context.Context, clinicID, id uuid.UUID) error
+	SetConfirmationExpiresAt(ctx context.Context, clinicID, id uuid.UUID, expiresAt time.Time) error
 
 	// Smart Scheduling
 	GetSlotPerformanceStats(ctx context.Context, clinicID, professionalID uuid.UUID) ([]*model.SlotPerformanceStats, error)
@@ -377,7 +377,7 @@ func (r *appointmentRepository) GetPendingReminders(ctx context.Context, reminde
 }
 
 // MarkReminderSent marks a specific reminder type as sent for an appointment
-func (r *appointmentRepository) MarkReminderSent(ctx context.Context, id uuid.UUID, reminderType string) error {
+func (r *appointmentRepository) MarkReminderSent(ctx context.Context, clinicID, id uuid.UUID, reminderType string) error {
 	var fieldName string
 	switch reminderType {
 	case "48h":
@@ -393,7 +393,7 @@ func (r *appointmentRepository) MarkReminderSent(ctx context.Context, id uuid.UU
 	now := time.Now()
 	result := r.db.WithContext(ctx).
 		Model(&model.Appointment{}).
-		Where("id = ?", id).
+		Where("clinic_id = ? AND id = ?", clinicID, id).
 		Update(fieldName, now)
 
 	if result.Error != nil {
@@ -500,10 +500,10 @@ func (r *appointmentRepository) GetExpiredConfirmations(ctx context.Context, lim
 }
 
 // MarkConfirmationExpired marks an appointment as no_response due to confirmation timeout
-func (r *appointmentRepository) MarkConfirmationExpired(ctx context.Context, id uuid.UUID) error {
+func (r *appointmentRepository) MarkConfirmationExpired(ctx context.Context, clinicID, id uuid.UUID) error {
 	result := r.db.WithContext(ctx).
 		Model(&model.Appointment{}).
-		Where("id = ?", id).
+		Where("clinic_id = ? AND id = ?", clinicID, id).
 		Update("status", model.AppointmentStatusNoResponse)
 
 	if result.Error != nil {
@@ -513,10 +513,10 @@ func (r *appointmentRepository) MarkConfirmationExpired(ctx context.Context, id 
 }
 
 // SetConfirmationExpiresAt sets the confirmation timeout for an appointment
-func (r *appointmentRepository) SetConfirmationExpiresAt(ctx context.Context, id uuid.UUID, expiresAt time.Time) error {
+func (r *appointmentRepository) SetConfirmationExpiresAt(ctx context.Context, clinicID, id uuid.UUID, expiresAt time.Time) error {
 	result := r.db.WithContext(ctx).
 		Model(&model.Appointment{}).
-		Where("id = ?", id).
+		Where("clinic_id = ? AND id = ?", clinicID, id).
 		Update("confirmation_expires_at", expiresAt)
 
 	if result.Error != nil {

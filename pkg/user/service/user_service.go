@@ -71,14 +71,9 @@ func (s *userService) ListUsers(ctx context.Context, clinicID uuid.UUID, filter 
 
 // GetUser returns a user by ID
 func (s *userService) GetUser(ctx context.Context, clinicID, userID uuid.UUID) (*model.UserResponse, error) {
-	user, err := s.userRepo.GetByID(ctx, userID)
+	user, err := s.userRepo.GetByID(ctx, userID, clinicID)
 	if err != nil {
 		return nil, err
-	}
-
-	// Verify clinic ownership
-	if user.ClinicID != clinicID {
-		return nil, errors.ErrForbiddenInstance
 	}
 
 	return user.ToResponse(), nil
@@ -86,14 +81,9 @@ func (s *userService) GetUser(ctx context.Context, clinicID, userID uuid.UUID) (
 
 // UpdateUser updates a user's information
 func (s *userService) UpdateUser(ctx context.Context, clinicID, userID, currentUserID uuid.UUID, req *model.UpdateUserRequest) (*model.UserResponse, error) {
-	user, err := s.userRepo.GetByID(ctx, userID)
+	user, err := s.userRepo.GetByID(ctx, userID, clinicID)
 	if err != nil {
 		return nil, err
-	}
-
-	// Verify clinic ownership
-	if user.ClinicID != clinicID {
-		return nil, errors.ErrForbiddenInstance
 	}
 
 	// Update fields
@@ -132,14 +122,9 @@ func (s *userService) UpdateRole(ctx context.Context, clinicID, userID, currentU
 		return nil, errors.ErrCannotChangeOwnRoleInstance
 	}
 
-	user, err := s.userRepo.GetByID(ctx, userID)
+	user, err := s.userRepo.GetByID(ctx, userID, clinicID)
 	if err != nil {
 		return nil, err
-	}
-
-	// Verify clinic ownership
-	if user.ClinicID != clinicID {
-		return nil, errors.ErrForbiddenInstance
 	}
 
 	// Cannot change owner role
@@ -168,14 +153,9 @@ func (s *userService) DeactivateUser(ctx context.Context, clinicID, userID, curr
 		return errors.ErrCannotDeactivateSelfInstance
 	}
 
-	user, err := s.userRepo.GetByID(ctx, userID)
+	user, err := s.userRepo.GetByID(ctx, userID, clinicID)
 	if err != nil {
 		return err
-	}
-
-	// Verify clinic ownership
-	if user.ClinicID != clinicID {
-		return errors.ErrForbiddenInstance
 	}
 
 	// Cannot deactivate owner
@@ -189,14 +169,9 @@ func (s *userService) DeactivateUser(ctx context.Context, clinicID, userID, curr
 
 // ReactivateUser reactivates a user account
 func (s *userService) ReactivateUser(ctx context.Context, clinicID, userID uuid.UUID) error {
-	user, err := s.userRepo.GetByID(ctx, userID)
+	user, err := s.userRepo.GetByID(ctx, userID, clinicID)
 	if err != nil {
 		return err
-	}
-
-	// Verify clinic ownership
-	if user.ClinicID != clinicID {
-		return errors.ErrForbiddenInstance
 	}
 
 	user.IsActive = true
@@ -210,14 +185,9 @@ func (s *userService) RemoveUser(ctx context.Context, clinicID, userID, currentU
 		return errors.ErrCannotDeactivateSelfInstance.WithMessage("Cannot remove your own account")
 	}
 
-	user, err := s.userRepo.GetByID(ctx, userID)
+	user, err := s.userRepo.GetByID(ctx, userID, clinicID)
 	if err != nil {
 		return err
-	}
-
-	// Verify clinic ownership
-	if user.ClinicID != clinicID {
-		return errors.ErrForbiddenInstance
 	}
 
 	// Cannot remove owner
@@ -225,7 +195,7 @@ func (s *userService) RemoveUser(ctx context.Context, clinicID, userID, currentU
 		return errors.ErrCannotRemoveOwnerInstance
 	}
 
-	return s.userRepo.Delete(ctx, userID)
+	return s.userRepo.Delete(ctx, userID, clinicID)
 }
 
 // BulkRemoveUsers soft deletes multiple users (skip the current user if they accidentally included themselves)

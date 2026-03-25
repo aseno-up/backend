@@ -93,7 +93,7 @@ func (s *inviteService) CreateInvite(ctx context.Context, clinicID, invitedByID 
 	}
 
 	// Get inviter for email
-	inviter, err := s.userRepo.GetByID(ctx, invitedByID)
+	inviter, err := s.userRepo.GetByID(ctx, invitedByID, clinicID)
 	if err != nil {
 		return nil, err
 	}
@@ -257,7 +257,7 @@ func (s *inviteService) GetInviteByToken(ctx context.Context, token string) (*mo
 	}
 
 	// Get inviter name
-	inviter, err := s.userRepo.GetByID(ctx, invite.InvitedBy)
+	inviter, err := s.userRepo.GetByID(ctx, invite.InvitedBy, invite.ClinicID)
 	if err != nil {
 		return nil, err
 	}
@@ -369,7 +369,7 @@ func (s *inviteService) ResendInvite(ctx context.Context, inviteID, clinicID uui
 		return err
 	}
 
-	resender, err := s.userRepo.GetByID(ctx, resenderID)
+	resender, err := s.userRepo.GetByID(ctx, resenderID, clinicID)
 	if err != nil {
 		return err
 	}

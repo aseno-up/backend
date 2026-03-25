@@ -53,7 +53,11 @@ func (_m *MockUserRepository) Create(ctx context.Context, user *model.User) erro
 	return ret.Error(0)
 }
 
-func (_m *MockUserRepository) GetByID(ctx context.Context, id uuid.UUID) (*model.User, error) {
+func (_m *MockUserRepository) GetByID(ctx context.Context, id, clinicID uuid.UUID) (*model.User, error) {
+	ret := _m.Called(ctx, id, clinicID)
+	return nil, ret.Error(1)
+}
+func (_m *MockUserRepository) GetByIDNoTenant(ctx context.Context, id uuid.UUID) (*model.User, error) {
 	ret := _m.Called(ctx, id)
 	return nil, ret.Error(1)
 }
@@ -81,8 +85,8 @@ func (_m *MockUserRepository) Update(ctx context.Context, user *model.User) erro
 	ret := _m.Called(ctx, user)
 	return ret.Error(0)
 }
-func (_m *MockUserRepository) Delete(ctx context.Context, id uuid.UUID) error {
-	ret := _m.Called(ctx, id)
+func (_m *MockUserRepository) Delete(ctx context.Context, id, clinicID uuid.UUID) error {
+	ret := _m.Called(ctx, id, clinicID)
 	return ret.Error(0)
 }
 func (_m *MockUserRepository) BulkDelete(ctx context.Context, clinicID uuid.UUID, ids []uuid.UUID) error {

@@ -103,6 +103,22 @@ import (
 	waitlist_model "github.com/aseno/backend/pkg/waitlist/model"
 	waitlist_repository "github.com/aseno/backend/pkg/waitlist/repository"
 	waitlist_service "github.com/aseno/backend/pkg/waitlist/service"
+	audit_handler "github.com/aseno/backend/pkg/audit/handler"
+	audit_model "github.com/aseno/backend/pkg/audit/model"
+	audit_repository "github.com/aseno/backend/pkg/audit/repository"
+	audit_service "github.com/aseno/backend/pkg/audit/service"
+	featureflag_handler "github.com/aseno/backend/pkg/featureflag/handler"
+	featureflag_model "github.com/aseno/backend/pkg/featureflag/model"
+	featureflag_repository "github.com/aseno/backend/pkg/featureflag/repository"
+	featureflag_service "github.com/aseno/backend/pkg/featureflag/service"
+	systemlog_handler "github.com/aseno/backend/pkg/systemlog/handler"
+	systemlog_model "github.com/aseno/backend/pkg/systemlog/model"
+	systemlog_repository "github.com/aseno/backend/pkg/systemlog/repository"
+	systemlog_service "github.com/aseno/backend/pkg/systemlog/service"
+	usagemetric_handler "github.com/aseno/backend/pkg/usagemetric/handler"
+	usagemetric_model "github.com/aseno/backend/pkg/usagemetric/model"
+	usagemetric_repository "github.com/aseno/backend/pkg/usagemetric/repository"
+	usagemetric_service "github.com/aseno/backend/pkg/usagemetric/service"
 	"github.com/aseno/backend/pkg/whatsapp/agent"
 	whatsapp_classifier "github.com/aseno/backend/pkg/whatsapp/classifier"
 	whatsapp_client "github.com/aseno/backend/pkg/whatsapp/client"
@@ -178,6 +194,10 @@ func main() {
 	notificationRepo := notification_repository.NewNotificationRepository(db.GetDB())
 	settingsRepo := settings_repository.NewSettingsRepository(db.GetDB())
 	whatsappConnRepo := whatsapp_repository.NewWhatsAppConnectionRepository(db.GetDB())
+	auditRepo := audit_repository.NewAuditRepository(db.GetDB())
+	systemLogRepo := systemlog_repository.NewSystemLogRepository(db.GetDB())
+	featureFlagRepo := featureflag_repository.NewFeatureFlagRepository(db.GetDB())
+	usageMetricRepo := usagemetric_repository.NewUsageMetricRepository(db.GetDB())
 
 	// Seed default settings (if not exist)
 	if err := settingsRepo.SeedDefaults(context.Background()); err != nil {
@@ -191,6 +211,12 @@ func main() {
 
 	// Initialize Settings service (used by professional service and public config)
 	settingsSvc := settings_service.NewSettingsService(settingsRepo)
+
+	// Initialize Sprint 6 services (audit, system logs, feature flags, usage metrics)
+	auditSvc := audit_service.NewAuditService(auditRepo)
+	systemLogSvc := systemlog_service.NewSystemLogService(systemLogRepo)
+	featureFlagSvc := featureflag_service.NewFeatureFlagService(featureFlagRepo)
+	usageMetricSvc := usagemetric_service.NewUsageMetricService(usageMetricRepo)
 
 	// Initialize Notification service (needed early for booking and other services)
 	notificationSvc := notification_service.NewNotificationService(notificationRepo)
@@ -663,6 +689,12 @@ func main() {
 	// Initialize Settings handler (admin only - dev clinics)
 	settingsHdlr := settings_handler.NewSettingsHandler(settingsSvc)
 
+	// Initialize Sprint 6 handlers (admin only)
+	auditHdlr := audit_handler.NewAuditHandler(auditSvc)
+	systemLogHdlr := systemlog_handler.NewSystemLogHandler(systemLogSvc)
+	featureFlagHdlr := featureflag_handler.NewFeatureFlagHandler(featureFlagSvc)
+	usageMetricHdlr := usagemetric_handler.NewUsageMetricHandler(usageMetricSvc)
+
 	// Initialize Public handler (no auth required - landing page config)
 	publicHdlr := public_handler.NewPublicHandler(settingsSvc, planService, emailSvc)
 
@@ -697,6 +729,10 @@ func main() {
 		bookingHdlr,
 		planHandler,
 		offerHandler,
+		auditHdlr,
+		systemLogHdlr,
+		featureFlagHdlr,
+		usageMetricHdlr,
 		authMiddleware,
 		tenantMiddleware,
 	)
@@ -777,6 +813,10 @@ func setupRouter(
 	bookingHandler booking_handler.BookingHandler,
 	planHandler *plan_handler.PlanHandler,
 	offerHandler *plan_handler.OfferHandler,
+	auditHandler audit_handler.AuditHandler,
+	systemLogHandler systemlog_handler.SystemLogHandler,
+	featureFlagHandler featureflag_handler.FeatureFlagHandler,
+	usageMetricHandler usagemetric_handler.UsageMetricHandler,
 	authMiddleware auth_middleware.AuthMiddleware,
 	tenantMiddleware auth_middleware.TenantMiddleware,
 ) *gin.Engine {
@@ -929,6 +969,17 @@ func setupRouter(
 
 			// Settings routes (dev clinics only - has its own middleware)
 			settingsHandler.RegisterRoutes(protected, authMiddleware.Authenticate())
+
+			// Sprint 6: Admin-only routes for observability and control (dev clinics only)
+			adminPanel := protected.Group("/admin")
+			adminPanel.Use(authMiddleware.Authenticate())
+			adminPanel.Use(devOnlyMiddleware())
+			{
+				auditHandler.RegisterRoutes(adminPanel)
+				systemLogHandler.RegisterRoutes(adminPanel)
+				featureFlagHandler.RegisterRoutes(adminPanel)
+				usageMetricHandler.RegisterRoutes(adminPanel)
+			}
 		}
 
 		// WhatsApp webhook (public, validated by secret)
@@ -957,6 +1008,33 @@ func setupRouter(
 	})
 
 	return router
+}
+
+// devOnlyMiddleware restricts access to dev-type clinics only (admin panel)
+func devOnlyMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		clinicRaw, exists := c.Get("clinic")
+		if !exists {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "Não autorizado"})
+			c.Abort()
+			return
+		}
+
+		clinic, ok := clinicRaw.(*clinic_model.Clinic)
+		if !ok {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Erro interno"})
+			c.Abort()
+			return
+		}
+
+		if clinic.Type != clinic_model.ClinicTypeDev {
+			c.JSON(http.StatusForbidden, gin.H{"error": "Acesso restrito a clínicas de desenvolvimento"})
+			c.Abort()
+			return
+		}
+
+		c.Next()
+	}
 }
 
 // googleAuthAdapter adapts the Google client to the auth service interface
@@ -1021,6 +1099,11 @@ func runMigrations(db *database.Database) error {
 		// AI Agent conversation tables
 		&conversation.ConversationContext{},
 		&conversation.ToolCallLog{},
+		// Sprint 6: Observability and control tables
+		&audit_model.AuditLog{},
+		&systemlog_model.SystemLog{},
+		&featureflag_model.FeatureFlag{},
+		&usagemetric_model.UsageMetric{},
 	}
 
 	if err := db.AutoMigrate(models...); err != nil {

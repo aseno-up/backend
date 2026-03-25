@@ -350,22 +350,18 @@ func (s *authService) Login(ctx context.Context, req *model.LoginRequest) (*mode
 		return nil, errors.ErrInvalidCredentialsInstance
 	}
 
-	// Check if clinic subscription is active
+	// Load clinic for response (login is allowed even if subscription expired,
+	// the tenant middleware will enforce subscription on protected routes)
 	clinic, err := s.clinicRepo.GetByID(ctx, user.ClinicID)
 	if err != nil {
 		return nil, err
 	}
 
-	// Load account
 	account, err := s.accountRepo.GetByID(ctx, clinic.AccountID)
 	if err != nil {
 		return nil, err
 	}
 	clinic.Account = account
-
-	if !clinic.IsSubscriptionActive() {
-		return nil, errors.ErrForbiddenInstance.WithMessage("Clinic subscription has expired")
-	}
 
 	// Generate tokens
 	tokenPair, err := s.jwtService.GenerateTokenPair(user)
@@ -537,10 +533,6 @@ func (s *authService) GoogleLogin(ctx context.Context, req *model.GoogleLoginReq
 			return nil, err
 		}
 		clinic.Account = account
-
-		if !clinic.IsSubscriptionActive() {
-			return nil, errors.ErrForbiddenInstance.WithMessage("Clinic subscription has expired")
-		}
 	}
 
 	// Generate tokens
@@ -583,7 +575,7 @@ func (s *authService) RefreshToken(ctx context.Context, refreshToken string) (*m
 	}
 
 	// Get user
-	user, err := s.userRepo.GetByID(ctx, claims.UserID)
+	user, err := s.userRepo.GetByIDNoTenant(ctx, claims.UserID)
 	if err != nil {
 		return nil, err
 	}
@@ -631,7 +623,7 @@ func (s *authService) Logout(ctx context.Context, userID uuid.UUID) error {
 
 // GetCurrentUser retrieves the current user's data with clinic info
 func (s *authService) GetCurrentUser(ctx context.Context, userID uuid.UUID) (*model.CurrentUserResponse, error) {
-	user, err := s.userRepo.GetByID(ctx, userID)
+	user, err := s.userRepo.GetByIDNoTenant(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -649,7 +641,7 @@ func (s *authService) GetCurrentUser(ctx context.Context, userID uuid.UUID) (*mo
 
 // ChangePassword changes the user's password
 func (s *authService) ChangePassword(ctx context.Context, userID uuid.UUID, req *model.ChangePasswordRequest) error {
-	user, err := s.userRepo.GetByID(ctx, userID)
+	user, err := s.userRepo.GetByIDNoTenant(ctx, userID)
 	if err != nil {
 		return err
 	}
@@ -742,7 +734,7 @@ func (s *authService) ResetPassword(ctx context.Context, req *model.ResetPasswor
 	}
 
 	// Find user
-	user, err := s.userRepo.GetByID(ctx, reset.UserID)
+	user, err := s.userRepo.GetByIDNoTenant(ctx, reset.UserID)
 	if err != nil {
 		return err
 	}
@@ -794,7 +786,7 @@ func generateShortID() string {
 
 // SendVerificationEmail sends an email verification link to the user
 func (s *authService) SendVerificationEmail(ctx context.Context, userID uuid.UUID) error {
-	user, err := s.userRepo.GetByID(ctx, userID)
+	user, err := s.userRepo.GetByIDNoTenant(ctx, userID)
 	if err != nil {
 		return err
 	}
@@ -857,7 +849,7 @@ func (s *authService) VerifyEmail(ctx context.Context, token string) error {
 	}
 
 	// Get user
-	user, err := s.userRepo.GetByID(ctx, verification.UserID)
+	user, err := s.userRepo.GetByIDNoTenant(ctx, verification.UserID)
 	if err != nil {
 		return err
 	}

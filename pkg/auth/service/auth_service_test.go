@@ -71,9 +71,17 @@ func (m *MockUserRepository) GetByEmail(ctx context.Context, email string) (*use
 	return user, args.Error(1)
 }
 
-func (m *MockUserRepository) GetByID(ctx context.Context, id uuid.UUID) (*user_model.User, error) {
+func (m *MockUserRepository) GetByID(ctx context.Context, id, clinicID uuid.UUID) (*user_model.User, error) {
+	args := m.Called(ctx, id, clinicID)
+	return args.Get(0).(*user_model.User), args.Error(1)
+}
+func (m *MockUserRepository) GetByIDNoTenant(ctx context.Context, id uuid.UUID) (*user_model.User, error) {
 	args := m.Called(ctx, id)
 	return args.Get(0).(*user_model.User), args.Error(1)
+}
+func (m *MockUserRepository) Delete(ctx context.Context, id, clinicID uuid.UUID) error {
+	args := m.Called(ctx, id, clinicID)
+	return args.Error(0)
 }
 
 // MockClinicRepository
@@ -226,8 +234,7 @@ func TestAuthService_Register_CreatesAsaasCustomerUnconditionally(t *testing.T) 
 	}, nil)
 	mockUserRepo.On("UpdateRefreshToken", ctx, mock.Anything, "refresh").Return(nil)
 	mockUserRepo.On("UpdateLastLogin", ctx, mock.Anything).Return(nil)
-	mockUserRepo.On("GetByID", mock.Anything, mock.Anything).Return(&user_model.User{Email: req.Email, Name: req.Name}, nil)
-	mockUserRepo.On("GetByID", mock.Anything, mock.Anything).Return(&user_model.User{Email: req.Email, Name: req.Name}, nil)
+	mockUserRepo.On("GetByIDNoTenant", mock.Anything, mock.Anything).Return(&user_model.User{Email: req.Email, Name: req.Name}, nil)
 
 	// Here is our main assertion: Customer should be created even if plan is trial and doc is empty!
 	mockPaymentService.On("CreateCustomerForClinic", ctx, mock.Anything, mock.MatchedBy(func(r *payment_model.CreateCustomerRequest) bool {

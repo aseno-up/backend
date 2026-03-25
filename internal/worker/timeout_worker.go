@@ -100,7 +100,7 @@ func (w *TimeoutWorker) processTimeouts() {
 // processExpiredAppointment marks a single appointment as no_response
 func (w *TimeoutWorker) processExpiredAppointment(ctx context.Context, apt *appointment_model.AppointmentWithClinic) error {
 	// Mark as no_response
-	if err := w.appointmentRepo.MarkConfirmationExpired(ctx, apt.ID); err != nil {
+	if err := w.appointmentRepo.MarkConfirmationExpired(ctx, apt.ClinicID, apt.ID); err != nil {
 		return err
 	}
 
@@ -123,5 +123,5 @@ func (w *TimeoutWorker) processExpiredAppointment(ctx context.Context, apt *appo
 // Compile-time check that the repository has the required methods
 var _ interface {
 	GetExpiredConfirmations(ctx context.Context, limit int) ([]*appointment_model.AppointmentWithClinic, error)
-	MarkConfirmationExpired(ctx context.Context, id uuid.UUID) error
+	MarkConfirmationExpired(ctx context.Context, clinicID, id uuid.UUID) error
 } = (appointment_repository.AppointmentRepository)(nil)

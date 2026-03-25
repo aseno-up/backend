@@ -15,12 +15,13 @@ import (
 // UserRepository defines the interface for user data operations
 type UserRepository interface {
 	Create(ctx context.Context, user *model.User) error
-	GetByID(ctx context.Context, id uuid.UUID) (*model.User, error)
+	GetByID(ctx context.Context, id, clinicID uuid.UUID) (*model.User, error)
+	GetByIDNoTenant(ctx context.Context, id uuid.UUID) (*model.User, error) // auth-internal only (password reset, email verification)
 	GetByEmail(ctx context.Context, email string) (*model.User, error)
 	GetByGoogleID(ctx context.Context, googleID string) (*model.User, error)
 	GetByClinicID(ctx context.Context, clinicID uuid.UUID, filter pagination.Filter) ([]*model.User, int64, error)
 	Update(ctx context.Context, user *model.User) error
-	Delete(ctx context.Context, id uuid.UUID) error
+	Delete(ctx context.Context, id, clinicID uuid.UUID) error
 	ExistsByEmail(ctx context.Context, email string) (bool, error)
 	UpdateRefreshToken(ctx context.Context, userID uuid.UUID, token string) error
 	UpdateLastLogin(ctx context.Context, userID uuid.UUID) error
@@ -46,8 +47,21 @@ func (r *userRepository) Create(ctx context.Context, user *model.User) error {
 	return nil
 }
 
-// GetByID retrieves a user by ID
-func (r *userRepository) GetByID(ctx context.Context, id uuid.UUID) (*model.User, error) {
+// GetByID retrieves a user by ID within a clinic
+func (r *userRepository) GetByID(ctx context.Context, id, clinicID uuid.UUID) (*model.User, error) {
+	var user model.User
+	result := r.db.WithContext(ctx).Where("id = ? AND clinic_id = ? AND deleted_at IS NULL", id, clinicID).First(&user)
+	if result.Error != nil {
+		if result.Error == gorm.ErrRecordNotFound {
+			return nil, errors.ErrUserNotFoundInstance
+		}
+		return nil, errors.ErrInternalInstance.WithError(result.Error)
+	}
+	return &user, nil
+}
+
+// GetByIDNoTenant retrieves a user by ID without tenant filtering (auth-internal only: password reset, email verification, token refresh)
+func (r *userRepository) GetByIDNoTenant(ctx context.Context, id uuid.UUID) (*model.User, error) {
 	var user model.User
 	result := r.db.WithContext(ctx).Where("id = ? AND deleted_at IS NULL", id).First(&user)
 	if result.Error != nil {
@@ -139,9 +153,9 @@ func (r *userRepository) Update(ctx context.Context, user *model.User) error {
 	return nil
 }
 
-// Delete soft-deletes a user
-func (r *userRepository) Delete(ctx context.Context, id uuid.UUID) error {
-	result := r.db.WithContext(ctx).Where("id = ?", id).Delete(&model.User{})
+// Delete soft-deletes a user within a clinic
+func (r *userRepository) Delete(ctx context.Context, id, clinicID uuid.UUID) error {
+	result := r.db.WithContext(ctx).Where("id = ? AND clinic_id = ?", id, clinicID).Delete(&model.User{})
 	if result.Error != nil {
 		return errors.ErrInternalInstance.WithError(result.Error)
 	}

@@ -338,7 +338,7 @@ func (s *sessionPlanService) GenerateAppointments(ctx context.Context, plan *mod
 	now := time.Now()
 	plan.LastGeneratedAt = &now
 	plan.GenerateUntil = endDate
-	s.repo.UpdateLastGenerated(ctx, plan.ID, now)
+	s.repo.UpdateLastGenerated(ctx, plan.ClinicID, plan.ID, now)
 
 	return created, nil
 }
