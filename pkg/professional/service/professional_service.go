@@ -7,6 +7,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/aseno/backend/internal/errors"
+	appointment_repository "github.com/aseno/backend/pkg/appointment/repository"
 	clinic_repository "github.com/aseno/backend/pkg/clinic/repository"
 	"github.com/aseno/backend/pkg/pagination"
 	"github.com/aseno/backend/pkg/professional/model"
@@ -26,17 +27,19 @@ type ProfessionalService interface {
 
 // professionalService implements ProfessionalService
 type professionalService struct {
-	repo       repository.ProfessionalRepository
-	clinicRepo clinic_repository.ClinicRepository
-	settings   settings_service.SettingsService
+	repo            repository.ProfessionalRepository
+	clinicRepo      clinic_repository.ClinicRepository
+	appointmentRepo appointment_repository.AppointmentRepository
+	settings        settings_service.SettingsService
 }
 
 // NewProfessionalService creates a new professional service
-func NewProfessionalService(repo repository.ProfessionalRepository, clinicRepo clinic_repository.ClinicRepository, settings settings_service.SettingsService) ProfessionalService {
+func NewProfessionalService(repo repository.ProfessionalRepository, clinicRepo clinic_repository.ClinicRepository, appointmentRepo appointment_repository.AppointmentRepository, settings settings_service.SettingsService) ProfessionalService {
 	return &professionalService{
-		repo:       repo,
-		clinicRepo: clinicRepo,
-		settings:   settings,
+		repo:            repo,
+		clinicRepo:      clinicRepo,
+		appointmentRepo: appointmentRepo,
+		settings:        settings,
 	}
 }
 
@@ -183,15 +186,58 @@ func (s *professionalService) Update(ctx context.Context, id, clinicID uuid.UUID
 	return professional.ToResponse(), nil
 }
 
-// Delete deletes a professional
+// Delete deletes a professional (blocked if has appointments or linked user)
 func (s *professionalService) Delete(ctx context.Context, id, clinicID uuid.UUID) error {
+	professional, err := s.repo.GetByID(ctx, id, clinicID)
+	if err != nil {
+		return err
+	}
+
+	// Block delete if professional has a linked user
+	if professional.UserID != nil {
+		return errors.ErrValidationInstance.WithMessage(
+			"Este profissional possui um usuário vinculado. Desative-o ao invés de excluir.")
+	}
+
+	// Block delete if professional has appointments
+	if s.appointmentRepo != nil {
+		count, err := s.appointmentRepo.CountByProfessionalID(ctx, id, clinicID)
+		if err != nil {
+			return err
+		}
+		if count > 0 {
+			return errors.ErrValidationInstance.WithMessage(
+				fmt.Sprintf("Este profissional possui %d agendamento(s). Desative-o ao invés de excluir.", count))
+		}
+	}
+
 	return s.repo.Delete(ctx, id, clinicID)
 }
 
-// BulkDelete soft deletes multiple professionals
+// BulkDelete soft deletes multiple professionals (blocks any that have appointments or linked users)
 func (s *professionalService) BulkDelete(ctx context.Context, ids []uuid.UUID, clinicID uuid.UUID) error {
-	if err := s.repo.BulkDelete(ctx, ids, clinicID); err != nil {
-		return err
+	for _, id := range ids {
+		professional, err := s.repo.GetByID(ctx, id, clinicID)
+		if err != nil {
+			return err
+		}
+
+		if professional.UserID != nil {
+			return errors.ErrValidationInstance.WithMessage(
+				fmt.Sprintf("O profissional '%s' possui um usuário vinculado. Desative-o ao invés de excluir.", professional.Name))
+		}
+
+		if s.appointmentRepo != nil {
+			count, err := s.appointmentRepo.CountByProfessionalID(ctx, id, clinicID)
+			if err != nil {
+				return err
+			}
+			if count > 0 {
+				return errors.ErrValidationInstance.WithMessage(
+					fmt.Sprintf("O profissional '%s' possui %d agendamento(s). Desative-o ao invés de excluir.", professional.Name, count))
+			}
+		}
 	}
-	return nil
+
+	return s.repo.BulkDelete(ctx, ids, clinicID)
 }

@@ -73,21 +73,79 @@ func (s *brevoEmailService) SendPasswordReset(ctx context.Context, data *ResetPa
 
 // SendInvite sends an invitation email using Brevo
 func (s *brevoEmailService) SendInvite(ctx context.Context, data *InviteEmailData) error {
-	// For now, we'll just log this. Implementation can be added later.
-	fmt.Printf("[BREVO] Would send invite to %s for %s (link: %s)\n",
-		data.RecipientEmail,
-		data.ClinicName,
-		data.InviteLink)
+	expiresFormatted := data.ExpiresAt.Format("02/01/2006")
+
+	_, _, err := s.client.TransactionalEmailsApi.SendTransacEmail(ctx, lib.SendSmtpEmail{
+		Sender: &lib.SendSmtpEmailSender{
+			Name:  s.senderName,
+			Email: s.senderEmail,
+		},
+		To: []lib.SendSmtpEmailTo{
+			{Email: data.RecipientEmail},
+		},
+		Subject: fmt.Sprintf("Voce foi convidado para %s — Aseno", data.ClinicName),
+		HtmlContent: fmt.Sprintf(`
+			<div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto;padding:32px 24px;">
+				<h2 style="color:#0d1b2a;margin-bottom:8px;">Voce foi convidado!</h2>
+				<p style="color:#607d94;font-size:15px;line-height:1.6;">
+					<strong>%s</strong> convidou voce para fazer parte da equipe da clinica
+					<strong>%s</strong> como <strong>%s</strong>.
+				</p>
+				<p style="text-align:center;margin:32px 0;">
+					<a href="%s"
+					   style="background:#38b6ff;color:#fff;text-decoration:none;padding:12px 32px;border-radius:8px;font-weight:600;font-size:15px;display:inline-block;">
+						Aceitar Convite
+					</a>
+				</p>
+				<p style="color:#a0aec0;font-size:12px;margin-top:32px;">
+					Este convite expira em %s. Se voce nao reconhece este convite, ignore este e-mail.
+				</p>
+			</div>
+		`, data.InviterName, data.ClinicName, data.Role, data.InviteLink, expiresFormatted),
+	})
+
+	if err != nil {
+		return fmt.Errorf("failed to send invite email via Brevo: %w", err)
+	}
 	return nil
 }
 
 // SendWelcome sends a welcome email using Brevo
 func (s *brevoEmailService) SendWelcome(ctx context.Context, data *WelcomeEmailData) error {
-	// For now, we'll just log this. Implementation can be added later.
-	fmt.Printf("[BREVO] Would send welcome to %s (%s) for %s\n",
-		data.RecipientEmail,
-		data.RecipientName,
-		data.ClinicName)
+	_, _, err := s.client.TransactionalEmailsApi.SendTransacEmail(ctx, lib.SendSmtpEmail{
+		Sender: &lib.SendSmtpEmailSender{
+			Name:  s.senderName,
+			Email: s.senderEmail,
+		},
+		To: []lib.SendSmtpEmailTo{
+			{
+				Email: data.RecipientEmail,
+				Name:  data.RecipientName,
+			},
+		},
+		Subject: fmt.Sprintf("Bem-vindo a %s — Aseno", data.ClinicName),
+		HtmlContent: fmt.Sprintf(`
+			<div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto;padding:32px 24px;">
+				<h2 style="color:#0d1b2a;margin-bottom:8px;">Bem-vindo, %s!</h2>
+				<p style="color:#607d94;font-size:15px;line-height:1.6;">
+					Sua conta na clinica <strong>%s</strong> foi criada com sucesso.
+				</p>
+				<p style="color:#607d94;font-size:15px;line-height:1.6;">
+					Acesse o sistema para comecar:
+				</p>
+				<p style="text-align:center;margin:32px 0;">
+					<a href="%s"
+					   style="background:#38b6ff;color:#fff;text-decoration:none;padding:12px 32px;border-radius:8px;font-weight:600;font-size:15px;display:inline-block;">
+						Acessar o Sistema
+					</a>
+				</p>
+			</div>
+		`, data.RecipientName, data.ClinicName, data.LoginLink),
+	})
+
+	if err != nil {
+		return fmt.Errorf("failed to send welcome email via Brevo: %w", err)
+	}
 	return nil
 }
 

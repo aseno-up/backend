@@ -21,6 +21,9 @@ import (
 	email_service "github.com/aseno/backend/pkg/email/service"
 	payment_model "github.com/aseno/backend/pkg/payment/model"
 	plan_repo "github.com/aseno/backend/pkg/plan/repository"
+	clinicmember_model "github.com/aseno/backend/pkg/clinicmember/model"
+	clinicmember_repository "github.com/aseno/backend/pkg/clinicmember/repository"
+	professional_repository "github.com/aseno/backend/pkg/professional/repository"
 	user_model "github.com/aseno/backend/pkg/user/model"
 	user_repository "github.com/aseno/backend/pkg/user/repository"
 )
@@ -33,6 +36,7 @@ type AuthService interface {
 	RefreshToken(ctx context.Context, refreshToken string) (*model.AuthResponse, error)
 	Logout(ctx context.Context, userID uuid.UUID) error
 	GetCurrentUser(ctx context.Context, userID uuid.UUID) (*model.CurrentUserResponse, error)
+	SwitchClinic(ctx context.Context, userID, clinicID uuid.UUID) (*model.AuthResponse, error)
 	ChangePassword(ctx context.Context, userID uuid.UUID, req *model.ChangePasswordRequest) error
 	RequestPasswordReset(ctx context.Context, req *model.RequestPasswordResetRequest) error
 	ResetPassword(ctx context.Context, req *model.ResetPasswordRequest) error
@@ -74,6 +78,8 @@ type authService struct {
 	passwordResetRepo     auth_repository.PasswordResetRepository
 	emailVerificationRepo auth_repository.EmailVerificationRepository
 	planRepo              plan_repo.PlanRepository
+	professionalRepo      professional_repository.ProfessionalRepository
+	clinicMemberRepo      clinicmember_repository.ClinicMemberRepository
 	jwtService            JWTService
 	googleClient          GoogleAuthClient
 	emailService          email_service.EmailService
@@ -89,6 +95,8 @@ func NewAuthService(
 	passwordResetRepo auth_repository.PasswordResetRepository,
 	emailVerificationRepo auth_repository.EmailVerificationRepository,
 	planRepo plan_repo.PlanRepository,
+	professionalRepo professional_repository.ProfessionalRepository,
+	clinicMemberRepo clinicmember_repository.ClinicMemberRepository,
 	jwtService JWTService,
 	emailService email_service.EmailService,
 	frontendURL string,
@@ -100,6 +108,8 @@ func NewAuthService(
 		passwordResetRepo:     passwordResetRepo,
 		emailVerificationRepo: emailVerificationRepo,
 		planRepo:              planRepo,
+		professionalRepo:      professionalRepo,
+		clinicMemberRepo:      clinicMemberRepo,
 		jwtService:            jwtService,
 		emailService:          emailService,
 		frontendURL:           frontendURL,
@@ -114,6 +124,8 @@ func NewAuthServiceWithGoogle(
 	passwordResetRepo auth_repository.PasswordResetRepository,
 	emailVerificationRepo auth_repository.EmailVerificationRepository,
 	planRepo plan_repo.PlanRepository,
+	professionalRepo professional_repository.ProfessionalRepository,
+	clinicMemberRepo clinicmember_repository.ClinicMemberRepository,
 	jwtService JWTService,
 	googleClient GoogleAuthClient,
 	emailService email_service.EmailService,
@@ -126,6 +138,8 @@ func NewAuthServiceWithGoogle(
 		passwordResetRepo:     passwordResetRepo,
 		emailVerificationRepo: emailVerificationRepo,
 		planRepo:              planRepo,
+		professionalRepo:      professionalRepo,
+		clinicMemberRepo:      clinicMemberRepo,
 		jwtService:            jwtService,
 		googleClient:          googleClient,
 		emailService:          emailService,
@@ -136,6 +150,66 @@ func NewAuthServiceWithGoogle(
 // SetPaymentService sets the payment service (used to avoid circular dependency)
 func (s *authService) SetPaymentService(paymentService PaymentService) {
 	s.paymentService = paymentService
+}
+
+// buildTokenContext constructs a TokenContext for JWT generation from a user and their clinic membership.
+// It looks up the clinic membership and professional link from the database.
+func (s *authService) buildTokenContext(ctx context.Context, user *user_model.User, clinicID uuid.UUID) *TokenContext {
+	tc := &TokenContext{
+		UserID:   user.ID,
+		Email:    user.Email,
+		ClinicID: clinicID,
+	}
+
+	// Get role from clinic_members
+	if s.clinicMemberRepo != nil {
+		member, err := s.clinicMemberRepo.GetByUserAndClinic(ctx, user.ID, clinicID)
+		if err == nil && member != nil {
+			tc.Role = member.Role
+		}
+	} else {
+		// Fallback to user.Role (legacy, while users table still has the column)
+		tc.Role = user.Role
+	}
+
+	// Load professional ID
+	if s.professionalRepo != nil {
+		prof, err := s.professionalRepo.GetByUserID(ctx, user.ID, clinicID)
+		if err == nil && prof != nil {
+			tc.ProfessionalID = &prof.ID
+			user.ProfessionalID = &prof.ID
+		}
+	}
+
+	return tc
+}
+
+// getDefaultClinicID returns the first active clinic for a user via clinic_members.
+// Falls back to user.ClinicID if clinic_members is not available.
+func (s *authService) getDefaultClinicID(ctx context.Context, user *user_model.User) uuid.UUID {
+	if s.clinicMemberRepo != nil {
+		members, err := s.clinicMemberRepo.GetClinicsByUserID(ctx, user.ID)
+		if err == nil && len(members) > 0 {
+			return members[0].ClinicID
+		}
+	}
+	return user.ClinicID
+}
+
+// getUserClinics returns all ClinicMemberResponse for the user
+func (s *authService) getUserClinics(ctx context.Context, userID uuid.UUID) []*clinicmember_model.ClinicMemberResponse {
+	if s.clinicMemberRepo == nil {
+		return nil
+	}
+	members, err := s.clinicMemberRepo.GetClinicsByUserID(ctx, userID)
+	if err != nil || len(members) == 0 {
+		return nil
+	}
+	responses := make([]*clinicmember_model.ClinicMemberResponse, len(members))
+	for i, m := range members {
+		responses[i] = m.ToResponse()
+	}
+	return responses
 }
 
 // Register creates a new clinic and owner user
@@ -257,8 +331,19 @@ func (s *authService) Register(ctx context.Context, req *model.RegisterRequest) 
 	account.Plan = plan
 	clinic.Account = account
 
+	// Create clinic membership for the owner
+	if s.clinicMemberRepo != nil {
+		_ = s.clinicMemberRepo.Create(ctx, &clinicmember_model.ClinicMember{
+			UserID:   userID,
+			ClinicID: clinicID,
+			Role:     user_model.UserRoleOwner,
+			IsActive: true,
+		})
+	}
+
 	// Generate tokens
-	tokenPair, err := s.jwtService.GenerateTokenPair(user)
+	tc := s.buildTokenContext(ctx, user, clinicID)
+	tokenPair, err := s.jwtService.GenerateTokenPair(tc)
 	if err != nil {
 		return nil, err
 	}
@@ -363,8 +448,10 @@ func (s *authService) Login(ctx context.Context, req *model.LoginRequest) (*mode
 	}
 	clinic.Account = account
 
-	// Generate tokens
-	tokenPair, err := s.jwtService.GenerateTokenPair(user)
+	// Build token context from clinic_members (source of truth for role + professional)
+	clinicID := s.getDefaultClinicID(ctx, user)
+	tc := s.buildTokenContext(ctx, user, clinicID)
+	tokenPair, err := s.jwtService.GenerateTokenPair(tc)
 	if err != nil {
 		return nil, err
 	}
@@ -494,6 +581,16 @@ func (s *authService) GoogleLogin(ctx context.Context, req *model.GoogleLoginReq
 		account.Plan = plan
 		clinic.Account = account
 
+		// Create clinic membership for the owner
+		if s.clinicMemberRepo != nil {
+			_ = s.clinicMemberRepo.Create(ctx, &clinicmember_model.ClinicMember{
+				UserID:   userID,
+				ClinicID: clinicID,
+				Role:     user_model.UserRoleOwner,
+				IsActive: true,
+			})
+		}
+
 		// Create Asaas customer unconditionally for the new account
 		if s.paymentService != nil {
 			customerReq := &payment_model.CreateCustomerRequest{
@@ -535,8 +632,10 @@ func (s *authService) GoogleLogin(ctx context.Context, req *model.GoogleLoginReq
 		clinic.Account = account
 	}
 
-	// Generate tokens
-	tokenPair, err := s.jwtService.GenerateTokenPair(user)
+	// Build token context from clinic_members (source of truth for role + professional)
+	clinicID := s.getDefaultClinicID(ctx, user)
+	tc := s.buildTokenContext(ctx, user, clinicID)
+	tokenPair, err := s.jwtService.GenerateTokenPair(tc)
 	if err != nil {
 		return nil, err
 	}
@@ -590,8 +689,10 @@ func (s *authService) RefreshToken(ctx context.Context, refreshToken string) (*m
 		return nil, errors.ErrTokenInvalidInstance.WithMessage("Token has been revoked")
 	}
 
-	// Generate new tokens
-	tokenPair, err := s.jwtService.GenerateTokenPair(user)
+	// Build token context — use clinic from the refresh token claims
+	refreshClinicID := s.getDefaultClinicID(ctx, user)
+	tc := s.buildTokenContext(ctx, user, refreshClinicID)
+	tokenPair, err := s.jwtService.GenerateTokenPair(tc)
 	if err != nil {
 		return nil, err
 	}
@@ -628,15 +729,90 @@ func (s *authService) GetCurrentUser(ctx context.Context, userID uuid.UUID) (*mo
 		return nil, err
 	}
 
-	clinic, err := s.clinicRepo.GetByID(ctx, user.ClinicID)
+	// Load professional ID via buildTokenContext
+	currentClinicID := s.getDefaultClinicID(ctx, user)
+	s.buildTokenContext(ctx, user, currentClinicID)
+
+	clinic, err := s.clinicRepo.GetByID(ctx, currentClinicID)
 	if err != nil {
 		return nil, err
 	}
 
 	return &model.CurrentUserResponse{
-		User:   user.ToResponse(),
-		Clinic: clinic.ToResponse(),
+		User:    user.ToResponse(),
+		Clinic:  clinic.ToResponse(),
+		Clinics: s.getUserClinicsWithNames(ctx, userID),
 	}, nil
+}
+
+// SwitchClinic generates new tokens for a different clinic the user belongs to
+func (s *authService) SwitchClinic(ctx context.Context, userID, clinicID uuid.UUID) (*model.AuthResponse, error) {
+	// Verify user exists
+	user, err := s.userRepo.GetByIDNoTenant(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Verify user has active membership in target clinic
+	if s.clinicMemberRepo != nil {
+		member, err := s.clinicMemberRepo.GetByUserAndClinic(ctx, userID, clinicID)
+		if err != nil || member == nil {
+			return nil, errors.ErrForbiddenInstance.WithMessage("Voce nao tem acesso a esta clinica")
+		}
+		if !member.IsActive {
+			return nil, errors.ErrForbiddenInstance.WithMessage("Sua conta nesta clinica esta desativada")
+		}
+	}
+
+	// Load clinic
+	clinic, err := s.clinicRepo.GetByID(ctx, clinicID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Build token context for the new clinic
+	tc := s.buildTokenContext(ctx, user, clinicID)
+	tokenPair, err := s.jwtService.GenerateTokenPair(tc)
+	if err != nil {
+		return nil, err
+	}
+
+	// Save refresh token
+	if err := s.userRepo.UpdateRefreshToken(ctx, user.ID, tokenPair.RefreshToken); err != nil {
+		return nil, err
+	}
+
+	return &model.AuthResponse{
+		User:         user.ToResponse(),
+		Clinic:       clinic.ToResponse(),
+		AccessToken:  tokenPair.AccessToken,
+		RefreshToken: tokenPair.RefreshToken,
+		ExpiresIn:    tokenPair.ExpiresIn,
+	}, nil
+}
+
+// getUserClinicsWithNames returns clinic info for all user's memberships
+func (s *authService) getUserClinicsWithNames(ctx context.Context, userID uuid.UUID) []model.UserClinicInfo {
+	if s.clinicMemberRepo == nil {
+		return nil
+	}
+	members, err := s.clinicMemberRepo.GetClinicsByUserID(ctx, userID)
+	if err != nil || len(members) == 0 {
+		return nil
+	}
+	result := make([]model.UserClinicInfo, 0, len(members))
+	for _, m := range members {
+		clinic, err := s.clinicRepo.GetByID(ctx, m.ClinicID)
+		if err != nil {
+			continue
+		}
+		result = append(result, model.UserClinicInfo{
+			ClinicID:   m.ClinicID,
+			ClinicName: clinic.Name,
+			Role:       m.Role,
+		})
+	}
+	return result
 }
 
 // ChangePassword changes the user's password

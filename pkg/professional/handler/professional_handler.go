@@ -7,6 +7,8 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/aseno/backend/internal/errors"
+	audit_model "github.com/aseno/backend/pkg/audit/model"
+	audit_service "github.com/aseno/backend/pkg/audit/service"
 	"github.com/aseno/backend/pkg/pagination"
 	"github.com/aseno/backend/pkg/professional/model"
 	"github.com/aseno/backend/pkg/professional/service"
@@ -25,12 +27,13 @@ type ProfessionalHandler interface {
 
 // professionalHandler implements ProfessionalHandler
 type professionalHandler struct {
-	service service.ProfessionalService
+	service  service.ProfessionalService
+	auditSvc audit_service.AuditService
 }
 
 // NewProfessionalHandler creates a new professional handler
-func NewProfessionalHandler(service service.ProfessionalService) ProfessionalHandler {
-	return &professionalHandler{service: service}
+func NewProfessionalHandler(service service.ProfessionalService, auditSvc audit_service.AuditService) ProfessionalHandler {
+	return &professionalHandler{service: service, auditSvc: auditSvc}
 }
 
 // RegisterRoutes registers professional routes
@@ -61,6 +64,10 @@ func (h *professionalHandler) Create(c *gin.Context) {
 		statusCode := errors.GetStatusCode(err)
 		c.JSON(statusCode, errors.ToResponse(err))
 		return
+	}
+
+	if h.auditSvc != nil {
+		_ = h.auditSvc.LogFromGin(c, audit_model.AuditActionCreate, audit_model.AuditEntityProfessional, professional.ID.String(), nil, professional)
 	}
 
 	c.JSON(http.StatusCreated, professional)
@@ -130,11 +137,22 @@ func (h *professionalHandler) Update(c *gin.Context) {
 		return
 	}
 
+	// Get old data for audit
+	var oldData interface{}
+	if h.auditSvc != nil {
+		old, _ := h.service.GetByID(c.Request.Context(), id, clinicID.(uuid.UUID))
+		oldData = old
+	}
+
 	professional, err := h.service.Update(c.Request.Context(), id, clinicID.(uuid.UUID), &req)
 	if err != nil {
 		statusCode := errors.GetStatusCode(err)
 		c.JSON(statusCode, errors.ToResponse(err))
 		return
+	}
+
+	if h.auditSvc != nil {
+		_ = h.auditSvc.LogFromGin(c, audit_model.AuditActionUpdate, audit_model.AuditEntityProfessional, id.String(), oldData, professional)
 	}
 
 	c.JSON(http.StatusOK, professional)
@@ -151,10 +169,21 @@ func (h *professionalHandler) Delete(c *gin.Context) {
 		return
 	}
 
+	// Get old data for audit
+	var oldData interface{}
+	if h.auditSvc != nil {
+		old, _ := h.service.GetByID(c.Request.Context(), id, clinicID.(uuid.UUID))
+		oldData = old
+	}
+
 	if err := h.service.Delete(c.Request.Context(), id, clinicID.(uuid.UUID)); err != nil {
 		statusCode := errors.GetStatusCode(err)
 		c.JSON(statusCode, errors.ToResponse(err))
 		return
+	}
+
+	if h.auditSvc != nil {
+		_ = h.auditSvc.LogFromGin(c, audit_model.AuditActionDelete, audit_model.AuditEntityProfessional, id.String(), oldData, nil)
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "Professional deleted successfully"})
@@ -177,6 +206,12 @@ func (h *professionalHandler) BulkDelete(c *gin.Context) {
 		statusCode := errors.GetStatusCode(err)
 		c.JSON(statusCode, errors.ToResponse(err))
 		return
+	}
+
+	if h.auditSvc != nil {
+		for _, id := range req.IDs {
+			_ = h.auditSvc.LogFromGin(c, audit_model.AuditActionDelete, audit_model.AuditEntityProfessional, id.String(), nil, nil)
+		}
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "Professionals deleted successfully"})

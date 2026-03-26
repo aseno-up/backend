@@ -32,7 +32,7 @@ type User struct {
 	EmailVerified  bool       `json:"email_verified" gorm:"default:false"`
 	IsActive       bool       `json:"is_active" gorm:"default:true"`
 	LastLoginAt    *time.Time `json:"last_login_at"`
-	ProfessionalID *uuid.UUID `json:"professional_id,omitempty" gorm:"type:uuid"` // Link to professional if applicable
+	ProfessionalID *uuid.UUID `json:"professional_id,omitempty" gorm:"-"` // Populated from professionals table (source of truth is Professional.UserID)
 	CreatedAt      time.Time  `json:"created_at"`
 	UpdatedAt      time.Time  `json:"updated_at"`
 	DeletedAt      *time.Time `json:"deleted_at,omitempty" gorm:"index"`

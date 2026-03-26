@@ -7,6 +7,8 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/aseno/backend/internal/errors"
+	audit_model "github.com/aseno/backend/pkg/audit/model"
+	audit_service "github.com/aseno/backend/pkg/audit/service"
 	"github.com/aseno/backend/pkg/pagination"
 	"github.com/aseno/backend/pkg/user/model"
 	"github.com/aseno/backend/pkg/user/service"
@@ -28,12 +30,14 @@ type UserHandler interface {
 // userHandler implements UserHandler
 type userHandler struct {
 	userService service.UserService
+	auditSvc    audit_service.AuditService
 }
 
 // NewUserHandler creates a new user handler
-func NewUserHandler(userService service.UserService) UserHandler {
+func NewUserHandler(userService service.UserService, auditSvc audit_service.AuditService) UserHandler {
 	return &userHandler{
 		userService: userService,
+		auditSvc:    auditSvc,
 	}
 }
 
@@ -214,11 +218,22 @@ func (h *userHandler) UpdateRole(c *gin.Context) {
 		return
 	}
 
+	// Get old data for audit
+	var oldData interface{}
+	if h.auditSvc != nil {
+		old, _ := h.userService.GetUser(c.Request.Context(), clinicID.(uuid.UUID), userID)
+		oldData = old
+	}
+
 	response, err := h.userService.UpdateRole(c.Request.Context(), clinicID.(uuid.UUID), userID, currentUserID.(uuid.UUID), req.Role)
 	if err != nil {
 		statusCode := errors.GetStatusCode(err)
 		c.JSON(statusCode, errors.ToResponse(err))
 		return
+	}
+
+	if h.auditSvc != nil {
+		_ = h.auditSvc.LogFromGin(c, audit_model.AuditActionUpdate, audit_model.AuditEntityUser, userID.String(), oldData, response)
 	}
 
 	c.JSON(http.StatusOK, response)
@@ -258,6 +273,10 @@ func (h *userHandler) DeactivateUser(c *gin.Context) {
 		statusCode := errors.GetStatusCode(err)
 		c.JSON(statusCode, errors.ToResponse(err))
 		return
+	}
+
+	if h.auditSvc != nil {
+		_ = h.auditSvc.LogFromGin(c, audit_model.AuditActionUpdate, audit_model.AuditEntityUser, userID.String(), nil, gin.H{"action": "deactivate"})
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "User deactivated successfully"})
@@ -330,6 +349,10 @@ func (h *userHandler) RemoveUser(c *gin.Context) {
 		statusCode := errors.GetStatusCode(err)
 		c.JSON(statusCode, errors.ToResponse(err))
 		return
+	}
+
+	if h.auditSvc != nil {
+		_ = h.auditSvc.LogFromGin(c, audit_model.AuditActionDelete, audit_model.AuditEntityUser, userID.String(), nil, nil)
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "User removed successfully"})

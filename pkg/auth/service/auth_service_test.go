@@ -135,8 +135,8 @@ type MockJWTService struct {
 	mock.Mock
 }
 
-func (m *MockJWTService) GenerateTokenPair(user *user_model.User) (*model.TokenPair, error) {
-	args := m.Called(user)
+func (m *MockJWTService) GenerateTokenPair(tc *TokenContext) (*model.TokenPair, error) {
+	args := m.Called(tc)
 	return args.Get(0).(*model.TokenPair), args.Error(1)
 }
 
@@ -201,6 +201,8 @@ func TestAuthService_Register_CreatesAsaasCustomerUnconditionally(t *testing.T) 
 		mockPassResetRepo,
 		mockEmailVerifRepo,
 		mockPlanRepo,
+		nil, // professionalRepo
+		nil, // clinicMemberRepo
 		mockJWTService,
 		mockEmailService,
 		"http://localhost:3000",
@@ -275,6 +277,8 @@ func TestAuthService_GoogleLogin_CreatesAsaasCustomerUnconditionally(t *testing.
 		mockPassResetRepo,
 		mockEmailVerifRepo,
 		mockPlanRepo,
+		nil, // professionalRepo
+		nil, // clinicMemberRepo
 		mockJWTService,
 		mockGoogleAuth,
 		mockEmailService,

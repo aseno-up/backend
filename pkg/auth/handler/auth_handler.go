@@ -20,6 +20,7 @@ type AuthHandler interface {
 	RefreshToken(c *gin.Context)
 	Logout(c *gin.Context)
 	GetCurrentUser(c *gin.Context)
+	SwitchClinic(c *gin.Context)
 	ChangePassword(c *gin.Context)
 	RequestPasswordReset(c *gin.Context)
 	ResetPassword(c *gin.Context)
@@ -61,6 +62,7 @@ func (h *authHandler) RegisterProtectedRoutes(router gin.IRouter) {
 	{
 		auth.POST("/logout", h.Logout)
 		auth.GET("/me", h.GetCurrentUser)
+		auth.POST("/switch-clinic", h.SwitchClinic)
 		auth.POST("/change-password", h.ChangePassword)
 	}
 }
@@ -250,6 +252,34 @@ func (h *authHandler) GetCurrentUser(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, user)
+}
+
+// SwitchClinic handles switching the user's active clinic
+func (h *authHandler) SwitchClinic(c *gin.Context) {
+	userID, exists := c.Get("user_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, errors.ToResponse(errors.ErrUnauthorizedInstance))
+		return
+	}
+
+	var req model.SwitchClinicRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, errors.ToResponse(errors.ErrValidationInstance.WithError(err)))
+		return
+	}
+
+	response, err := h.authService.SwitchClinic(c.Request.Context(), userID.(uuid.UUID), req.ClinicID)
+	if err != nil {
+		statusCode := errors.GetStatusCode(err)
+		c.JSON(statusCode, errors.ToResponse(err))
+		return
+	}
+
+	// Set new cookies
+	c.SetCookie("access_token", response.AccessToken, 900, "/", "", false, true)
+	c.SetCookie("refresh_token", response.RefreshToken, 604800, "/", "", false, true)
+
+	c.JSON(http.StatusOK, response)
 }
 
 // ChangePassword handles password change

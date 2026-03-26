@@ -96,7 +96,7 @@ func (_m *MockUserRepository) BulkDelete(ctx context.Context, clinicID uuid.UUID
 
 func TestUserService_ListUsers(t *testing.T) {
 	mockRepo := new(MockUserRepository)
-	service := NewUserService(mockRepo)
+	service := NewUserService(mockRepo, nil)
 
 	ctx := context.Background()
 	clinicID := uuid.New()

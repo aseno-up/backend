@@ -7,6 +7,7 @@ import (
 
 	"github.com/aseno/backend/internal/errors"
 	"github.com/aseno/backend/pkg/pagination"
+	professional_repository "github.com/aseno/backend/pkg/professional/repository"
 	"github.com/aseno/backend/pkg/user/model"
 	"github.com/aseno/backend/pkg/user/repository"
 )
@@ -27,13 +28,26 @@ type UserService interface {
 
 // userService implements UserService
 type userService struct {
-	userRepo repository.UserRepository
+	userRepo         repository.UserRepository
+	professionalRepo professional_repository.ProfessionalRepository
 }
 
 // NewUserService creates a new user service
-func NewUserService(userRepo repository.UserRepository) UserService {
+func NewUserService(userRepo repository.UserRepository, professionalRepo professional_repository.ProfessionalRepository) UserService {
 	return &userService{
-		userRepo: userRepo,
+		userRepo:         userRepo,
+		professionalRepo: professionalRepo,
+	}
+}
+
+// loadProfessionalID looks up the professional linked to a user and populates user.ProfessionalID.
+func (s *userService) loadProfessionalID(ctx context.Context, user *model.User) {
+	if s.professionalRepo == nil {
+		return
+	}
+	prof, err := s.professionalRepo.GetByUserID(ctx, user.ID, user.ClinicID)
+	if err == nil && prof != nil {
+		user.ProfessionalID = &prof.ID
 	}
 }
 
@@ -53,6 +67,7 @@ func (s *userService) ListUsers(ctx context.Context, clinicID uuid.UUID, filter 
 
 	data := make([]*model.UserResponse, len(users))
 	for i, user := range users {
+		s.loadProfessionalID(ctx, user)
 		data[i] = user.ToResponse()
 	}
 
@@ -76,6 +91,7 @@ func (s *userService) GetUser(ctx context.Context, clinicID, userID uuid.UUID) (
 		return nil, err
 	}
 
+	s.loadProfessionalID(ctx, user)
 	return user.ToResponse(), nil
 }
 
@@ -137,12 +153,22 @@ func (s *userService) UpdateRole(ctx context.Context, clinicID, userID, currentU
 		return nil, errors.ErrForbiddenInstance.WithMessage("Cannot promote to owner")
 	}
 
+	// When changing to professional role, user must have a linked professional
+	if role == model.UserRoleProfessional && s.professionalRepo != nil {
+		prof, err := s.professionalRepo.GetByUserID(ctx, userID, clinicID)
+		if err != nil || prof == nil {
+			return nil, errors.ErrValidationInstance.WithMessage(
+				"Para alterar a role para profissional, é necessário vincular um profissional primeiro")
+		}
+	}
+
 	user.Role = role
 
 	if err := s.userRepo.Update(ctx, user); err != nil {
 		return nil, err
 	}
 
+	s.loadProfessionalID(ctx, user)
 	return user.ToResponse(), nil
 }
 
@@ -195,6 +221,15 @@ func (s *userService) RemoveUser(ctx context.Context, clinicID, userID, currentU
 		return errors.ErrCannotRemoveOwnerInstance
 	}
 
+	// Unlink professional before deleting user (professional continues to exist)
+	if s.professionalRepo != nil {
+		prof, err := s.professionalRepo.GetByUserID(ctx, userID, clinicID)
+		if err == nil && prof != nil {
+			prof.UserID = nil
+			_ = s.professionalRepo.Update(ctx, prof)
+		}
+	}
+
 	return s.userRepo.Delete(ctx, userID, clinicID)
 }
 
@@ -209,6 +244,17 @@ func (s *userService) BulkRemoveUsers(ctx context.Context, clinicID uuid.UUID, c
 
 	if len(idsToDelete) == 0 {
 		return errors.ErrValidationInstance.WithMessage("Não é possível remover a si próprio desta forma")
+	}
+
+	// Unlink professionals before deleting users
+	if s.professionalRepo != nil {
+		for _, uid := range idsToDelete {
+			prof, err := s.professionalRepo.GetByUserID(ctx, uid, clinicID)
+			if err == nil && prof != nil {
+				prof.UserID = nil
+				_ = s.professionalRepo.Update(ctx, prof)
+			}
+		}
 	}
 
 	if err := s.userRepo.BulkDelete(ctx, clinicID, idsToDelete); err != nil {

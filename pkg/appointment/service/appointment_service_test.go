@@ -80,6 +80,9 @@ func (m *mockAppointmentRepo) SetConfirmationExpiresAt(_ context.Context, _, _ u
 func (m *mockAppointmentRepo) GetSlotPerformanceStats(_ context.Context, _, _ uuid.UUID) ([]*model.SlotPerformanceStats, error) {
 	return nil, nil
 }
+func (m *mockAppointmentRepo) CountByProfessionalID(_ context.Context, _, _ uuid.UUID) (int64, error) {
+	return 0, nil
+}
 
 // --- Helpers ---
 

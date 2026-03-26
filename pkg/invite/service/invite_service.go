@@ -12,10 +12,15 @@ import (
 	"github.com/aseno/backend/internal/errors"
 	auth_model "github.com/aseno/backend/pkg/auth/model"
 	auth_service "github.com/aseno/backend/pkg/auth/service"
+	clinicmember_model "github.com/aseno/backend/pkg/clinicmember/model"
+	clinicmember_repository "github.com/aseno/backend/pkg/clinicmember/repository"
 	clinic_repository "github.com/aseno/backend/pkg/clinic/repository"
 	email_service "github.com/aseno/backend/pkg/email/service"
 	"github.com/aseno/backend/pkg/invite/model"
 	"github.com/aseno/backend/pkg/invite/repository"
+	professional_model "github.com/aseno/backend/pkg/professional/model"
+	professional_repository "github.com/aseno/backend/pkg/professional/repository"
+	professional_service "github.com/aseno/backend/pkg/professional/service"
 	user_model "github.com/aseno/backend/pkg/user/model"
 	user_repository "github.com/aseno/backend/pkg/user/repository"
 )
@@ -39,12 +44,16 @@ type InviteService interface {
 
 // inviteService implements InviteService
 type inviteService struct {
-	inviteRepo   repository.InviteRepository
-	userRepo     user_repository.UserRepository
-	clinicRepo   clinic_repository.ClinicRepository
-	emailService email_service.EmailService
-	jwtService   auth_service.JWTService
-	frontendURL  string
+	inviteRepo       repository.InviteRepository
+	userRepo         user_repository.UserRepository
+	clinicRepo       clinic_repository.ClinicRepository
+	professionalRepo professional_repository.ProfessionalRepository
+	professionalSvc  professional_service.ProfessionalService
+	clinicMemberRepo clinicmember_repository.ClinicMemberRepository
+	emailService     email_service.EmailService
+	jwtService       auth_service.JWTService
+	googleClient     auth_service.GoogleAuthClient
+	frontendURL      string
 }
 
 // NewInviteService creates a new invite service
@@ -52,17 +61,25 @@ func NewInviteService(
 	inviteRepo repository.InviteRepository,
 	userRepo user_repository.UserRepository,
 	clinicRepo clinic_repository.ClinicRepository,
+	professionalRepo professional_repository.ProfessionalRepository,
+	professionalSvc professional_service.ProfessionalService,
+	clinicMemberRepo clinicmember_repository.ClinicMemberRepository,
 	emailService email_service.EmailService,
 	jwtService auth_service.JWTService,
+	googleClient auth_service.GoogleAuthClient,
 	frontendURL string,
 ) InviteService {
 	return &inviteService{
-		inviteRepo:   inviteRepo,
-		userRepo:     userRepo,
-		clinicRepo:   clinicRepo,
-		emailService: emailService,
-		jwtService:   jwtService,
-		frontendURL:  frontendURL,
+		inviteRepo:       inviteRepo,
+		userRepo:         userRepo,
+		clinicRepo:       clinicRepo,
+		professionalRepo: professionalRepo,
+		professionalSvc:  professionalSvc,
+		clinicMemberRepo: clinicMemberRepo,
+		emailService:     emailService,
+		jwtService:       jwtService,
+		googleClient:     googleClient,
+		frontendURL:      frontendURL,
 	}
 }
 
@@ -86,6 +103,37 @@ func (s *inviteService) CreateInvite(ctx context.Context, clinicID, invitedByID 
 		return nil, errors.ErrInvitePendingInstance
 	}
 
+	// Handle professional linking/creation when role is professional
+	var professionalID *uuid.UUID
+	if req.Role == user_model.UserRoleProfessional {
+		if req.ProfessionalID != nil {
+			// Validate that the professional exists, is active, and has no user linked
+			prof, err := s.professionalRepo.GetByID(ctx, *req.ProfessionalID, clinicID)
+			if err != nil {
+				return nil, errors.ErrProfessionalNotFoundInstance.WithMessage("Profissional não encontrado")
+			}
+			if !prof.IsActive {
+				return nil, errors.ErrValidationInstance.WithMessage("Este profissional está inativo")
+			}
+			if prof.UserID != nil {
+				return nil, errors.ErrValidationInstance.WithMessage("Este profissional já possui um usuário vinculado")
+			}
+			professionalID = req.ProfessionalID
+		} else if req.NewProfessionalName != "" {
+			// Create new professional inline (this checks plan limits)
+			profResp, err := s.professionalSvc.Create(ctx, clinicID, &professional_model.CreateProfessionalRequest{
+				Name: req.NewProfessionalName,
+			})
+			if err != nil {
+				return nil, err
+			}
+			professionalID = &profResp.ID
+		} else {
+			return nil, errors.ErrValidationInstance.WithMessage(
+				"Para convidar um profissional, selecione um profissional existente ou informe o nome para criar um novo")
+		}
+	}
+
 	// Get clinic for email
 	clinic, err := s.clinicRepo.GetByID(ctx, clinicID)
 	if err != nil {
@@ -106,13 +154,14 @@ func (s *inviteService) CreateInvite(ctx context.Context, clinicID, invitedByID 
 
 	// Create invite
 	invite := &model.Invite{
-		ClinicID:  clinicID,
-		Email:     req.Email,
-		Role:      req.Role,
-		Token:     token,
-		Status:    model.InviteStatusPending,
-		InvitedBy: invitedByID,
-		ExpiresAt: time.Now().AddDate(0, 0, InviteExpirationDays),
+		ClinicID:       clinicID,
+		Email:          req.Email,
+		Role:           req.Role,
+		ProfessionalID: professionalID,
+		Token:          token,
+		Status:         model.InviteStatusPending,
+		InvitedBy:      invitedByID,
+		ExpiresAt:      time.Now().AddDate(0, 0, InviteExpirationDays),
 	}
 
 	if err := s.inviteRepo.Create(ctx, invite); err != nil {
@@ -167,28 +216,109 @@ func (s *inviteService) AcceptInvite(ctx context.Context, req *model.AcceptInvit
 
 	var user *user_model.User
 
+	// Determine auth method: Google or password
+	isGoogleAuth := req.GoogleCredential != ""
+
 	if existingUser != nil {
-		// User exists - they might be in another clinic
-		// For now, we don't allow users in multiple clinics
-		return nil, errors.ErrEmailAlreadyExistsInstance.WithMessage("An account with this email already exists")
+		// User already exists — verify identity
+		if isGoogleAuth {
+			// Verify Google credential matches the invite email
+			if err := s.verifyGoogleIdentity(ctx, req.GoogleCredential, invite.Email); err != nil {
+				return nil, err
+			}
+		} else {
+			if req.Password == "" {
+				return nil, errors.ErrValidationInstance.WithMessage("Senha e obrigatoria")
+			}
+			if !existingUser.CheckPassword(req.Password) {
+				return nil, errors.ErrInvalidCredentialsInstance.WithMessage("Senha incorreta")
+			}
+		}
+
+		user = existingUser
+
+		// Check if already a member of this clinic
+		if s.clinicMemberRepo != nil {
+			existing, _ := s.clinicMemberRepo.GetByUserAndClinic(ctx, user.ID, invite.ClinicID)
+			if existing != nil {
+				return nil, errors.ErrEmailAlreadyExistsInstance.WithMessage("Este usuario ja faz parte desta clinica")
+			}
+		}
+	} else {
+		// New user
+		if isGoogleAuth {
+			// Verify Google credential and create user from Google info
+			googleUser, err := s.verifyGoogleCredential(ctx, req.GoogleCredential)
+			if err != nil {
+				return nil, err
+			}
+			if googleUser.Email != invite.Email {
+				return nil, errors.ErrValidationInstance.WithMessage("O email da conta Google nao corresponde ao email do convite")
+			}
+
+			user = &user_model.User{
+				ClinicID:      invite.ClinicID,
+				Email:         invite.Email,
+				Name:          googleUser.Name,
+				Role:          invite.Role,
+				EmailVerified: googleUser.VerifiedEmail,
+				IsActive:      true,
+				GoogleID:      googleUser.ID,
+				AvatarURL:     googleUser.Picture,
+			}
+		} else {
+			// Email/password registration
+			if req.Name == "" {
+				return nil, errors.ErrValidationInstance.WithMessage("Nome e obrigatorio para novos usuarios")
+			}
+			if len(req.Password) < 8 {
+				return nil, errors.ErrValidationInstance.WithMessage("Senha deve ter pelo menos 8 caracteres")
+			}
+
+			user = &user_model.User{
+				ClinicID:      invite.ClinicID,
+				Email:         invite.Email,
+				Name:          req.Name,
+				Role:          invite.Role,
+				EmailVerified: true,
+				IsActive:      true,
+			}
+
+			if err := user.SetPassword(req.Password); err != nil {
+				return nil, errors.ErrInternalInstance.WithError(err)
+			}
+		}
+
+		if err := s.userRepo.Create(ctx, user); err != nil {
+			return nil, err
+		}
 	}
 
-	// Create new user
-	user = &user_model.User{
-		ClinicID:      invite.ClinicID,
-		Email:         invite.Email,
-		Name:          req.Name,
-		Role:          invite.Role,
-		EmailVerified: true, // Verified via invite
-		IsActive:      true,
+	// Create clinic membership
+	if s.clinicMemberRepo != nil {
+		_ = s.clinicMemberRepo.Create(ctx, &clinicmember_model.ClinicMember{
+			UserID:   user.ID,
+			ClinicID: invite.ClinicID,
+			Role:     invite.Role,
+			IsActive: true,
+		})
 	}
 
-	if err := user.SetPassword(req.Password); err != nil {
-		return nil, errors.ErrInternalInstance.WithError(err)
-	}
-
-	if err := s.userRepo.Create(ctx, user); err != nil {
-		return nil, err
+	// Link professional to user if invite has a professional assigned
+	var professionalID *uuid.UUID
+	if invite.ProfessionalID != nil {
+		prof, err := s.professionalRepo.GetByID(ctx, *invite.ProfessionalID, invite.ClinicID)
+		if err != nil {
+			fmt.Printf("Failed to load professional for linking: %v\n", err)
+		} else {
+			prof.UserID = &user.ID
+			if err := s.professionalRepo.Update(ctx, prof); err != nil {
+				fmt.Printf("Failed to link professional to user: %v\n", err)
+			} else {
+				professionalID = &prof.ID
+				user.ProfessionalID = professionalID
+			}
+		}
 	}
 
 	// Update invite status
@@ -206,8 +336,15 @@ func (s *inviteService) AcceptInvite(ctx context.Context, req *model.AcceptInvit
 		return nil, err
 	}
 
-	// Generate tokens
-	tokenPair, err := s.jwtService.GenerateTokenPair(user)
+	// Generate tokens with the new clinic context
+	tc := &auth_service.TokenContext{
+		UserID:         user.ID,
+		Email:          user.Email,
+		ClinicID:       invite.ClinicID,
+		Role:           invite.Role,
+		ProfessionalID: professionalID,
+	}
+	tokenPair, err := s.jwtService.GenerateTokenPair(tc)
 	if err != nil {
 		return nil, errors.ErrInternalInstance.WithError(err)
 	}
@@ -265,16 +402,34 @@ func (s *inviteService) GetInviteByToken(ctx context.Context, token string) (*mo
 	isExpired := invite.IsExpired()
 	isValid := invite.Status == model.InviteStatusPending && !isExpired
 
-	return &model.InviteDetailsResponse{
-		ID:          invite.ID,
-		Email:       invite.Email,
-		Role:        invite.Role,
-		ClinicName:  clinic.Name,
-		InviterName: inviter.Name,
-		ExpiresAt:   invite.ExpiresAt,
-		IsValid:     isValid,
-		IsExpired:   isExpired,
-	}, nil
+	resp := &model.InviteDetailsResponse{
+		ID:             invite.ID,
+		Email:          invite.Email,
+		Role:           invite.Role,
+		ProfessionalID: invite.ProfessionalID,
+		ClinicName:     clinic.Name,
+		InviterName:    inviter.Name,
+		ExpiresAt:      invite.ExpiresAt,
+		IsValid:        isValid,
+		IsExpired:      isExpired,
+	}
+
+	// Check if user already has an account
+	existingUser, err := s.userRepo.GetByEmail(ctx, invite.Email)
+	if err == nil && existingUser != nil {
+		resp.UserExists = true
+		resp.UserName = existingUser.Name
+	}
+
+	// Load professional name if linked
+	if invite.ProfessionalID != nil {
+		prof, err := s.professionalRepo.GetByID(ctx, *invite.ProfessionalID, invite.ClinicID)
+		if err == nil {
+			resp.ProfessionalName = prof.Name
+		}
+	}
+
+	return resp, nil
 }
 
 // ListInvites returns paginated invites for a clinic
@@ -395,6 +550,26 @@ func generateSecureToken() (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(bytes), nil
+}
+
+// verifyGoogleCredential verifies a Google ID token and returns user info
+func (s *inviteService) verifyGoogleCredential(ctx context.Context, credential string) (*auth_service.GoogleUserInfo, error) {
+	if s.googleClient == nil {
+		return nil, errors.ErrBadRequestInstance.WithMessage("Login com Google nao esta configurado")
+	}
+	return s.googleClient.VerifyIDToken(ctx, credential)
+}
+
+// verifyGoogleIdentity verifies that a Google credential matches the expected email
+func (s *inviteService) verifyGoogleIdentity(ctx context.Context, credential, expectedEmail string) error {
+	googleUser, err := s.verifyGoogleCredential(ctx, credential)
+	if err != nil {
+		return err
+	}
+	if googleUser.Email != expectedEmail {
+		return errors.ErrValidationInstance.WithMessage("O email da conta Google nao corresponde ao email do convite")
+	}
+	return nil
 }
 
 // getRoleLabel returns a human-readable role label

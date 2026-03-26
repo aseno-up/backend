@@ -10,7 +10,7 @@ import (
 type Professional struct {
 	ID              uuid.UUID    `json:"id" gorm:"type:uuid;primary_key;default:gen_random_uuid()"`
 	ClinicID        uuid.UUID    `json:"clinic_id" gorm:"type:uuid;not null;index"`
-	UserID          *uuid.UUID   `json:"user_id,omitempty" gorm:"type:uuid;index"` // Optional link to user account
+	UserID          *uuid.UUID   `json:"user_id,omitempty" gorm:"type:uuid;uniqueIndex"` // Optional link to user account (source of truth for user-professional relationship)
 	Name            string       `json:"name" gorm:"not null"`
 	Email           string       `json:"email"`
 	Phone           string       `json:"phone"`

@@ -102,6 +102,19 @@ type ChangePasswordRequest struct {
 
 // CurrentUserResponse represents the response for getting current user data
 type CurrentUserResponse struct {
-	User   *user_model.UserResponse     `json:"user"`
-	Clinic *clinic_model.ClinicResponse `json:"clinic"`
+	User    *user_model.UserResponse     `json:"user"`
+	Clinic  *clinic_model.ClinicResponse `json:"clinic"`
+	Clinics []UserClinicInfo             `json:"clinics,omitempty"`
+}
+
+// UserClinicInfo represents a clinic the user belongs to
+type UserClinicInfo struct {
+	ClinicID   uuid.UUID           `json:"clinic_id"`
+	ClinicName string              `json:"clinic_name"`
+	Role       user_model.UserRole `json:"role"`
+}
+
+// SwitchClinicRequest represents the request to switch active clinic
+type SwitchClinicRequest struct {
+	ClinicID uuid.UUID `json:"clinic_id" binding:"required"`
 }

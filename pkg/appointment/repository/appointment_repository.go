@@ -38,6 +38,9 @@ type AppointmentRepository interface {
 
 	// Smart Scheduling
 	GetSlotPerformanceStats(ctx context.Context, clinicID, professionalID uuid.UUID) ([]*model.SlotPerformanceStats, error)
+
+	// CountByProfessionalID returns the count of non-deleted appointments for a professional
+	CountByProfessionalID(ctx context.Context, professionalID, clinicID uuid.UUID) (int64, error)
 }
 
 // appointmentRepository implements AppointmentRepository
@@ -523,4 +526,17 @@ func (r *appointmentRepository) SetConfirmationExpiresAt(ctx context.Context, cl
 		return errors.ErrInternalInstance.WithError(result.Error)
 	}
 	return nil
+}
+
+// CountByProfessionalID returns the count of non-deleted appointments for a professional
+func (r *appointmentRepository) CountByProfessionalID(ctx context.Context, professionalID, clinicID uuid.UUID) (int64, error) {
+	var count int64
+	result := r.db.WithContext(ctx).
+		Model(&model.Appointment{}).
+		Where("professional_id = ? AND clinic_id = ? AND deleted_at IS NULL", professionalID, clinicID).
+		Count(&count)
+	if result.Error != nil {
+		return 0, errors.ErrInternalInstance.WithError(result.Error)
+	}
+	return count, nil
 }

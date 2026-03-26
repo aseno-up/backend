@@ -47,6 +47,8 @@ import (
 	clinic_model "github.com/aseno/backend/pkg/clinic/model"
 	clinic_repository "github.com/aseno/backend/pkg/clinic/repository"
 	clinic_service "github.com/aseno/backend/pkg/clinic/service"
+	clinicmember_model "github.com/aseno/backend/pkg/clinicmember/model"
+	clinicmember_repository "github.com/aseno/backend/pkg/clinicmember/repository"
 	dashboard_handler "github.com/aseno/backend/pkg/dashboard/handler"
 	dashboard_repository "github.com/aseno/backend/pkg/dashboard/repository"
 	dashboard_service "github.com/aseno/backend/pkg/dashboard/service"
@@ -170,6 +172,7 @@ func main() {
 	clinicRepo := clinic_repository.NewClinicRepository(db.GetDB())
 	userRepo := user_repository.NewUserRepository(db.GetDB())
 	professionalRepo := professional_repository.NewProfessionalRepository(db.GetDB())
+	clinicMemberRepo := clinicmember_repository.NewClinicMemberRepository(db.GetDB())
 	patientRepo := patient_repository.NewPatientRepository(db.GetDB())
 	appointmentRepo := appointment_repository.NewAppointmentRepository(db.GetDB())
 	procedureRepo := procedure_repository.NewProcedureRepository(db.GetDB())
@@ -328,12 +331,14 @@ func main() {
 
 	// Initialize auth service with or without Google OAuth
 	var authService auth_service.AuthService
+	var googleAdapter auth_service.GoogleAuthClient
 	if googleAuthClient != nil {
-		authService = auth_service.NewAuthServiceWithGoogle(userRepo, clinicRepo, accountRepo, passwordResetRepo, emailVerificationRepo, planRepo, jwtService, &googleAuthAdapter{client: googleAuthClient}, emailSvc, cfg.GetFrontendURL())
+		googleAdapter = &googleAuthAdapter{client: googleAuthClient}
+		authService = auth_service.NewAuthServiceWithGoogle(userRepo, clinicRepo, accountRepo, passwordResetRepo, emailVerificationRepo, planRepo, professionalRepo, clinicMemberRepo, jwtService, googleAdapter, emailSvc, cfg.GetFrontendURL())
 	} else {
-		authService = auth_service.NewAuthService(userRepo, clinicRepo, accountRepo, passwordResetRepo, emailVerificationRepo, planRepo, jwtService, emailSvc, cfg.GetFrontendURL())
+		authService = auth_service.NewAuthService(userRepo, clinicRepo, accountRepo, passwordResetRepo, emailVerificationRepo, planRepo, professionalRepo, clinicMemberRepo, jwtService, emailSvc, cfg.GetFrontendURL())
 	}
-	professionalService := professional_service.NewProfessionalService(professionalRepo, clinicRepo, settingsSvc)
+	professionalService := professional_service.NewProfessionalService(professionalRepo, clinicRepo, appointmentRepo, settingsSvc)
 	patientService := patient_service.NewPatientService(patientRepo, clinicRepo)
 	appointmentService := appointment_service.NewAppointmentService(appointmentRepo, professionalRepo)
 	procedureService := procedure_service.NewProcedureService(procedureRepo)
@@ -497,13 +502,17 @@ func main() {
 		inviteRepo,
 		userRepo,
 		clinicRepo,
+		professionalRepo,
+		professionalService,
+		clinicMemberRepo,
 		emailSvc,
 		jwtService,
+		googleAdapter, // may be nil if Google OAuth not configured
 		cfg.GetFrontendURL(),
 	)
 
 	// Initialize User service
-	userSvc := user_service.NewUserService(userRepo)
+	userSvc := user_service.NewUserService(userRepo, professionalRepo)
 
 	// Initialize Patient Record service
 	patientRecordSvc := patientrecord_service.NewPatientRecordService(patientRecordRepo)
@@ -622,7 +631,7 @@ func main() {
 	// Initialize handlers
 	healthHandler := health_handler.NewHealthHandler(db)
 	authHandler := auth_handler.NewAuthHandler(authService)
-	professionalHandler := professional_handler.NewProfessionalHandler(professionalService)
+	professionalHandler := professional_handler.NewProfessionalHandler(professionalService, auditSvc)
 	patientHandler := patient_handler.NewPatientHandler(patientService)
 	appointmentHandler := appointment_handler.NewAppointmentHandler(appointmentService)
 	procedureHandler := procedure_handler.NewProcedureHandler(procedureService)
@@ -649,10 +658,10 @@ func main() {
 	sessionPlanHandler := sessionplan_handler.NewSessionPlanHandler(sessionPlanService)
 
 	// Initialize Invite handler
-	inviteHdlr := invite_handler.NewInviteHandler(inviteSvc)
+	inviteHdlr := invite_handler.NewInviteHandler(inviteSvc, auditSvc)
 
 	// Initialize User handler
-	userHdlr := user_handler.NewUserHandler(userSvc)
+	userHdlr := user_handler.NewUserHandler(userSvc, auditSvc)
 
 	// Initialize Patient Record handler
 	patientRecordHdlr := patientrecord_handler.NewPatientRecordHandler(patientRecordSvc)
@@ -874,6 +883,9 @@ func setupRouter(
 				})
 				auth.GET("/me", func(c *gin.Context) {
 					authHandler.GetCurrentUser(c)
+				})
+				auth.POST("/switch-clinic", func(c *gin.Context) {
+					authHandler.SwitchClinic(c)
 				})
 				auth.POST("/change-password", func(c *gin.Context) {
 					authHandler.ChangePassword(c)
@@ -1104,6 +1116,8 @@ func runMigrations(db *database.Database) error {
 		&systemlog_model.SystemLog{},
 		&featureflag_model.FeatureFlag{},
 		&usagemetric_model.UsageMetric{},
+		// Multi-clinic membership
+		&clinicmember_model.ClinicMember{},
 	}
 
 	if err := db.AutoMigrate(models...); err != nil {
@@ -1149,6 +1163,21 @@ func runMigrations(db *database.Database) error {
 
 	// Definir account_id como NOT NULL se possível
 	db.GetDB().Exec("ALTER TABLE clinics ALTER COLUMN account_id SET NOT NULL")
+
+	// Backfill clinic_members from users table (idempotent)
+	if err := db.GetDB().Exec(`
+		INSERT INTO clinic_members (user_id, clinic_id, role, is_active, created_at, updated_at)
+		SELECT u.id, u.clinic_id, u.role, u.is_active, u.created_at, u.updated_at
+		FROM users u
+		WHERE u.deleted_at IS NULL
+		  AND u.clinic_id IS NOT NULL
+		  AND NOT EXISTS (
+			SELECT 1 FROM clinic_members cm
+			WHERE cm.user_id = u.id AND cm.clinic_id = u.clinic_id AND cm.deleted_at IS NULL
+		  )
+	`).Error; err != nil {
+		logger.Printf("clinic_members backfill error: %v", err)
+	}
 
 	logger.Println("Database migrations completed")
 	return nil

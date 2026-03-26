@@ -421,31 +421,28 @@ func NewNoOpEmailService() EmailService {
 }
 
 func (s *noOpEmailService) SendInvite(ctx context.Context, data *InviteEmailData) error {
-	fmt.Printf("[EMAIL] Would send invite to %s for %s (link: %s)\n",
-		data.RecipientEmail, data.ClinicName, data.InviteLink)
+	fmt.Printf("[EMAIL] NoOp: invite email to %s for clinic %s (role: %s)\n",
+		data.RecipientEmail, data.ClinicName, data.Role)
 	return nil
 }
 
 func (s *noOpEmailService) SendWelcome(ctx context.Context, data *WelcomeEmailData) error {
-	fmt.Printf("[EMAIL] Would send welcome to %s (%s) for %s\n",
-		data.RecipientEmail, data.RecipientName, data.ClinicName)
+	fmt.Printf("[EMAIL] NoOp: welcome email to %s for clinic %s\n",
+		data.RecipientEmail, data.ClinicName)
 	return nil
 }
 
 func (s *noOpEmailService) SendPasswordReset(ctx context.Context, data *ResetPasswordEmailData) error {
-	fmt.Printf("[EMAIL] Would send password reset to %s (link: %s)\n",
-		data.RecipientEmail, data.ResetLink)
+	fmt.Printf("[EMAIL] NoOp: password reset email to %s\n", data.RecipientEmail)
 	return nil
 }
 
 func (s *noOpEmailService) SendEmailVerification(ctx context.Context, data *EmailVerificationData) error {
-	fmt.Printf("[EMAIL] Would send email verification to %s (%s) (link: %s)\n",
-		data.RecipientEmail, data.RecipientName, data.VerificationLink)
+	fmt.Printf("[EMAIL] NoOp: verification email to %s\n", data.RecipientEmail)
 	return nil
 }
 
 func (s *noOpEmailService) SendContactForm(ctx context.Context, data *ContactFormData) error {
-	fmt.Printf("[EMAIL] Would send contact form from %s (%s): %s\n",
-		data.Name, data.Email, data.Message)
+	fmt.Printf("[EMAIL] NoOp: contact form from %s (%s)\n", data.Name, data.Email)
 	return nil
 }
