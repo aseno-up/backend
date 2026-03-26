@@ -105,6 +105,12 @@ import (
 	waitlist_model "github.com/aseno/backend/pkg/waitlist/model"
 	waitlist_repository "github.com/aseno/backend/pkg/waitlist/repository"
 	waitlist_service "github.com/aseno/backend/pkg/waitlist/service"
+	lead_crm "github.com/aseno/backend/pkg/lead/crm"
+	lead_notion "github.com/aseno/backend/pkg/lead/crm/notion"
+	lead_handler "github.com/aseno/backend/pkg/lead/handler"
+	lead_model "github.com/aseno/backend/pkg/lead/model"
+	lead_repository "github.com/aseno/backend/pkg/lead/repository"
+	lead_service "github.com/aseno/backend/pkg/lead/service"
 	audit_handler "github.com/aseno/backend/pkg/audit/handler"
 	audit_model "github.com/aseno/backend/pkg/audit/model"
 	audit_repository "github.com/aseno/backend/pkg/audit/repository"
@@ -201,6 +207,7 @@ func main() {
 	systemLogRepo := systemlog_repository.NewSystemLogRepository(db.GetDB())
 	featureFlagRepo := featureflag_repository.NewFeatureFlagRepository(db.GetDB())
 	usageMetricRepo := usagemetric_repository.NewUsageMetricRepository(db.GetDB())
+	leadRepo := lead_repository.NewLeadRepository(db.GetDB())
 
 	// Seed default settings (if not exist)
 	if err := settingsRepo.SeedDefaults(context.Background()); err != nil {
@@ -698,6 +705,15 @@ func main() {
 	// Initialize Settings handler (admin only - dev clinics)
 	settingsHdlr := settings_handler.NewSettingsHandler(settingsSvc)
 
+	// Initialize CRM Lead service and handler
+	var crmProvider lead_crm.CRMProvider
+	if cfg.GetNotionAPIKey() != "" && cfg.GetNotionCRMDatabaseID() != "" {
+		crmProvider = lead_notion.NewNotionAdapter(cfg.GetNotionAPIKey(), cfg.GetNotionCRMDatabaseID())
+		logger.Println("Notion CRM provider initialized")
+	}
+	leadSvc := lead_service.NewLeadService(leadRepo, crmProvider)
+	leadHdlr := lead_handler.NewLeadHandler(leadSvc, accountRepo, db.GetDB())
+
 	// Initialize Sprint 6 handlers (admin only)
 	auditHdlr := audit_handler.NewAuditHandler(auditSvc)
 	systemLogHdlr := systemlog_handler.NewSystemLogHandler(systemLogSvc)
@@ -742,6 +758,7 @@ func main() {
 		systemLogHdlr,
 		featureFlagHdlr,
 		usageMetricHdlr,
+		leadHdlr,
 		authMiddleware,
 		tenantMiddleware,
 	)
@@ -826,6 +843,7 @@ func setupRouter(
 	systemLogHandler systemlog_handler.SystemLogHandler,
 	featureFlagHandler featureflag_handler.FeatureFlagHandler,
 	usageMetricHandler usagemetric_handler.UsageMetricHandler,
+	leadHandler lead_handler.LeadHandler,
 	authMiddleware auth_middleware.AuthMiddleware,
 	tenantMiddleware auth_middleware.TenantMiddleware,
 ) *gin.Engine {
@@ -991,6 +1009,7 @@ func setupRouter(
 				systemLogHandler.RegisterRoutes(adminPanel)
 				featureFlagHandler.RegisterRoutes(adminPanel)
 				usageMetricHandler.RegisterRoutes(adminPanel)
+				leadHandler.RegisterRoutes(adminPanel)
 			}
 		}
 
@@ -1118,6 +1137,8 @@ func runMigrations(db *database.Database) error {
 		&usagemetric_model.UsageMetric{},
 		// Multi-clinic membership
 		&clinicmember_model.ClinicMember{},
+		// CRM Leads
+		&lead_model.Lead{},
 	}
 
 	if err := db.AutoMigrate(models...); err != nil {

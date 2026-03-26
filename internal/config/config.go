@@ -83,6 +83,10 @@ type Config struct {
 	openrouterHTTPReferer      string
 	openrouterClassifierTitle  string
 	openrouterTranscriberTitle string
+
+	// Notion CRM
+	notionAPIKey         string
+	notionCRMDatabaseID  string
 }
 
 // NewConfig creates a new configuration from environment variables
@@ -138,6 +142,8 @@ func NewConfig() *Config {
 		openrouterHTTPReferer:           getEnv("OPENROUTER_HTTP_REFERER", "https://github.com/aseno/backend"),
 		openrouterClassifierTitle:       getEnv("OPENROUTER_CLASSIFIER_TITLE", "Aseno WhatsApp Classifier"),
 		openrouterTranscriberTitle:      getEnv("OPENROUTER_TRANSCRIBER_TITLE", "Aseno WhatsApp Transcriber"),
+		notionAPIKey:                    getEnv("NOTION_API_KEY", ""),
+		notionCRMDatabaseID:             getEnv("NOTION_CRM_DATABASE_ID", ""),
 	}
 }
 
@@ -347,6 +353,14 @@ func (c *Config) GetOpenRouterClassifierTitle() string {
 
 func (c *Config) GetOpenRouterTranscriberTitle() string {
 	return c.openrouterTranscriberTitle
+}
+
+func (c *Config) GetNotionAPIKey() string {
+	return c.notionAPIKey
+}
+
+func (c *Config) GetNotionCRMDatabaseID() string {
+	return c.notionCRMDatabaseID
 }
 
 func getEnv(key, defaultValue string) string {

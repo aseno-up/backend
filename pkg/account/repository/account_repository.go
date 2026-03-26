@@ -14,6 +14,7 @@ type AccountRepository interface {
 	Create(ctx context.Context, account *model.Account) error
 	GetByID(ctx context.Context, id uuid.UUID) (*model.Account, error)
 	GetByOwnerID(ctx context.Context, ownerID uuid.UUID) ([]model.Account, error)
+	ListAll(ctx context.Context) ([]model.Account, error)
 	Update(ctx context.Context, account *model.Account) error
 	Delete(ctx context.Context, id uuid.UUID) error
 }
@@ -43,6 +44,16 @@ func (r *accountRepository) GetByID(ctx context.Context, id uuid.UUID) (*model.A
 func (r *accountRepository) GetByOwnerID(ctx context.Context, ownerID uuid.UUID) ([]model.Account, error) {
 	var accounts []model.Account
 	err := r.db.WithContext(ctx).Where("owner_id = ?", ownerID).Find(&accounts).Error
+	return accounts, err
+}
+
+func (r *accountRepository) ListAll(ctx context.Context) ([]model.Account, error) {
+	var accounts []model.Account
+	err := r.db.WithContext(ctx).
+		Preload("Plan").
+		Where("deleted_at IS NULL").
+		Order("created_at DESC").
+		Find(&accounts).Error
 	return accounts, err
 }
 
