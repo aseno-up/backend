@@ -39,6 +39,10 @@ type Config struct {
 	wahaAPIURL string
 	wahaAPIKey string
 
+	// Gupshup Official API (partner-level credentials)
+	gupshupAPIURL string
+	gupshupAPIKey string
+
 	whatsappWebhookSecret string
 	whatsappWebhookURL    string
 
@@ -110,6 +114,8 @@ func NewConfig() *Config {
 		evolutionAPIKey:           getEnv("EVOLUTION_API_KEY", ""),
 		wahaAPIURL:                getEnv("WAHA_API_URL", ""),
 		wahaAPIKey:                getEnv("WAHA_API_KEY", ""),
+		gupshupAPIURL:            getEnv("GUPSHUP_API_URL", "https://api.gupshup.io"),
+		gupshupAPIKey:            getEnv("GUPSHUP_API_KEY", ""),
 		whatsappWebhookSecret:     getEnv("WHATSAPP_WEBHOOK_SECRET", ""),
 		whatsappWebhookURL:        getEnv("WHATSAPP_WEBHOOK_URL", ""),
 		asaasAPIURL:               getEnv("ASAAS_API_URL", "https://sandbox.asaas.com/api/v3"),
@@ -217,6 +223,16 @@ func (c *Config) GetWahaAPIURL() string {
 // GetWahaAPIKey returns the WAHA API key
 func (c *Config) GetWahaAPIKey() string {
 	return c.wahaAPIKey
+}
+
+// GetGupshupAPIURL returns the Gupshup API base URL
+func (c *Config) GetGupshupAPIURL() string {
+	return c.gupshupAPIURL
+}
+
+// GetGupshupAPIKey returns the Gupshup partner API key
+func (c *Config) GetGupshupAPIKey() string {
+	return c.gupshupAPIKey
 }
 
 // GetWhatsAppWebhookSecret returns the WhatsApp webhook secret

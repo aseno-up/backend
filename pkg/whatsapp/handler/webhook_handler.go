@@ -80,6 +80,7 @@ func (h *whatsAppHandler) RegisterRoutes(router gin.IRouter) {
 		whatsapp.POST("/disconnect", h.Disconnect)
 		whatsapp.POST("/send", h.SendMessage)
 		whatsapp.POST("/send-confirmation", h.SendConfirmation)
+		whatsapp.POST("/config", h.Configure)
 	}
 }
 

@@ -260,8 +260,11 @@ func main() {
 		logger.Println("WhatsApp (WAHA) client initialized")
 	}
 
-	// Initialize Gupshup/Official Client natively (using empty config properties until specific keys are added to cfg)
-	gupshupClient := whatsapp_gupshup.NewGupshupClient(whatsapp_gupshup.Config{})
+	// Initialize Gupshup/Official Client with partner-level API key
+	gupshupClient := whatsapp_gupshup.NewGupshupClient(whatsapp_gupshup.Config{
+		BaseURL: cfg.GetGupshupAPIURL(),
+		APIKey:  cfg.GetGupshupAPIKey(),
+	}, whatsappConnRepo)
 	logger.Println("WhatsApp (Gupshup/Official) client initialized")
 
 	// Wrap clients in ProxyClient to route requests dynamically per clinic
