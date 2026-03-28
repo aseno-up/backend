@@ -73,6 +73,9 @@ type ClinicSettings struct {
 	WhatsAppRemindersEnabled bool `json:"whatsapp_reminders_enabled"`
 	EmailRemindersEnabled    bool `json:"email_reminders_enabled"`
 
+	// Public booking page settings
+	AboutUs string `json:"about_us,omitempty"`
+
 	// AI/WhatsApp settings
 	AIAgentEnabled            bool                 `json:"ai_agent_enabled"`
 	AIMinDelayBetweenMessages *int                 `json:"ai_min_delay_between_messages,omitempty"`
@@ -162,6 +165,9 @@ type UpdateClinicSettingsRequest struct {
 	RequireConfirmation       *bool  `json:"require_confirmation,omitempty"`
 	WhatsAppRemindersEnabled  *bool  `json:"whatsapp_reminders_enabled,omitempty"`
 	EmailRemindersEnabled     *bool  `json:"email_reminders_enabled,omitempty"`
+
+	// Public booking page settings
+	AboutUs *string `json:"about_us,omitempty"`
 
 	// AI/WhatsApp settings
 	AIAgentEnabled            *bool                `json:"ai_agent_enabled,omitempty"`

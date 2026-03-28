@@ -76,8 +76,8 @@ func (r *professionalRepository) List(ctx context.Context, clinicID uuid.UUID, f
 	if filter.Search != "" {
 		searchTerm := "%" + filter.Search + "%"
 		query = query.Where(
-			"name ILIKE ? OR email ILIKE ? OR phone ILIKE ? OR specialty ILIKE ?",
-			searchTerm, searchTerm, searchTerm, searchTerm,
+			"name ILIKE ? OR email ILIKE ? OR phone ILIKE ?",
+			searchTerm, searchTerm, searchTerm,
 		)
 	}
 

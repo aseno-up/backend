@@ -25,6 +25,8 @@ type PatientRepository interface {
 	GetAppointmentStats(ctx context.Context, patientID, clinicID uuid.UUID) (*model.PatientAppointmentStats, error)
 	UpdateRiskScore(ctx context.Context, patientID, clinicID uuid.UUID, risk model.NoShowRisk, stats *model.PatientAppointmentStats) error
 	GetAllByClinicID(ctx context.Context, clinicID uuid.UUID) ([]*model.Patient, error)
+	ListBySource(ctx context.Context, clinicID uuid.UUID, source model.PatientSource, filter pagination.Filter) ([]*model.Patient, int64, error)
+	MergePatients(ctx context.Context, clinicID, targetID, sourceID uuid.UUID) error
 }
 
 // patientRepository implements PatientRepository
@@ -240,4 +242,71 @@ func (r *patientRepository) GetAllByClinicID(ctx context.Context, clinicID uuid.
 	}
 
 	return patients, nil
+}
+
+// ListBySource returns patients filtered by source (e.g. SELF_REGISTERED)
+func (r *patientRepository) ListBySource(ctx context.Context, clinicID uuid.UUID, source model.PatientSource, filter pagination.Filter) ([]*model.Patient, int64, error) {
+	var patients []*model.Patient
+	var total int64
+
+	query := r.db.WithContext(ctx).Model(&model.Patient{}).Where("clinic_id = ? AND source = ?", clinicID, source)
+
+	if filter.Search != "" {
+		searchQuery := "%" + filter.Search + "%"
+		query = query.Where("(name ILIKE ? OR phone ILIKE ? OR email ILIKE ?)", searchQuery, searchQuery, searchQuery)
+	}
+
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	query = query.Order("created_at DESC")
+	if err := query.Scopes(pagination.Paginate(&filter)).Find(&patients).Error; err != nil {
+		return nil, 0, err
+	}
+
+	return patients, total, nil
+}
+
+// MergePatients transfers all appointments from sourceID to targetID and soft-deletes sourceID
+func (r *patientRepository) MergePatients(ctx context.Context, clinicID, targetID, sourceID uuid.UUID) error {
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// Verify both patients belong to the clinic
+		var count int64
+		tx.Model(&model.Patient{}).Where("id IN ? AND clinic_id = ? AND deleted_at IS NULL", []uuid.UUID{targetID, sourceID}, clinicID).Count(&count)
+		if count != 2 {
+			return errors.ErrNotFoundInstance.WithMessage("Paciente não encontrado")
+		}
+
+		// Transfer appointments
+		if err := tx.Exec("UPDATE appointments SET patient_id = ? WHERE patient_id = ? AND clinic_id = ?", targetID, sourceID, clinicID).Error; err != nil {
+			return err
+		}
+
+		// Copy missing contact data from source to target
+		var source, target model.Patient
+		tx.Where("id = ? AND clinic_id = ?", sourceID, clinicID).First(&source)
+		tx.Where("id = ? AND clinic_id = ?", targetID, clinicID).First(&target)
+
+		updates := map[string]interface{}{}
+		if target.Email == "" && source.Email != "" {
+			updates["email"] = source.Email
+		}
+		if target.Phone == "" && source.Phone != "" {
+			updates["phone"] = source.Phone
+		}
+		if target.WhatsApp == "" && source.WhatsApp != "" {
+			updates["whatsapp"] = source.WhatsApp
+		}
+		if len(updates) > 0 {
+			tx.Model(&model.Patient{}).Where("id = ? AND clinic_id = ?", targetID, clinicID).Updates(updates)
+		}
+
+		// Soft-delete source patient
+		if err := tx.Where("id = ? AND clinic_id = ?", sourceID, clinicID).Delete(&model.Patient{}).Error; err != nil {
+			return err
+		}
+
+		return nil
+	})
 }

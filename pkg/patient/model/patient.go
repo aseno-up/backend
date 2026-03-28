@@ -25,23 +25,32 @@ const (
 	NoShowRiskHigh    NoShowRisk = "high"    // < 70% attendance
 )
 
+// PatientSource represents how the patient was registered
+type PatientSource string
+
+const (
+	PatientSourceInternal       PatientSource = "INTERNAL"        // Registered by reception/staff
+	PatientSourceSelfRegistered PatientSource = "SELF_REGISTERED" // Registered via public booking link
+)
+
 // Patient represents a patient in the clinic
 type Patient struct {
-	ID        uuid.UUID  `json:"id" gorm:"type:uuid;primary_key;default:gen_random_uuid()"`
-	ClinicID  uuid.UUID  `json:"clinic_id" gorm:"type:uuid;not null;index"`
-	Name      string     `json:"name" gorm:"not null"`
-	Email     string     `json:"email" gorm:"index"`
-	Phone     string     `json:"phone" gorm:"index"`
-	WhatsApp  string     `json:"whatsapp" gorm:"column:whatsapp"` // May differ from phone
-	Document  string     `json:"document"`                        // CPF
-	BirthDate *time.Time `json:"birth_date"`
-	Gender    Gender     `json:"gender"`
-	Address   string     `json:"address"`
-	City      string     `json:"city"`
-	State     string     `json:"state"`
-	ZipCode   string     `json:"zip_code"`
-	Notes     string     `json:"notes"` // General notes
-	IsActive  bool       `json:"is_active" gorm:"default:true"`
+	ID        uuid.UUID     `json:"id" gorm:"type:uuid;primary_key;default:gen_random_uuid()"`
+	ClinicID  uuid.UUID     `json:"clinic_id" gorm:"type:uuid;not null;index"`
+	Name      string        `json:"name" gorm:"not null"`
+	Email     string        `json:"email" gorm:"index"`
+	Phone     string        `json:"phone" gorm:"index"`
+	WhatsApp  string        `json:"whatsapp" gorm:"column:whatsapp"` // May differ from phone
+	Document  string        `json:"document"`                        // CPF
+	BirthDate *time.Time    `json:"birth_date"`
+	Gender    Gender        `json:"gender"`
+	Address   string        `json:"address"`
+	City      string        `json:"city"`
+	State     string        `json:"state"`
+	ZipCode   string        `json:"zip_code"`
+	Notes     string        `json:"notes"` // General notes
+	IsActive  bool          `json:"is_active" gorm:"default:true"`
+	Source    PatientSource `json:"source" gorm:"type:varchar(20);not null;default:'INTERNAL'"`
 	// Risk assessment fields
 	NoShowRisk        NoShowRisk `json:"no_show_risk" gorm:"default:'unknown'"`
 	TotalAppointments int        `json:"total_appointments" gorm:"default:0"`
@@ -61,27 +70,28 @@ func (Patient) TableName() string {
 
 // PatientResponse represents the API response for a patient
 type PatientResponse struct {
-	ID                uuid.UUID  `json:"id"`
-	ClinicID          uuid.UUID  `json:"clinic_id"`
-	Name              string     `json:"name"`
-	Email             string     `json:"email"`
-	Phone             string     `json:"phone"`
-	WhatsApp          string     `json:"whatsapp"`
-	Document          string     `json:"document"`
-	BirthDate         *time.Time `json:"birth_date,omitempty"`
-	Gender            Gender     `json:"gender,omitempty"`
-	Address           string     `json:"address"`
-	City              string     `json:"city"`
-	State             string     `json:"state"`
-	ZipCode           string     `json:"zip_code"`
-	Notes             string     `json:"notes"`
-	IsActive          bool       `json:"is_active"`
-	NoShowRisk        NoShowRisk `json:"no_show_risk"`
-	TotalAppointments int        `json:"total_appointments"`
-	NoShowCount       int        `json:"no_show_count"`
-	AttendanceRate    float64    `json:"attendance_rate"`
-	RiskUpdatedAt     *time.Time `json:"risk_updated_at,omitempty"`
-	CreatedAt         time.Time  `json:"created_at"`
+	ID                uuid.UUID     `json:"id"`
+	ClinicID          uuid.UUID     `json:"clinic_id"`
+	Name              string        `json:"name"`
+	Email             string        `json:"email"`
+	Phone             string        `json:"phone"`
+	WhatsApp          string        `json:"whatsapp"`
+	Document          string        `json:"document"`
+	BirthDate         *time.Time    `json:"birth_date,omitempty"`
+	Gender            Gender        `json:"gender,omitempty"`
+	Address           string        `json:"address"`
+	City              string        `json:"city"`
+	State             string        `json:"state"`
+	ZipCode           string        `json:"zip_code"`
+	Notes             string        `json:"notes"`
+	IsActive          bool          `json:"is_active"`
+	Source            PatientSource `json:"source"`
+	NoShowRisk        NoShowRisk    `json:"no_show_risk"`
+	TotalAppointments int           `json:"total_appointments"`
+	NoShowCount       int           `json:"no_show_count"`
+	AttendanceRate    float64       `json:"attendance_rate"`
+	RiskUpdatedAt     *time.Time    `json:"risk_updated_at,omitempty"`
+	CreatedAt         time.Time     `json:"created_at"`
 }
 
 // ToResponse converts Patient to PatientResponse
@@ -102,6 +112,7 @@ func (p *Patient) ToResponse() *PatientResponse {
 		ZipCode:           p.ZipCode,
 		Notes:             p.Notes,
 		IsActive:          p.IsActive,
+		Source:            p.Source,
 		NoShowRisk:        p.NoShowRisk,
 		TotalAppointments: p.TotalAppointments,
 		NoShowCount:       p.NoShowCount,
@@ -166,6 +177,11 @@ type PatientSearchParams struct {
 	Query   string `form:"q"` // Search by name, phone, email
 	Page    int    `form:"page"`
 	PerPage int    `form:"per_page"`
+}
+
+// MergePatientRequest represents the request to merge a self-registered patient into an existing one
+type MergePatientRequest struct {
+	SourcePatientID uuid.UUID `json:"source_patient_id" binding:"required"`
 }
 
 // PatientAppointmentStats holds appointment statistics for risk calculation

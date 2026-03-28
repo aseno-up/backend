@@ -11,10 +11,13 @@ import (
 	appointmentModel "github.com/aseno/backend/pkg/appointment/model"
 	"github.com/aseno/backend/pkg/booking/model"
 	clinicModel "github.com/aseno/backend/pkg/clinic/model"
+	emailService "github.com/aseno/backend/pkg/email/service"
 	notificationModel "github.com/aseno/backend/pkg/notification/model"
 	"github.com/aseno/backend/pkg/pagination"
 	patientModel "github.com/aseno/backend/pkg/patient/model"
+	procedureModel "github.com/aseno/backend/pkg/procedure/model"
 	professionalModel "github.com/aseno/backend/pkg/professional/model"
+	specialtyModel "github.com/aseno/backend/pkg/specialty/model"
 )
 
 // ClinicProvider provides clinic information
@@ -46,11 +49,26 @@ type NotificationCreator interface {
 	Create(ctx context.Context, notification *notificationModel.Notification) error
 }
 
+// SpecialtyProvider provides specialty operations
+type SpecialtyProvider interface {
+	ListActiveByClinic(clinicID uuid.UUID) ([]*specialtyModel.Specialty, error)
+	CountByClinic(clinicID uuid.UUID) (int64, error)
+	GetByProfessionalIDs(professionalIDs []uuid.UUID) (map[uuid.UUID][]*specialtyModel.Specialty, error)
+}
+
+// ProcedureProvider provides procedure operations
+type ProcedureProvider interface {
+	ListByClinicAndSpecialty(ctx context.Context, clinicID uuid.UUID, specialtyID *uuid.UUID) ([]*procedureModel.Procedure, error)
+	GetByID(id, clinicID uuid.UUID) (*procedureModel.Procedure, error)
+}
+
 // BookingService defines the interface for public booking operations
 type BookingService interface {
 	GetClinicInfo(ctx context.Context, slug string) (*model.ClinicBookingInfo, error)
 	GetProfessionals(ctx context.Context, slug string) ([]*model.ProfessionalBookingInfo, error)
-	GetAvailableSlots(ctx context.Context, slug string, professionalID uuid.UUID, date time.Time) (*model.AvailableSlotsResponse, error)
+	GetSpecialties(ctx context.Context, slug string) ([]*model.SpecialtyBookingInfo, error)
+	GetProcedures(ctx context.Context, slug string, specialtyID *uuid.UUID) ([]*model.ProcedureBookingInfo, error)
+	GetAvailableSlots(ctx context.Context, slug string, professionalID uuid.UUID, date time.Time, procedureID *uuid.UUID) (*model.AvailableSlotsResponse, error)
 	CreateBooking(ctx context.Context, slug string, req *model.CreateBookingRequest) (*model.BookingResponse, error)
 }
 
@@ -61,6 +79,10 @@ type bookingService struct {
 	appointmentRepo  AppointmentProvider
 	patientRepo      PatientProvider
 	notificationSvc  NotificationCreator
+	specialtyRepo    SpecialtyProvider
+	procedureRepo    ProcedureProvider
+	emailSvc         emailService.EmailService
+	frontendURL      string
 }
 
 // NewBookingService creates a new booking service
@@ -70,6 +92,10 @@ func NewBookingService(
 	appointmentRepo AppointmentProvider,
 	patientRepo PatientProvider,
 	notificationSvc NotificationCreator,
+	specialtyRepo SpecialtyProvider,
+	procedureRepo ProcedureProvider,
+	emailSvc emailService.EmailService,
+	frontendURL string,
 ) BookingService {
 	return &bookingService{
 		clinicRepo:       clinicRepo,
@@ -77,6 +103,10 @@ func NewBookingService(
 		appointmentRepo:  appointmentRepo,
 		patientRepo:      patientRepo,
 		notificationSvc:  notificationSvc,
+		specialtyRepo:    specialtyRepo,
+		procedureRepo:    procedureRepo,
+		emailSvc:         emailSvc,
+		frontendURL:      frontendURL,
 	}
 }
 
@@ -87,20 +117,33 @@ func (s *bookingService) GetClinicInfo(ctx context.Context, slug string) (*model
 		return nil, err
 	}
 
-	// Check if online booking is enabled
 	if !clinic.Settings.AllowOnlineBooking {
-		return nil, errors.ErrValidationInstance.WithMessage("Agendamento online nao habilitado para esta clinica")
+		return nil, errors.ErrValidationInstance.WithMessage("Não foi possível encontrar a clínica para agendamento online. Verifique o link ou tente novamente mais tarde.")
 	}
 
-	// Check if subscription is active
 	if !clinic.IsSubscriptionActive() {
-		return nil, errors.ErrValidationInstance.WithMessage("Clinica com assinatura inativa")
+		return nil, errors.ErrValidationInstance.WithMessage("Não conseguimos buscar as informacoes da clinica, tente novamente mais tarde.")
 	}
 
 	defaultMinutes := clinic.Settings.DefaultAppointmentMinutes
 	if defaultMinutes == 0 {
-		defaultMinutes = 50 // Default to 50 minutes
+		defaultMinutes = 50
 	}
+
+	// Count professionals with active schedules
+	professionals, _, err := s.professionalRepo.List(ctx, clinic.ID, pagination.Filter{Status: "active", Limit: 100})
+	if err != nil {
+		return nil, err
+	}
+	profCount := 0
+	for _, p := range professionals {
+		if hasWorkingHours(p.WorkingHours) {
+			profCount++
+		}
+	}
+
+	// Count active specialties
+	specCount, _ := s.specialtyRepo.CountByClinic(clinic.ID)
 
 	return &model.ClinicBookingInfo{
 		Name:                      clinic.Name,
@@ -112,6 +155,9 @@ func (s *bookingService) GetClinicInfo(ctx context.Context, slug string) (*model
 		City:                      clinic.City,
 		State:                     clinic.State,
 		DefaultAppointmentMinutes: defaultMinutes,
+		AboutUs:                   clinic.Settings.AboutUs,
+		ProfessionalCount:         profCount,
+		SpecialtyCount:            int(specCount),
 	}, nil
 }
 
@@ -122,9 +168,8 @@ func (s *bookingService) GetProfessionals(ctx context.Context, slug string) ([]*
 		return nil, err
 	}
 
-	// Check if online booking is enabled
 	if !clinic.Settings.AllowOnlineBooking {
-		return nil, errors.ErrValidationInstance.WithMessage("Agendamento online nao habilitado para esta clinica")
+		return nil, errors.ErrValidationInstance.WithMessage("Não foi possível encontrar a clínica para agendamento online. Verifique o link ou tente novamente mais tarde.")
 	}
 
 	professionals, _, err := s.professionalRepo.List(ctx, clinic.ID, pagination.Filter{Status: "active", Limit: 100})
@@ -132,49 +177,113 @@ func (s *bookingService) GetProfessionals(ctx context.Context, slug string) ([]*
 		return nil, err
 	}
 
+	// Batch-load specialties for all professionals
+	profIDs := make([]uuid.UUID, len(professionals))
+	for i, p := range professionals {
+		profIDs[i] = p.ID
+	}
+	profSpecialties, _ := s.specialtyRepo.GetByProfessionalIDs(profIDs)
+
 	result := make([]*model.ProfessionalBookingInfo, 0, len(professionals))
 	for _, p := range professionals {
-		// Only include professionals with working hours defined
-		if !hasWorkingHours(p.WorkingHours) {
-			continue
+		hasSchedule := hasWorkingHours(p.WorkingHours)
+
+		specs := profSpecialties[p.ID]
+		specIDs := make([]uuid.UUID, len(specs))
+		specNames := make([]string, len(specs))
+		for i, sp := range specs {
+			specIDs[i] = sp.ID
+			specNames[i] = sp.Name
 		}
 
 		result = append(result, &model.ProfessionalBookingInfo{
-			ID:           p.ID,
-			Name:         p.Name,
-			Specialty:    p.Specialty,
-			AvatarURL:    p.AvatarURL,
-			Bio:          p.Bio,
-			Color:        p.Color,
-			WorkingHours: p.WorkingHours,
+			ID:                   p.ID,
+			Name:                 p.Name,
+			SpecialtyIDs:         specIDs,
+			SpecialtyNames:       specNames,
+			AvatarURL:            p.AvatarURL,
+			Bio:                  p.Bio,
+			Color:                p.Color,
+			HasAvailableSchedule: hasSchedule,
+			WorkingHours:         p.WorkingHours,
 		})
 	}
 
 	return result, nil
 }
 
-// GetAvailableSlots returns available time slots for a professional on a given date
-func (s *bookingService) GetAvailableSlots(ctx context.Context, slug string, professionalID uuid.UUID, date time.Time) (*model.AvailableSlotsResponse, error) {
+// GetSpecialties returns active specialties for a clinic
+func (s *bookingService) GetSpecialties(ctx context.Context, slug string) ([]*model.SpecialtyBookingInfo, error) {
 	clinic, err := s.clinicRepo.GetBySlug(ctx, slug)
 	if err != nil {
 		return nil, err
 	}
 
-	// Check if online booking is enabled
-	if !clinic.Settings.AllowOnlineBooking {
-		return nil, errors.ErrValidationInstance.WithMessage("Agendamento online nao habilitado para esta clinica")
+	specialties, err := s.specialtyRepo.ListActiveByClinic(clinic.ID)
+	if err != nil {
+		return nil, err
 	}
 
-	// Get professional
+	result := make([]*model.SpecialtyBookingInfo, len(specialties))
+	for i, sp := range specialties {
+		result[i] = &model.SpecialtyBookingInfo{
+			ID:   sp.ID,
+			Name: sp.Name,
+		}
+	}
+	return result, nil
+}
+
+// GetProcedures returns procedures for a clinic, optionally filtered by specialty
+func (s *bookingService) GetProcedures(ctx context.Context, slug string, specialtyID *uuid.UUID) ([]*model.ProcedureBookingInfo, error) {
+	clinic, err := s.clinicRepo.GetBySlug(ctx, slug)
+	if err != nil {
+		return nil, err
+	}
+
+	procedures, err := s.procedureRepo.ListByClinicAndSpecialty(ctx, clinic.ID, specialtyID)
+	if err != nil {
+		return nil, err
+	}
+
+	result := make([]*model.ProcedureBookingInfo, len(procedures))
+	for i, p := range procedures {
+		result[i] = &model.ProcedureBookingInfo{
+			ID:              p.ID,
+			Name:            p.Name,
+			SpecialtyID:     p.SpecialtyID,
+			Price:           p.Price,
+			DurationMinutes: p.DurationMinutes,
+		}
+	}
+	return result, nil
+}
+
+// GetAvailableSlots returns available time slots for a professional on a given date
+func (s *bookingService) GetAvailableSlots(ctx context.Context, slug string, professionalID uuid.UUID, date time.Time, procedureID *uuid.UUID) (*model.AvailableSlotsResponse, error) {
+	clinic, err := s.clinicRepo.GetBySlug(ctx, slug)
+	if err != nil {
+		return nil, err
+	}
+
+	if !clinic.Settings.AllowOnlineBooking {
+		return nil, errors.ErrValidationInstance.WithMessage("Não foi possível encontrar a clínica para agendamento online. Verifique o link ou tente novamente mais tarde.")
+	}
+
 	professional, err := s.professionalRepo.GetByID(ctx, professionalID, clinic.ID)
 	if err != nil {
 		return nil, err
 	}
 
-	// Duration in minutes
+	// Duration: use procedure duration if provided, otherwise clinic default
 	durationMinutes := clinic.Settings.DefaultAppointmentMinutes
 	if durationMinutes == 0 {
 		durationMinutes = 50
+	}
+	if procedureID != nil {
+		if proc, err := s.procedureRepo.GetByID(*procedureID, clinic.ID); err == nil && proc.DurationMinutes > 0 {
+			durationMinutes = proc.DurationMinutes
+		}
 	}
 
 	// Get working hours for the day
@@ -226,23 +335,19 @@ func (s *bookingService) GetAvailableSlots(ctx context.Context, slug string, pro
 		slotStart := time.Date(date.Year(), date.Month(), date.Day(), h1, m1, 0, 0, date.Location())
 		slotEnd := time.Date(date.Year(), date.Month(), date.Day(), h2, m2, 0, 0, date.Location())
 
-		// Generate time blocks
 		for curr := slotStart; curr.Add(time.Duration(durationMinutes)*time.Minute).Before(slotEnd) || curr.Add(time.Duration(durationMinutes)*time.Minute).Equal(slotEnd); curr = curr.Add(time.Duration(durationMinutes) * time.Minute) {
 			candStart := curr
 			candEnd := curr.Add(time.Duration(durationMinutes) * time.Minute)
 
-			// Skip past times
 			if candStart.Before(now) {
 				continue
 			}
 
-			// Check for conflicts with existing appointments
 			isConflict := false
 			for _, apt := range existingAppointments {
 				if apt.Status == appointmentModel.AppointmentStatusCanceled {
 					continue
 				}
-				// Check overlap
 				if apt.StartTime.Before(candEnd) && apt.EndTime.After(candStart) {
 					isConflict = true
 					break
@@ -267,41 +372,42 @@ func (s *bookingService) GetAvailableSlots(ctx context.Context, slug string, pro
 }
 
 // CreateBooking creates a new booking from public form
+// LGPD: Always creates a new patient with source=SELF_REGISTERED, never matches by phone
 func (s *bookingService) CreateBooking(ctx context.Context, slug string, req *model.CreateBookingRequest) (*model.BookingResponse, error) {
 	clinic, err := s.clinicRepo.GetBySlug(ctx, slug)
 	if err != nil {
 		return nil, err
 	}
 
-	// Check if online booking is enabled
 	if !clinic.Settings.AllowOnlineBooking {
-		return nil, errors.ErrValidationInstance.WithMessage("Agendamento online nao habilitado para esta clinica")
+		return nil, errors.ErrValidationInstance.WithMessage("Não foi possível encontrar a clínica para agendamento online. Verifique o link ou tente novamente mais tarde.")
 	}
 
-	// Check if subscription is active
 	if !clinic.IsSubscriptionActive() {
-		return nil, errors.ErrValidationInstance.WithMessage("Clinica com assinatura inativa")
+		return nil, errors.ErrValidationInstance.WithMessage("Não conseguimos buscar as informacoes da clinica, tente novamente mais tard")
 	}
 
-	// Validate start time is in the future
 	if req.StartTime.Before(time.Now()) {
-		return nil, errors.ErrValidationInstance.WithMessage("Horario deve ser no futuro")
+		return nil, errors.ErrValidationInstance.WithMessage("A data e hora do agendamento devem ser no futuro")
 	}
 
-	// Get professional
 	professional, err := s.professionalRepo.GetByID(ctx, req.ProfessionalID, clinic.ID)
 	if err != nil {
 		return nil, err
 	}
 
-	// Calculate end time
+	// Calculate end time: use procedure duration if provided
 	durationMinutes := clinic.Settings.DefaultAppointmentMinutes
 	if durationMinutes == 0 {
 		durationMinutes = 50
 	}
+	if req.ProcedureID != nil {
+		if proc, err := s.procedureRepo.GetByID(*req.ProcedureID, clinic.ID); err == nil && proc.DurationMinutes > 0 {
+			durationMinutes = proc.DurationMinutes
+		}
+	}
 	endTime := req.StartTime.Add(time.Duration(durationMinutes) * time.Minute)
 
-	// Check for conflicts
 	hasConflict, err := s.appointmentRepo.CheckConflict(ctx, clinic.ID, req.ProfessionalID, req.StartTime, endTime, nil)
 	if err != nil {
 		return nil, err
@@ -310,16 +416,25 @@ func (s *bookingService) CreateBooking(ctx context.Context, slug string, req *mo
 		return nil, errors.ErrSlotUnavailableInstance
 	}
 
-	// Find or create patient
-	patient, err := s.findOrCreatePatient(ctx, clinic.ID, req.PatientName, req.PatientPhone)
-	if err != nil {
+	// LGPD: Always create new patient with source=SELF_REGISTERED
+	// Never match by phone/CPF on the public flow to prevent data leakage
+	newPatient := &patientModel.Patient{
+		ClinicID: clinic.ID,
+		Name:     req.PatientName,
+		Phone:    req.PatientPhone,
+		WhatsApp: req.PatientPhone,
+		Email:    req.PatientEmail,
+		IsActive: true,
+		Source:   patientModel.PatientSourceSelfRegistered,
+	}
+
+	if err := s.patientRepo.Create(ctx, newPatient); err != nil {
 		return nil, err
 	}
 
-	// Create appointment
 	appointment := &appointmentModel.Appointment{
 		ClinicID:       clinic.ID,
-		PatientID:      patient.ID,
+		PatientID:      newPatient.ID,
 		ProfessionalID: req.ProfessionalID,
 		StartTime:      req.StartTime,
 		EndTime:        endTime,
@@ -333,8 +448,37 @@ func (s *bookingService) CreateBooking(ctx context.Context, slug string, req *mo
 		return nil, err
 	}
 
-	// Create notification for clinic
 	s.createBookingNotification(ctx, clinic.ID, req.PatientName, professional.Name, req.StartTime, appointment.ID)
+
+	// Send booking confirmation email to patient (if email provided)
+	if req.PatientEmail != "" && s.emailSvc != nil {
+		portalLink := ""
+		if s.frontendURL != "" {
+			portalLink = fmt.Sprintf("%s/agendar/%s", s.frontendURL, clinic.Slug)
+		}
+
+		// Convert times to clinic timezone for display in email
+		emailStart := appointment.StartTime
+		emailEnd := appointment.EndTime
+		if clinic.Settings.Timezone != "" {
+			if loc, err := time.LoadLocation(clinic.Settings.Timezone); err == nil {
+				emailStart = emailStart.In(loc)
+				emailEnd = emailEnd.In(loc)
+			}
+		}
+
+		if err := s.emailSvc.SendBookingConfirmation(ctx, &emailService.BookingConfirmationEmailData{
+			RecipientEmail:   req.PatientEmail,
+			RecipientName:    req.PatientName,
+			ClinicName:       clinic.Name,
+			ProfessionalName: professional.Name,
+			StartTime:        emailStart,
+			EndTime:          emailEnd,
+			PortalLink:       portalLink,
+		}); err != nil {
+			fmt.Printf("[BOOKING] Failed to send confirmation email to %s: %v\n", req.PatientEmail, err)
+		}
+	}
 
 	return &model.BookingResponse{
 		ID:           appointment.ID,
@@ -346,42 +490,13 @@ func (s *bookingService) CreateBooking(ctx context.Context, slug string, req *mo
 	}, nil
 }
 
-// findOrCreatePatient finds an existing patient by phone or creates a new one
-func (s *bookingService) findOrCreatePatient(ctx context.Context, clinicID uuid.UUID, name, phone string) (*patientModel.Patient, error) {
-	// Try to find existing patient
-	patient, err := s.patientRepo.GetByPhone(ctx, phone, clinicID)
-	if err == nil {
-		return patient, nil
-	}
-
-	// Check if it's a "not found" error
-	if !errors.IsNotFound(err) {
-		return nil, err
-	}
-
-	// Create new patient
-	newPatient := &patientModel.Patient{
-		ClinicID: clinicID,
-		Name:     name,
-		Phone:    phone,
-		WhatsApp: phone,
-		IsActive: true,
-	}
-
-	if err := s.patientRepo.Create(ctx, newPatient); err != nil {
-		return nil, err
-	}
-
-	return newPatient, nil
-}
-
 // createBookingNotification creates a notification for the clinic about a new booking
 func (s *bookingService) createBookingNotification(ctx context.Context, clinicID uuid.UUID, patientName, professionalName string, startTime time.Time, appointmentID uuid.UUID) {
 	notification := &notificationModel.Notification{
 		ClinicID: clinicID,
-		Type:     notificationModel.NotificationType("new_booking"),
+		Type:     notificationModel.NotificationTypeNewBooking,
 		Title:    "Novo Agendamento Online",
-		Message:  fmt.Sprintf("%s agendou online com %s para %s", patientName, professionalName, startTime.Format("02/01 as 15:04")),
+		Message:  fmt.Sprintf("%s agendou online com %s para %s", patientName, professionalName, startTime.Format("02/01 às 15:04")),
 		Data: notificationModel.JSON{
 			"appointment_id":    appointmentID.String(),
 			"patient_name":      patientName,
@@ -390,8 +505,9 @@ func (s *bookingService) createBookingNotification(ctx context.Context, clinicID
 		},
 	}
 
-	// Create notification in background - don't fail booking if notification fails
-	_ = s.notificationSvc.Create(ctx, notification)
+	if err := s.notificationSvc.Create(ctx, notification); err != nil {
+		fmt.Printf("[BOOKING] Failed to create notification for clinic %s: %v\n", clinicID, err)
+	}
 }
 
 // hasWorkingHours checks if a professional has any working hours defined

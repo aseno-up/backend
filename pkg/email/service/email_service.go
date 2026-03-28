@@ -17,6 +17,7 @@ type EmailService interface {
 	SendPasswordReset(ctx context.Context, data *ResetPasswordEmailData) error
 	SendEmailVerification(ctx context.Context, data *EmailVerificationData) error
 	SendContactForm(ctx context.Context, data *ContactFormData) error
+	SendBookingConfirmation(ctx context.Context, data *BookingConfirmationEmailData) error
 }
 
 // InviteEmailData contains data for invite emails
@@ -56,6 +57,17 @@ type ContactFormData struct {
 	Name    string
 	Email   string
 	Message string
+}
+
+// BookingConfirmationEmailData contains data for booking confirmation emails
+type BookingConfirmationEmailData struct {
+	RecipientEmail   string
+	RecipientName    string
+	ClinicName       string
+	ProfessionalName string
+	StartTime        time.Time
+	EndTime          time.Time
+	PortalLink       string // Link to create portal account
 }
 
 // SMTPConfig holds SMTP configuration
@@ -412,6 +424,109 @@ func (s *smtpEmailService) SendContactForm(ctx context.Context, data *ContactFor
 	return s.sendEmail(s.config.From, subject, body)
 }
 
+// SendBookingConfirmation sends a booking confirmation email
+func (s *smtpEmailService) SendBookingConfirmation(ctx context.Context, data *BookingConfirmationEmailData) error {
+	subject := "Agendamento confirmado — " + data.ClinicName
+
+	body, err := s.renderBookingConfirmationTemplate(data)
+	if err != nil {
+		return fmt.Errorf("failed to render booking confirmation template: %w", err)
+	}
+
+	return s.sendEmail(data.RecipientEmail, subject, body)
+}
+
+func (s *smtpEmailService) renderBookingConfirmationTemplate(data *BookingConfirmationEmailData) (string, error) {
+	tmpl := `
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <style>
+        body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+        .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+        .header { background: #0891b2; color: white; padding: 20px; text-align: center; border-radius: 8px 8px 0 0; }
+        .content { background: #f9fafb; padding: 30px; border-radius: 0 0 8px 8px; }
+        .button { display: inline-block; background: #0891b2; color: white; padding: 12px 30px; text-decoration: none; border-radius: 6px; margin: 20px 0; }
+        .footer { text-align: center; color: #666; font-size: 12px; margin-top: 20px; }
+        .detail { margin: 8px 0; }
+        .label { color: #666; font-size: 14px; }
+        .value { font-weight: bold; color: #333; font-size: 15px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1 style="margin:0;font-size:22px;">Agendamento Confirmado</h1>
+            <p style="margin:4px 0 0;opacity:0.85;font-size:14px;">{{.ClinicName}}</p>
+        </div>
+        <div class="content">
+            <p>Olá, <strong>{{.RecipientName}}</strong>!</p>
+            <p>Seu agendamento foi realizado com sucesso. Confira os detalhes:</p>
+
+            <div style="background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:16px;margin:20px 0;">
+                <div class="detail">
+                    <span class="label">Profissional:</span><br>
+                    <span class="value">{{.ProfessionalName}}</span>
+                </div>
+                <div class="detail">
+                    <span class="label">Data:</span><br>
+                    <span class="value">{{.DateFormatted}}</span>
+                </div>
+                <div class="detail">
+                    <span class="label">Horário:</span><br>
+                    <span class="value">{{.TimeFormatted}}</span>
+                </div>
+            </div>
+
+            <p style="color:#607d94;font-size:14px;">
+                Aguarde a confirmação da clínica. Você receberá uma notificação quando o agendamento for confirmado.
+            </p>
+
+            {{if .PortalLink}}
+            <p style="text-align:center;margin:28px 0 12px;">
+                <a href="{{.PortalLink}}" class="button">Gerenciar meus agendamentos</a>
+            </p>
+            <p style="text-align:center;color:#a0aec0;font-size:12px;">
+                Crie sua conta para visualizar e gerenciar seus agendamentos online.
+            </p>
+            {{end}}
+        </div>
+        <div class="footer">
+            <p>Agendamento online por <strong>Aseno</strong></p>
+        </div>
+    </div>
+</body>
+</html>`
+
+	t, err := template.New("booking_confirmation").Parse(tmpl)
+	if err != nil {
+		return "", err
+	}
+
+	templateData := struct {
+		RecipientName    string
+		ClinicName       string
+		ProfessionalName string
+		DateFormatted    string
+		TimeFormatted    string
+		PortalLink       string
+	}{
+		RecipientName:    data.RecipientName,
+		ClinicName:       data.ClinicName,
+		ProfessionalName: data.ProfessionalName,
+		DateFormatted:    data.StartTime.Format("02/01/2006"),
+		TimeFormatted:    data.StartTime.Format("15:04") + " - " + data.EndTime.Format("15:04"),
+		PortalLink:       data.PortalLink,
+	}
+
+	var buf bytes.Buffer
+	if err := t.Execute(&buf, templateData); err != nil {
+		return "", err
+	}
+	return buf.String(), nil
+}
+
 // NoOpEmailService is a no-operation email service for development
 type noOpEmailService struct{}
 
@@ -444,5 +559,11 @@ func (s *noOpEmailService) SendEmailVerification(ctx context.Context, data *Emai
 
 func (s *noOpEmailService) SendContactForm(ctx context.Context, data *ContactFormData) error {
 	fmt.Printf("[EMAIL] NoOp: contact form from %s (%s)\n", data.Name, data.Email)
+	return nil
+}
+
+func (s *noOpEmailService) SendBookingConfirmation(ctx context.Context, data *BookingConfirmationEmailData) error {
+	fmt.Printf("[EMAIL] NoOp: booking confirmation to %s at %s with %s\n",
+		data.RecipientEmail, data.ClinicName, data.ProfessionalName)
 	return nil
 }

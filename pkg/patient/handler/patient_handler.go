@@ -25,6 +25,9 @@ type PatientHandler interface {
 	GetRisk(c *gin.Context)
 	RecalculateRisk(c *gin.Context)
 	RecalculateAllRisks(c *gin.Context)
+	// Self-registered patient management
+	ListSelfRegistered(c *gin.Context)
+	MergePatient(c *gin.Context)
 }
 
 // patientHandler implements PatientHandler
@@ -44,12 +47,14 @@ func (h *patientHandler) RegisterRoutes(router gin.IRouter) {
 		patients.POST("", h.Create)
 		patients.GET("", h.List)
 		patients.POST("/risk/recalculate-all", h.RecalculateAllRisks)
+		patients.GET("/self-registered", h.ListSelfRegistered)
 		patients.GET("/:id", h.GetByID)
 		patients.PUT("/:id", h.Update)
 		patients.DELETE("/:id", h.Delete)
 		patients.POST("/bulk-delete", h.BulkDelete)
 		patients.GET("/:id/risk", h.GetRisk)
 		patients.POST("/:id/risk/recalculate", h.RecalculateRisk)
+		patients.POST("/:id/merge", h.MergePatient)
 	}
 }
 
@@ -247,4 +252,48 @@ func (h *patientHandler) RecalculateAllRisks(c *gin.Context) {
 		"message":          "Risk scores recalculated successfully",
 		"patients_updated": updated,
 	})
+}
+
+// ListSelfRegistered returns patients with source=SELF_REGISTERED
+func (h *patientHandler) ListSelfRegistered(c *gin.Context) {
+	clinicID, _ := c.Get("clinic_id")
+
+	var filter pagination.Filter
+	if err := c.ShouldBindQuery(&filter); err != nil {
+		c.JSON(http.StatusBadRequest, errors.ToResponse(errors.ErrValidationInstance.WithError(err)))
+		return
+	}
+
+	result, err := h.service.ListSelfRegistered(c.Request.Context(), clinicID.(uuid.UUID), filter)
+	if err != nil {
+		statusCode := errors.GetStatusCode(err)
+		c.JSON(statusCode, errors.ToResponse(err))
+		return
+	}
+
+	c.JSON(http.StatusOK, result)
+}
+
+// MergePatient merges a self-registered patient into the target patient
+func (h *patientHandler) MergePatient(c *gin.Context) {
+	clinicID, _ := c.Get("clinic_id")
+	targetID, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "ID inválido"})
+		return
+	}
+
+	var req model.MergePatientRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Dados inválidos: " + err.Error()})
+		return
+	}
+
+	if err := h.service.MergePatients(c.Request.Context(), clinicID.(uuid.UUID), targetID, req.SourcePatientID); err != nil {
+		statusCode := errors.GetStatusCode(err)
+		c.JSON(statusCode, errors.ToResponse(err))
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Pacientes mesclados com sucesso"})
 }

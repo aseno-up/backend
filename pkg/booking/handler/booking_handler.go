@@ -17,6 +17,8 @@ type BookingHandler interface {
 	RegisterRoutes(router gin.IRouter)
 	GetClinicInfo(c *gin.Context)
 	GetProfessionals(c *gin.Context)
+	GetSpecialties(c *gin.Context)
+	GetProcedures(c *gin.Context)
 	GetAvailableSlots(c *gin.Context)
 	CreateBooking(c *gin.Context)
 }
@@ -39,20 +41,14 @@ func (h *bookingHandler) RegisterRoutes(router gin.IRouter) {
 	{
 		book.GET("/:slug", h.GetClinicInfo)
 		book.GET("/:slug/professionals", h.GetProfessionals)
+		book.GET("/:slug/specialties", h.GetSpecialties)
+		book.GET("/:slug/procedures", h.GetProcedures)
 		book.GET("/:slug/slots", h.GetAvailableSlots)
 		book.POST("/:slug/appointments", h.CreateBooking)
 	}
 }
 
 // GetClinicInfo returns public clinic information for booking page
-// @Summary Get clinic info for booking
-// @Description Returns public clinic information for the booking page
-// @Tags Booking
-// @Produce json
-// @Param slug path string true "Clinic slug"
-// @Success 200 {object} model.ClinicBookingInfo
-// @Failure 404 {object} errors.ErrorResponse
-// @Router /book/{slug} [get]
 func (h *bookingHandler) GetClinicInfo(c *gin.Context) {
 	slug := c.Param("slug")
 	if slug == "" {
@@ -70,14 +66,6 @@ func (h *bookingHandler) GetClinicInfo(c *gin.Context) {
 }
 
 // GetProfessionals returns list of active professionals for booking
-// @Summary Get professionals for booking
-// @Description Returns list of active professionals with their working hours
-// @Tags Booking
-// @Produce json
-// @Param slug path string true "Clinic slug"
-// @Success 200 {array} model.ProfessionalBookingInfo
-// @Failure 404 {object} errors.ErrorResponse
-// @Router /book/{slug}/professionals [get]
 func (h *bookingHandler) GetProfessionals(c *gin.Context) {
 	slug := c.Param("slug")
 	if slug == "" {
@@ -94,18 +82,51 @@ func (h *bookingHandler) GetProfessionals(c *gin.Context) {
 	c.JSON(http.StatusOK, professionals)
 }
 
+// GetSpecialties returns active specialties for a clinic
+func (h *bookingHandler) GetSpecialties(c *gin.Context) {
+	slug := c.Param("slug")
+	if slug == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "slug is required"})
+		return
+	}
+
+	specialties, err := h.service.GetSpecialties(c.Request.Context(), slug)
+	if err != nil {
+		handleError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, specialties)
+}
+
+// GetProcedures returns procedures for a clinic, optionally filtered by specialty
+func (h *bookingHandler) GetProcedures(c *gin.Context) {
+	slug := c.Param("slug")
+	if slug == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "slug is required"})
+		return
+	}
+
+	var specialtyID *uuid.UUID
+	if specIDStr := c.Query("specialty_id"); specIDStr != "" {
+		parsed, err := uuid.Parse(specIDStr)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid specialty_id"})
+			return
+		}
+		specialtyID = &parsed
+	}
+
+	procedures, err := h.service.GetProcedures(c.Request.Context(), slug, specialtyID)
+	if err != nil {
+		handleError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, procedures)
+}
+
 // GetAvailableSlots returns available time slots for a professional on a given date
-// @Summary Get available slots
-// @Description Returns available time slots for a professional on a given date
-// @Tags Booking
-// @Produce json
-// @Param slug path string true "Clinic slug"
-// @Param professional_id query string true "Professional ID"
-// @Param date query string true "Date (YYYY-MM-DD)"
-// @Success 200 {object} model.AvailableSlotsResponse
-// @Failure 400 {object} errors.ErrorResponse
-// @Failure 404 {object} errors.ErrorResponse
-// @Router /book/{slug}/slots [get]
 func (h *bookingHandler) GetAvailableSlots(c *gin.Context) {
 	slug := c.Param("slug")
 	if slug == "" {
@@ -137,7 +158,18 @@ func (h *bookingHandler) GetAvailableSlots(c *gin.Context) {
 		return
 	}
 
-	slots, err := h.service.GetAvailableSlots(c.Request.Context(), slug, professionalID, date)
+	// Optional procedure_id for duration-based slot calculation
+	var procedureID *uuid.UUID
+	if procIDStr := c.Query("procedure_id"); procIDStr != "" {
+		parsed, err := uuid.Parse(procIDStr)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid procedure_id"})
+			return
+		}
+		procedureID = &parsed
+	}
+
+	slots, err := h.service.GetAvailableSlots(c.Request.Context(), slug, professionalID, date, procedureID)
 	if err != nil {
 		handleError(c, err)
 		return
@@ -147,18 +179,6 @@ func (h *bookingHandler) GetAvailableSlots(c *gin.Context) {
 }
 
 // CreateBooking creates a new booking from public form
-// @Summary Create a booking
-// @Description Creates a new appointment from public booking form
-// @Tags Booking
-// @Accept json
-// @Produce json
-// @Param slug path string true "Clinic slug"
-// @Param request body model.CreateBookingRequest true "Booking request"
-// @Success 201 {object} model.BookingResponse
-// @Failure 400 {object} errors.ErrorResponse
-// @Failure 404 {object} errors.ErrorResponse
-// @Failure 409 {object} errors.ErrorResponse
-// @Router /book/{slug}/appointments [post]
 func (h *bookingHandler) CreateBooking(c *gin.Context) {
 	slug := c.Param("slug")
 	if slug == "" {

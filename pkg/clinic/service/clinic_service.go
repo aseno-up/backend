@@ -132,6 +132,9 @@ func (s *clinicService) Update(ctx context.Context, id uuid.UUID, req *model.Upd
 		if req.Settings.AIAgentEnabled != nil {
 			clinic.Settings.AIAgentEnabled = *req.Settings.AIAgentEnabled
 		}
+		if req.Settings.AboutUs != nil {
+			clinic.Settings.AboutUs = *req.Settings.AboutUs
+		}
 
 		// AI/WhatsApp settings
 		if req.Settings.AIMinDelayBetweenMessages != nil {

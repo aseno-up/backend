@@ -84,6 +84,7 @@ import (
 	paymentmethod_model "github.com/aseno/backend/pkg/paymentmethod/model"
 	paymentmethod_repository "github.com/aseno/backend/pkg/paymentmethod/repository"
 	paymentmethod_service "github.com/aseno/backend/pkg/paymentmethod/service"
+	portalaccount_model "github.com/aseno/backend/pkg/portalaccount/model"
 	procedure_handler "github.com/aseno/backend/pkg/procedure/handler"
 	procedure_model "github.com/aseno/backend/pkg/procedure/model"
 	procedure_repository "github.com/aseno/backend/pkg/procedure/repository"
@@ -92,6 +93,10 @@ import (
 	professional_model "github.com/aseno/backend/pkg/professional/model"
 	professional_repository "github.com/aseno/backend/pkg/professional/repository"
 	professional_service "github.com/aseno/backend/pkg/professional/service"
+	specialty_handler "github.com/aseno/backend/pkg/specialty/handler"
+	specialty_model "github.com/aseno/backend/pkg/specialty/model"
+	specialty_repository "github.com/aseno/backend/pkg/specialty/repository"
+	specialty_service "github.com/aseno/backend/pkg/specialty/service"
 	public_handler "github.com/aseno/backend/pkg/public/handler"
 	sessionplan_handler "github.com/aseno/backend/pkg/sessionplan/handler"
 	sessionplan_model "github.com/aseno/backend/pkg/sessionplan/model"
@@ -214,6 +219,7 @@ func main() {
 	leadRepo := lead_repository.NewLeadRepository(db.GetDB())
 	paymentMethodRepo := paymentmethod_repository.NewPaymentMethodRepository(db.GetDB())
 	appointmentPaymentRepo := appointment_repository.NewAppointmentPaymentRepository(db.GetDB())
+	specialtyRepo := specialty_repository.NewSpecialtyRepository(db.GetDB())
 
 	// Seed default settings (if not exist)
 	if err := settingsRepo.SeedDefaults(context.Background()); err != nil {
@@ -238,13 +244,7 @@ func main() {
 	notificationSvc := notification_service.NewNotificationService(notificationRepo)
 
 	// Initialize Booking service (needed early for AI Agent and public booking)
-	bookingSvc := booking_service.NewBookingService(
-		clinicRepo,
-		professionalRepo,
-		appointmentRepo,
-		patientRepo,
-		notificationSvc,
-	)
+	// BookingService initialized below after emailSvc is available
 
 	// Initialize WhatsApp clients for all available providers
 	var evolutionClient whatsapp_service.WhatsAppClient
@@ -345,6 +345,19 @@ func main() {
 		logger.Println("Using no-op email service (no email provider configured)")
 	}
 
+	// Initialize Booking service (needs emailSvc, used by AI Agent and public booking)
+	bookingSvc := booking_service.NewBookingService(
+		clinicRepo,
+		professionalRepo,
+		appointmentRepo,
+		patientRepo,
+		notificationSvc,
+		specialtyRepo,
+		procedureRepo,
+		emailSvc,
+		cfg.GetFrontendURL(),
+	)
+
 	// Initialize auth service with or without Google OAuth
 	var authService auth_service.AuthService
 	var googleAdapter auth_service.GoogleAuthClient
@@ -359,6 +372,7 @@ func main() {
 	appointmentService := appointment_service.NewAppointmentService(appointmentRepo, professionalRepo)
 	procedureService := procedure_service.NewProcedureService(procedureRepo)
 	paymentMethodService := paymentmethod_service.NewPaymentMethodService(paymentMethodRepo)
+	specialtyService := specialty_service.NewSpecialtyService(specialtyRepo)
 	appointmentPaymentService := appointment_service.NewAppointmentPaymentService(appointmentPaymentRepo, appointmentRepo, paymentMethodRepo)
 
 	// Initialize message log service
@@ -654,6 +668,7 @@ func main() {
 	appointmentHandler := appointment_handler.NewAppointmentHandler(appointmentService)
 	procedureHandler := procedure_handler.NewProcedureHandler(procedureService)
 	paymentMethodHandler := paymentmethod_handler.NewPaymentMethodHandler(paymentMethodService, auditSvc)
+	specialtyHandler := specialty_handler.NewSpecialtyHandler(specialtyService, auditSvc)
 	appointmentPaymentHandler := appointment_handler.NewAppointmentPaymentHandler(appointmentPaymentService, auditSvc)
 
 	// Initialize WhatsApp handler (if service is configured)
@@ -774,6 +789,7 @@ func main() {
 		leadHdlr,
 		paymentMethodHandler,
 		appointmentPaymentHandler,
+		specialtyHandler,
 		authMiddleware,
 		tenantMiddleware,
 	)
@@ -861,6 +877,7 @@ func setupRouter(
 	leadHandler lead_handler.LeadHandler,
 	paymentMethodHandler *paymentmethod_handler.PaymentMethodHandler,
 	appointmentPaymentHandler appointment_handler.AppointmentPaymentHandler,
+	specialtyHandler *specialty_handler.SpecialtyHandler,
 	authMiddleware auth_middleware.AuthMiddleware,
 	tenantMiddleware auth_middleware.TenantMiddleware,
 ) *gin.Engine {
@@ -960,6 +977,9 @@ func setupRouter(
 
 			// Payment method routes (settings)
 			paymentMethodHandler.RegisterRoutes(protected)
+
+			// Specialty routes (settings)
+			specialtyHandler.RegisterRoutes(protected)
 
 
 			// Plan routes (protected endpoints inside PlanHandler/OfferHandler for admins)
@@ -1165,6 +1185,10 @@ func runMigrations(db *database.Database) error {
 		// Payment methods and appointment payments
 		&paymentmethod_model.PaymentMethod{},
 		&appointment_model.AppointmentPayment{},
+		// Specialties and portal accounts
+		&specialty_model.Specialty{},
+		&professional_model.ProfessionalSpecialty{},
+		&portalaccount_model.PortalAccount{},
 	}
 
 	if err := db.AutoMigrate(models...); err != nil {
@@ -1210,6 +1234,48 @@ func runMigrations(db *database.Database) error {
 
 	// Definir account_id como NOT NULL se possível
 	db.GetDB().Exec("ALTER TABLE clinics ALTER COLUMN account_id SET NOT NULL")
+
+	// Data Migration: Migrate professional.specialty string to specialties table + N:N junction
+	if err := db.GetDB().Exec(`
+		DO $$
+		DECLARE
+			rec RECORD;
+			new_id UUID;
+			spec_id UUID;
+		BEGIN
+			-- Create specialty records from distinct professional.specialty strings per clinic
+			FOR rec IN
+				SELECT DISTINCT clinic_id, specialty
+				FROM professionals
+				WHERE specialty IS NOT NULL AND specialty != '' AND deleted_at IS NULL
+				  AND NOT EXISTS (
+					SELECT 1 FROM specialties s
+					WHERE s.clinic_id = professionals.clinic_id AND s.name = professionals.specialty AND s.deleted_at IS NULL
+				  )
+			LOOP
+				new_id := gen_random_uuid();
+				INSERT INTO specialties (id, clinic_id, name, active, created_at, updated_at)
+				VALUES (new_id, rec.clinic_id, rec.specialty, true, NOW(), NOW());
+			END LOOP;
+
+			-- Backfill professional_specialties junction table
+			FOR rec IN
+				SELECT p.id AS professional_id, s.id AS specialty_id
+				FROM professionals p
+				JOIN specialties s ON p.clinic_id = s.clinic_id AND p.specialty = s.name AND s.deleted_at IS NULL
+				WHERE p.specialty IS NOT NULL AND p.specialty != '' AND p.deleted_at IS NULL
+				  AND NOT EXISTS (
+					SELECT 1 FROM professional_specialties ps
+					WHERE ps.professional_id = p.id AND ps.specialty_id = s.id
+				  )
+			LOOP
+				INSERT INTO professional_specialties (professional_id, specialty_id)
+				VALUES (rec.professional_id, rec.specialty_id);
+			END LOOP;
+		END $$;
+	`).Error; err != nil {
+		logger.Printf("Specialty migration error: %v (Pode ser ignorado se já migrado)", err)
+	}
 
 	// Backfill clinic_members from users table (idempotent)
 	if err := db.GetDB().Exec(`
@@ -1836,15 +1902,24 @@ func (a *aiAgentProfessionalListerAdapter) ListAvailable(ctx context.Context, cl
 
 	var result []*tools.ProfessionalInfo
 	for _, p := range listResp.Data {
-		// Determine actual specialty (use "Geral" if empty)
-		actualSpecialty := p.Specialty
-		if actualSpecialty == "" {
-			actualSpecialty = "Geral"
+		// Build specialty string from N:N specialties
+		actualSpecialty := "Geral"
+		if len(p.Specialties) > 0 {
+			actualSpecialty = p.Specialties[0].Name
 		}
 
 		// Filter by specialty if provided
-		if specialty != "" && actualSpecialty != specialty && p.Specialty != specialty {
-			continue
+		if specialty != "" {
+			matched := false
+			for _, sp := range p.Specialties {
+				if sp.Name == specialty {
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				continue
+			}
 		}
 
 		result = append(result, &tools.ProfessionalInfo{

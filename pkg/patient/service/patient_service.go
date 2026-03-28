@@ -24,6 +24,9 @@ type PatientService interface {
 	GetRisk(ctx context.Context, id, clinicID uuid.UUID) (*model.PatientRiskResponse, error)
 	CalculateRiskScore(ctx context.Context, patientID, clinicID uuid.UUID) error
 	RecalculateAllRiskScores(ctx context.Context, clinicID uuid.UUID) (int, error)
+	// Self-registered patient management
+	ListSelfRegistered(ctx context.Context, clinicID uuid.UUID, filter pagination.Filter) (pagination.Response[*model.PatientResponse], error)
+	MergePatients(ctx context.Context, clinicID, targetID, sourceID uuid.UUID) error
 }
 
 // patientService implements PatientService
@@ -256,6 +259,36 @@ func (s *patientService) RecalculateAllRiskScores(ctx context.Context, clinicID 
 	}
 
 	return updated, nil
+}
+
+// ListSelfRegistered returns patients with source=SELF_REGISTERED
+func (s *patientService) ListSelfRegistered(ctx context.Context, clinicID uuid.UUID, filter pagination.Filter) (pagination.Response[*model.PatientResponse], error) {
+	patients, total, err := s.repo.ListBySource(ctx, clinicID, model.PatientSourceSelfRegistered, filter)
+	if err != nil {
+		return pagination.Response[*model.PatientResponse]{}, errors.ErrInternalInstance.WithError(err)
+	}
+
+	responses := make([]*model.PatientResponse, len(patients))
+	for i, p := range patients {
+		responses[i] = p.ToResponse()
+	}
+
+	return pagination.Response[*model.PatientResponse]{
+		Data: responses,
+		Meta: pagination.NewMeta(filter.GetPage(), filter.GetLimit(), total),
+	}, nil
+}
+
+// MergePatients merges a self-registered patient into an existing patient
+func (s *patientService) MergePatients(ctx context.Context, clinicID, targetID, sourceID uuid.UUID) error {
+	if targetID == sourceID {
+		return errors.ErrValidationInstance.WithMessage("Paciente de origem e destino não podem ser o mesmo")
+	}
+
+	if err := s.repo.MergePatients(ctx, clinicID, targetID, sourceID); err != nil {
+		return errors.ErrInternalInstance.WithError(err)
+	}
+	return nil
 }
 
 // calculateRisk determines the risk level based on attendance statistics

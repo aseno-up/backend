@@ -23,6 +23,7 @@ const (
 	NotificationTypeTrialExpired           NotificationType = "trial_expired"
 	NotificationTypeNewPatient             NotificationType = "new_patient"
 	NotificationTypeSystem                 NotificationType = "system"
+	NotificationTypeNewBooking             NotificationType = "new_booking"
 )
 
 // Notification represents an in-app notification

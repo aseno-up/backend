@@ -23,18 +23,19 @@ const (
 type AuditEntityType string
 
 const (
-	AuditEntityUser         AuditEntityType = "USER"
-	AuditEntityPatient      AuditEntityType = "PATIENT"
-	AuditEntityAppointment  AuditEntityType = "APPOINTMENT"
-	AuditEntityProfessional AuditEntityType = "PROFESSIONAL"
-	AuditEntityClinic       AuditEntityType = "CLINIC"
-	AuditEntitySettings     AuditEntityType = "SETTINGS"
-	AuditEntityInvite       AuditEntityType = "INVITE"
-	AuditEntityProcedure    AuditEntityType = "PROCEDURE"
-	AuditEntitySessionPlan  AuditEntityType = "SESSION_PLAN"
-	AuditEntityWaitlist        AuditEntityType = "WAITLIST"
-	AuditEntityPaymentMethod   AuditEntityType = "PAYMENT_METHOD"
+	AuditEntityUser               AuditEntityType = "USER"
+	AuditEntityPatient            AuditEntityType = "PATIENT"
+	AuditEntityAppointment        AuditEntityType = "APPOINTMENT"
+	AuditEntityProfessional       AuditEntityType = "PROFESSIONAL"
+	AuditEntityClinic             AuditEntityType = "CLINIC"
+	AuditEntitySettings           AuditEntityType = "SETTINGS"
+	AuditEntityInvite             AuditEntityType = "INVITE"
+	AuditEntityProcedure          AuditEntityType = "PROCEDURE"
+	AuditEntitySessionPlan        AuditEntityType = "SESSION_PLAN"
+	AuditEntityWaitlist           AuditEntityType = "WAITLIST"
+	AuditEntityPaymentMethod      AuditEntityType = "PAYMENT_METHOD"
 	AuditEntityAppointmentPayment AuditEntityType = "APPOINTMENT_PAYMENT"
+	AuditEntitySpecialty          AuditEntityType = "SPECIALTY"
 )
 
 // AuditLog represents an audit trail entry
@@ -47,8 +48,8 @@ type AuditLog struct {
 	Action     AuditAction     `json:"action" gorm:"type:varchar(50);not null;index"`
 	EntityType AuditEntityType `json:"entity_type" gorm:"type:varchar(50);not null;index"`
 	EntityID   string          `json:"entity_id" gorm:"type:varchar(255)"`
-	OldData    json.RawMessage  `json:"old_data,omitempty" gorm:"type:jsonb"`
-	NewData    json.RawMessage  `json:"new_data,omitempty" gorm:"type:jsonb"`
+	OldData    json.RawMessage `json:"old_data,omitempty" gorm:"type:jsonb"`
+	NewData    json.RawMessage `json:"new_data,omitempty" gorm:"type:jsonb"`
 	IP         string          `json:"ip" gorm:"type:varchar(45)"`
 	UserAgent  string          `json:"user_agent" gorm:"type:varchar(500)"`
 	CreatedAt  time.Time       `json:"created_at" gorm:"index"`

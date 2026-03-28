@@ -227,3 +227,63 @@ func (s *brevoEmailService) SendContactForm(ctx context.Context, data *ContactFo
 	}
 	return nil
 }
+
+// SendBookingConfirmation sends a booking confirmation email using Brevo
+func (s *brevoEmailService) SendBookingConfirmation(ctx context.Context, data *BookingConfirmationEmailData) error {
+	dateFormatted := data.StartTime.Format("02/01/2006")
+	timeFormatted := data.StartTime.Format("15:04") + " - " + data.EndTime.Format("15:04")
+
+	portalSection := ""
+	if data.PortalLink != "" {
+		portalSection = fmt.Sprintf(`
+			<p style="text-align:center;margin:28px 0 12px;">
+				<a href="%s"
+				   style="background:#0891b2;color:#fff;text-decoration:none;padding:12px 32px;border-radius:8px;font-weight:600;font-size:15px;display:inline-block;">
+					Gerenciar meus agendamentos
+				</a>
+			</p>
+			<p style="text-align:center;color:#a0aec0;font-size:12px;">
+				Crie sua conta para visualizar e gerenciar seus agendamentos online.
+			</p>
+		`, data.PortalLink)
+	}
+
+	_, _, err := s.client.TransactionalEmailsApi.SendTransacEmail(ctx, lib.SendSmtpEmail{
+		Sender: &lib.SendSmtpEmailSender{
+			Name:  s.senderName,
+			Email: s.senderEmail,
+		},
+		To: []lib.SendSmtpEmailTo{
+			{
+				Email: data.RecipientEmail,
+				Name:  data.RecipientName,
+			},
+		},
+		Subject: fmt.Sprintf("Agendamento confirmado — %s", data.ClinicName),
+		HtmlContent: fmt.Sprintf(`
+			<div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto;padding:32px 24px;">
+				<h2 style="color:#0d1b2a;margin-bottom:8px;">Agendamento Confirmado</h2>
+				<p style="color:#607d94;font-size:15px;line-height:1.6;">
+					Olá, <strong>%s</strong>! Seu agendamento na <strong>%s</strong> foi realizado com sucesso.
+				</p>
+				<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:16px;margin:20px 0;">
+					<p style="margin:4px 0;color:#334155;font-size:14px;"><strong>Profissional:</strong> %s</p>
+					<p style="margin:4px 0;color:#334155;font-size:14px;"><strong>Data:</strong> %s</p>
+					<p style="margin:4px 0;color:#334155;font-size:14px;"><strong>Horário:</strong> %s</p>
+				</div>
+				<p style="color:#607d94;font-size:14px;line-height:1.6;">
+					Aguarde a confirmação da clínica. Você receberá uma notificação quando o agendamento for confirmado.
+				</p>
+				%s
+				<p style="color:#a0aec0;font-size:12px;margin-top:32px;text-align:center;">
+					Agendamento online por <strong>aseno</strong>
+				</p>
+			</div>
+		`, data.RecipientName, data.ClinicName, data.ProfessionalName, dateFormatted, timeFormatted, portalSection),
+	})
+
+	if err != nil {
+		return fmt.Errorf("failed to send booking confirmation email via Brevo: %w", err)
+	}
+	return nil
+}

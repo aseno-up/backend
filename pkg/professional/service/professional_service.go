@@ -81,7 +81,6 @@ func (s *professionalService) Create(ctx context.Context, clinicID uuid.UUID, re
 		Name:            req.Name,
 		Email:           req.Email,
 		Phone:           req.Phone,
-		Specialty:       req.Specialty,
 		RegistrationNum: req.RegistrationNum,
 		Bio:             req.Bio,
 		Color:           req.Color,
@@ -156,9 +155,6 @@ func (s *professionalService) Update(ctx context.Context, id, clinicID uuid.UUID
 	}
 	if req.Phone != "" {
 		professional.Phone = req.Phone
-	}
-	if req.Specialty != "" {
-		professional.Specialty = req.Specialty
 	}
 	if req.RegistrationNum != "" {
 		professional.RegistrationNum = req.RegistrationNum

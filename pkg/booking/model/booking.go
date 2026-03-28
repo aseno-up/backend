@@ -19,17 +19,37 @@ type ClinicBookingInfo struct {
 	City                      string `json:"city"`
 	State                     string `json:"state"`
 	DefaultAppointmentMinutes int    `json:"default_appointment_minutes"`
+	AboutUs                   string `json:"about_us"`
+	ProfessionalCount         int    `json:"professional_count"`
+	SpecialtyCount            int    `json:"specialty_count"`
+}
+
+// SpecialtyBookingInfo contains public specialty data for booking
+type SpecialtyBookingInfo struct {
+	ID   uuid.UUID `json:"id"`
+	Name string    `json:"name"`
+}
+
+// ProcedureBookingInfo contains public procedure data for booking
+type ProcedureBookingInfo struct {
+	ID              uuid.UUID  `json:"id"`
+	Name            string     `json:"name"`
+	SpecialtyID     *uuid.UUID `json:"specialty_id,omitempty"`
+	Price           float64    `json:"price"`
+	DurationMinutes int        `json:"duration_minutes"`
 }
 
 // ProfessionalBookingInfo contains public professional data for booking
 type ProfessionalBookingInfo struct {
-	ID           uuid.UUID                      `json:"id"`
-	Name         string                         `json:"name"`
-	Specialty    string                         `json:"specialty"`
-	AvatarURL    string                         `json:"avatar_url"`
-	Bio          string                         `json:"bio"`
-	Color        string                         `json:"color"`
-	WorkingHours professionalModel.WorkingHours `json:"working_hours"`
+	ID                   uuid.UUID                      `json:"id"`
+	Name                 string                         `json:"name"`
+	SpecialtyIDs         []uuid.UUID                    `json:"specialty_ids"`
+	SpecialtyNames       []string                       `json:"specialty_names"`
+	AvatarURL            string                         `json:"avatar_url"`
+	Bio                  string                         `json:"bio"`
+	Color                string                         `json:"color"`
+	HasAvailableSchedule bool                           `json:"has_available_schedule"`
+	WorkingHours         professionalModel.WorkingHours `json:"working_hours"`
 }
 
 // AvailableSlot represents an available time slot for booking
@@ -48,11 +68,13 @@ type AvailableSlotsResponse struct {
 
 // CreateBookingRequest represents the request to create a booking
 type CreateBookingRequest struct {
-	ProfessionalID uuid.UUID `json:"professional_id" binding:"required"`
-	StartTime      time.Time `json:"start_time" binding:"required"`
-	PatientName    string    `json:"patient_name" binding:"required,min=2,max=100"`
-	PatientPhone   string    `json:"patient_phone" binding:"required"`
-	PatientNotes   string    `json:"patient_notes"`
+	ProfessionalID uuid.UUID  `json:"professional_id" binding:"required"`
+	StartTime      time.Time  `json:"start_time" binding:"required"`
+	ProcedureID    *uuid.UUID `json:"procedure_id"`
+	PatientName    string     `json:"patient_name" binding:"required,min=2,max=100"`
+	PatientPhone   string     `json:"patient_phone" binding:"required"`
+	PatientEmail   string     `json:"patient_email" binding:"omitempty,email"`
+	PatientNotes   string     `json:"patient_notes"`
 }
 
 // BookingResponse represents the response after creating a booking

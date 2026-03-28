@@ -18,6 +18,7 @@ type ProcedureRepository interface {
 	Delete(id uuid.UUID, clinicID uuid.UUID) error
 	BulkDelete(ids []uuid.UUID, clinicID uuid.UUID) error
 	List(ctx context.Context, clinicID uuid.UUID, filter pagination.Filter) ([]*model.Procedure, int64, error)
+	ListByClinicAndSpecialty(ctx context.Context, clinicID uuid.UUID, specialtyID *uuid.UUID) ([]*model.Procedure, error)
 }
 
 type procedureRepository struct {
@@ -114,4 +115,15 @@ func (r *procedureRepository) List(ctx context.Context, clinicID uuid.UUID, filt
 
 	err = query.Scopes(pagination.Paginate(&filter)).Find(&procedures).Error
 	return procedures, total, err
+}
+
+// ListByClinicAndSpecialty returns all procedures for a clinic, optionally filtered by specialty
+func (r *procedureRepository) ListByClinicAndSpecialty(ctx context.Context, clinicID uuid.UUID, specialtyID *uuid.UUID) ([]*model.Procedure, error) {
+	var procedures []*model.Procedure
+	query := r.db.WithContext(ctx).Where("clinic_id = ?", clinicID)
+	if specialtyID != nil {
+		query = query.Where("specialty_id = ?", *specialtyID)
+	}
+	err := query.Order("name ASC").Find(&procedures).Error
+	return procedures, err
 }
