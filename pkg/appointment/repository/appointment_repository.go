@@ -41,6 +41,9 @@ type AppointmentRepository interface {
 
 	// CountByProfessionalID returns the count of non-deleted appointments for a professional
 	CountByProfessionalID(ctx context.Context, professionalID, clinicID uuid.UUID) (int64, error)
+
+	// UpdatePaymentStatus updates only the payment_status field
+	UpdatePaymentStatus(ctx context.Context, id uuid.UUID, status model.PaymentStatus) error
 }
 
 // appointmentRepository implements AppointmentRepository
@@ -539,4 +542,12 @@ func (r *appointmentRepository) CountByProfessionalID(ctx context.Context, profe
 		return 0, errors.ErrInternalInstance.WithError(result.Error)
 	}
 	return count, nil
+}
+
+// UpdatePaymentStatus updates only the payment_status field of an appointment
+func (r *appointmentRepository) UpdatePaymentStatus(ctx context.Context, id uuid.UUID, status model.PaymentStatus) error {
+	return r.db.WithContext(ctx).
+		Model(&model.Appointment{}).
+		Where("id = ?", id).
+		Update("payment_status", status).Error
 }

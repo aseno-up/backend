@@ -80,6 +80,10 @@ import (
 	plan_model "github.com/aseno/backend/pkg/plan/model"
 	plan_repository "github.com/aseno/backend/pkg/plan/repository"
 	plan_service "github.com/aseno/backend/pkg/plan/service"
+	paymentmethod_handler "github.com/aseno/backend/pkg/paymentmethod/handler"
+	paymentmethod_model "github.com/aseno/backend/pkg/paymentmethod/model"
+	paymentmethod_repository "github.com/aseno/backend/pkg/paymentmethod/repository"
+	paymentmethod_service "github.com/aseno/backend/pkg/paymentmethod/service"
 	procedure_handler "github.com/aseno/backend/pkg/procedure/handler"
 	procedure_model "github.com/aseno/backend/pkg/procedure/model"
 	procedure_repository "github.com/aseno/backend/pkg/procedure/repository"
@@ -208,6 +212,8 @@ func main() {
 	featureFlagRepo := featureflag_repository.NewFeatureFlagRepository(db.GetDB())
 	usageMetricRepo := usagemetric_repository.NewUsageMetricRepository(db.GetDB())
 	leadRepo := lead_repository.NewLeadRepository(db.GetDB())
+	paymentMethodRepo := paymentmethod_repository.NewPaymentMethodRepository(db.GetDB())
+	appointmentPaymentRepo := appointment_repository.NewAppointmentPaymentRepository(db.GetDB())
 
 	// Seed default settings (if not exist)
 	if err := settingsRepo.SeedDefaults(context.Background()); err != nil {
@@ -352,6 +358,8 @@ func main() {
 	patientService := patient_service.NewPatientService(patientRepo, clinicRepo)
 	appointmentService := appointment_service.NewAppointmentService(appointmentRepo, professionalRepo)
 	procedureService := procedure_service.NewProcedureService(procedureRepo)
+	paymentMethodService := paymentmethod_service.NewPaymentMethodService(paymentMethodRepo)
+	appointmentPaymentService := appointment_service.NewAppointmentPaymentService(appointmentPaymentRepo, appointmentRepo, paymentMethodRepo)
 
 	// Initialize message log service
 	messageLogService := whatsapp_service.NewMessageLogService(messageLogRepo)
@@ -645,6 +653,8 @@ func main() {
 	patientHandler := patient_handler.NewPatientHandler(patientService)
 	appointmentHandler := appointment_handler.NewAppointmentHandler(appointmentService)
 	procedureHandler := procedure_handler.NewProcedureHandler(procedureService)
+	paymentMethodHandler := paymentmethod_handler.NewPaymentMethodHandler(paymentMethodService, auditSvc)
+	appointmentPaymentHandler := appointment_handler.NewAppointmentPaymentHandler(appointmentPaymentService, auditSvc)
 
 	// Initialize WhatsApp handler (if service is configured)
 	var whatsappHandler whatsapp_handler.WhatsAppHandler
@@ -762,6 +772,8 @@ func main() {
 		featureFlagHdlr,
 		usageMetricHdlr,
 		leadHdlr,
+		paymentMethodHandler,
+		appointmentPaymentHandler,
 		authMiddleware,
 		tenantMiddleware,
 	)
@@ -847,6 +859,8 @@ func setupRouter(
 	featureFlagHandler featureflag_handler.FeatureFlagHandler,
 	usageMetricHandler usagemetric_handler.UsageMetricHandler,
 	leadHandler lead_handler.LeadHandler,
+	paymentMethodHandler *paymentmethod_handler.PaymentMethodHandler,
+	appointmentPaymentHandler appointment_handler.AppointmentPaymentHandler,
 	authMiddleware auth_middleware.AuthMiddleware,
 	tenantMiddleware auth_middleware.TenantMiddleware,
 ) *gin.Engine {
@@ -937,10 +951,16 @@ func setupRouter(
 			appointmentsProtected.Use(authMiddleware.RequireProfessionalAccess())
 			{
 				appointmentHandler.RegisterRoutes(appointmentsProtected)
+				// Payment sub-routes registered on the same /appointments group to avoid wildcard conflict
+				appointmentPaymentHandler.RegisterRoutes(appointmentsProtected.Group("/appointments"))
 			}
 
 			// Procedure routes
 			procedureHandler.RegisterRoutes(protected)
+
+			// Payment method routes (settings)
+			paymentMethodHandler.RegisterRoutes(protected)
+
 
 			// Plan routes (protected endpoints inside PlanHandler/OfferHandler for admins)
 			planHandler.RegisterRoutes(protected, authMiddleware)
@@ -1142,6 +1162,9 @@ func runMigrations(db *database.Database) error {
 		&clinicmember_model.ClinicMember{},
 		// CRM Leads
 		&lead_model.Lead{},
+		// Payment methods and appointment payments
+		&paymentmethod_model.PaymentMethod{},
+		&appointment_model.AppointmentPayment{},
 	}
 
 	if err := db.AutoMigrate(models...); err != nil {

@@ -83,6 +83,9 @@ func (m *mockAppointmentRepo) GetSlotPerformanceStats(_ context.Context, _, _ uu
 func (m *mockAppointmentRepo) CountByProfessionalID(_ context.Context, _, _ uuid.UUID) (int64, error) {
 	return 0, nil
 }
+func (m *mockAppointmentRepo) UpdatePaymentStatus(_ context.Context, _ uuid.UUID, _ model.PaymentStatus) error {
+	return nil
+}
 
 // --- Helpers ---
 

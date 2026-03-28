@@ -32,7 +32,9 @@ const (
 	AuditEntityInvite       AuditEntityType = "INVITE"
 	AuditEntityProcedure    AuditEntityType = "PROCEDURE"
 	AuditEntitySessionPlan  AuditEntityType = "SESSION_PLAN"
-	AuditEntityWaitlist     AuditEntityType = "WAITLIST"
+	AuditEntityWaitlist        AuditEntityType = "WAITLIST"
+	AuditEntityPaymentMethod   AuditEntityType = "PAYMENT_METHOD"
+	AuditEntityAppointmentPayment AuditEntityType = "APPOINTMENT_PAYMENT"
 )
 
 // AuditLog represents an audit trail entry

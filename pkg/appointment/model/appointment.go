@@ -44,6 +44,7 @@ type Appointment struct {
 	PatientNotes   string                 `json:"patient_notes"`                                                      // Notes from patient
 	Procedures     []AppointmentProcedure `json:"procedures,omitempty" gorm:"foreignKey:AppointmentID;references:ID"` // N:N relationship with procedures
 	Price          float64                `json:"price" gorm:"type:decimal(10,2)"`                                    // Total price for this appointment
+	PaymentStatus  PaymentStatus          `json:"payment_status" gorm:"not null;default:'pending';index"`              // Denormalized: pending, partial, paid
 	ConfirmedAt    *time.Time             `json:"confirmed_at,omitempty"`
 	CanceledAt     *time.Time             `json:"canceled_at,omitempty"`
 	CancelReason   string                 `json:"cancel_reason"`
@@ -112,6 +113,7 @@ type AppointmentResponse struct {
 	PatientNotes   string                          `json:"patient_notes"`
 	Procedures     []*AppointmentProcedureResponse `json:"procedures,omitempty"`
 	Price          float64                         `json:"price"`
+	PaymentStatus  PaymentStatus                   `json:"payment_status"`
 	ConfirmedAt    *time.Time                      `json:"confirmed_at,omitempty"`
 	CanceledAt     *time.Time                      `json:"canceled_at,omitempty"`
 	CancelReason   string                          `json:"cancel_reason,omitempty"`
@@ -136,6 +138,7 @@ func (a *Appointment) ToResponse() *AppointmentResponse {
 		Notes:          a.Notes,
 		PatientNotes:   a.PatientNotes,
 		Price:          a.Price,
+		PaymentStatus:  a.PaymentStatus,
 		ConfirmedAt:    a.ConfirmedAt,
 		CanceledAt:     a.CanceledAt,
 		CancelReason:   a.CancelReason,
