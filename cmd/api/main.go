@@ -1020,10 +1020,12 @@ func setupRouter(
 				paymentHandler.RegisterRoutes(billingAuthOnly)
 			}
 
-			// Marketplace routes (financial access required)
+			// Marketplace routes (financial access + professional plan required)
 			if marketplaceHandler != nil {
 				mktAuthOnly := authOnly.Group("")
+				mktAuthOnly.Use(tenantMiddleware.ValidateTenant())
 				mktAuthOnly.Use(authMiddleware.RequireFinancialAccess())
+				mktAuthOnly.Use(auth_middleware.RequirePlan("professional"))
 				marketplaceHandler.RegisterRoutes(mktAuthOnly)
 			}
 		}

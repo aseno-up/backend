@@ -46,6 +46,7 @@ func (r *clinicRepository) getWithConnections(ctx context.Context, whereClause s
 	result := r.db.WithContext(ctx).
 		Table("clinics c").
 		Preload("Account").
+		Preload("Account.Plan").
 		Select(`c.*,
 			(SELECT connected FROM whatsapp_connections wc
 			 WHERE wc.clinic_id = c.id AND wc.is_active = true AND wc.deleted_at IS NULL

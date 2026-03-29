@@ -37,6 +37,18 @@ type clinicInfoImpl struct {
 func (c *clinicInfoImpl) GetID() uuid.UUID                    { return c.clinic.ID }
 func (c *clinicInfoImpl) GetAccountID() uuid.UUID              { return c.clinic.AccountID }
 func (c *clinicInfoImpl) GetRequirePaymentBeforeBooking() bool { return c.clinic.Settings.RequirePaymentBeforeBooking }
+func (c *clinicInfoImpl) GetPlanSlug() string {
+	if c.clinic.Account != nil && c.clinic.Account.Plan != nil {
+		return c.clinic.Account.Plan.Slug
+	}
+	return "basic"
+}
+func (c *clinicInfoImpl) GetSubscriptionStatus() string {
+	if c.clinic.Account != nil {
+		return string(c.clinic.Account.SubscriptionStatus)
+	}
+	return ""
+}
 
 // appointmentRepoAdapter adapts the real AppointmentRepository
 type appointmentRepoAdapter struct {

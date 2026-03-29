@@ -476,20 +476,22 @@ func (s *bookingService) CreateBooking(ctx context.Context, slug string, req *mo
 	}
 
 	// Determine initial status based on payment requirement
+	// Only enforce payment if the clinic has at least professional plan (or is on trial)
+	requirePayment := clinic.Settings.RequirePaymentBeforeBooking && s.clinicHasMarketplacePlan(clinic)
 	initialStatus := appointmentModel.AppointmentStatusPending
-	if clinic.Settings.RequirePaymentBeforeBooking {
+	if requirePayment {
 		if appointmentPrice <= 0 {
 			return nil, errors.ErrValidationInstance.WithMessage("Esta clínica exige pagamento antecipado. Selecione um procedimento com preço para continuar.")
 		}
 		initialStatus = appointmentModel.AppointmentStatusAwaitingPayment
 	}
 
-	// Generate payment token and expiration for appointments with a price
+	// Generate payment token and expiration for appointments with a price (only if plan supports marketplace)
 	var paymentToken string
 	var paymentExpiresAt *time.Time
-	if appointmentPrice > 0 {
+	if appointmentPrice > 0 && s.clinicHasMarketplacePlan(clinic) {
 		paymentToken = uuid.New().String()
-		if clinic.Settings.RequirePaymentBeforeBooking {
+		if requirePayment {
 			exp := time.Now().Add(time.Duration(s.bookingPaymentTimeoutMinutes) * time.Minute)
 			paymentExpiresAt = &exp
 		}
@@ -568,6 +570,22 @@ func (s *bookingService) CreateBooking(ctx context.Context, slug string, req *mo
 }
 
 // createBookingNotification creates a notification for the clinic about a new booking
+// clinicHasMarketplacePlan checks if the clinic has at least the professional plan (or is on trial)
+func (s *bookingService) clinicHasMarketplacePlan(clinic *clinicModel.Clinic) bool {
+	if clinic.Account == nil {
+		return false
+	}
+	// Trial has full access
+	if clinic.Account.SubscriptionStatus == "trial" {
+		return true
+	}
+	if clinic.Account.Plan == nil {
+		return false
+	}
+	planLevel := map[string]int{"basic": 0, "professional": 1, "advanced": 2}
+	return planLevel[clinic.Account.Plan.Slug] >= planLevel["professional"]
+}
+
 func (s *bookingService) createBookingNotification(ctx context.Context, clinicID uuid.UUID, patientName, professionalName string, startTime time.Time, appointmentID uuid.UUID) {
 	notification := &notificationModel.Notification{
 		ClinicID: clinicID,

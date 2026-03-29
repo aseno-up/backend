@@ -64,6 +64,8 @@ type ClinicInfo interface {
 	GetID() uuid.UUID
 	GetAccountID() uuid.UUID
 	GetRequirePaymentBeforeBooking() bool
+	GetPlanSlug() string
+	GetSubscriptionStatus() string
 }
 
 type AppointmentRepository interface {
@@ -358,6 +360,11 @@ func (s *marketplaceService) UpdateSplitConfig(ctx context.Context, clinicID uui
 
 // CreateAppointmentCharge creates a payment charge for a patient appointment
 func (s *marketplaceService) CreateAppointmentCharge(ctx context.Context, clinicID, appointmentID uuid.UUID, req *CreateChargeInput) (*model.ClinicPaymentResponse, error) {
+	// Verify plan access
+	if err := s.checkPlanAccess(ctx, clinicID); err != nil {
+		return nil, err
+	}
+
 	// Get subaccount and decrypt API key
 	sub, err := s.subaccountRepo.GetByClinicID(ctx, clinicID)
 	if err != nil {
@@ -789,6 +796,27 @@ func (s *marketplaceService) buildSplitItems(ctx context.Context, clinicID uuid.
 			PercentualValue: s.defaultFeePercent,
 		},
 	}
+}
+
+// checkPlanAccess verifies the clinic has at least the professional plan (or is on trial)
+func (s *marketplaceService) checkPlanAccess(ctx context.Context, clinicID uuid.UUID) error {
+	clinic, err := s.clinicRepo.GetByID(ctx, clinicID)
+	if err != nil {
+		return errors.ErrInternalInstance.WithError(err)
+	}
+
+	// Trial has full access
+	if clinic.GetSubscriptionStatus() == "trial" {
+		return nil
+	}
+
+	planSlug := clinic.GetPlanSlug()
+	planLevel := map[string]int{"basic": 0, "professional": 1, "advanced": 2}
+	if planLevel[planSlug] < planLevel["professional"] {
+		return errors.ErrUpgradeRequiredInstance.WithMessage("Pagamentos online requerem o plano Profissional")
+	}
+
+	return nil
 }
 
 // Converters

@@ -234,6 +234,8 @@ type mockClinicInfo struct {
 func (c *mockClinicInfo) GetID() uuid.UUID                    { return c.id }
 func (c *mockClinicInfo) GetAccountID() uuid.UUID              { return c.accountID }
 func (c *mockClinicInfo) GetRequirePaymentBeforeBooking() bool { return false }
+func (c *mockClinicInfo) GetPlanSlug() string                  { return "professional" }
+func (c *mockClinicInfo) GetSubscriptionStatus() string        { return "active" }
 
 type mockAppointmentRepo struct {
 	price float64

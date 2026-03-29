@@ -15,6 +15,7 @@ import (
 	clinicModel "github.com/aseno/backend/pkg/clinic/model"
 	emailSvc "github.com/aseno/backend/pkg/email/service"
 	notificationModel "github.com/aseno/backend/pkg/notification/model"
+	plan_model "github.com/aseno/backend/pkg/plan/model"
 	"github.com/aseno/backend/pkg/pagination"
 	patientModel "github.com/aseno/backend/pkg/patient/model"
 	portalModel "github.com/aseno/backend/pkg/portalaccount/model"
@@ -161,6 +162,9 @@ func newTestClinic() *clinicModel.Clinic {
 		},
 		Account: &account_model.Account{
 			SubscriptionStatus: account_model.SubscriptionStatusActive,
+			Plan: &plan_model.Plan{
+				Slug: "professional",
+			},
 		},
 	}
 }
