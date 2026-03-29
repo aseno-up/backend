@@ -10,13 +10,14 @@ import (
 type AppointmentStatus string
 
 const (
-	AppointmentStatusPending     AppointmentStatus = "pending"     // Awaiting confirmation
-	AppointmentStatusConfirmed   AppointmentStatus = "confirmed"   // Confirmed by patient
-	AppointmentStatusCanceled    AppointmentStatus = "canceled"    // Canceled
-	AppointmentStatusNoShow      AppointmentStatus = "no_show"     // Patient didn't show up
-	AppointmentStatusNoResponse  AppointmentStatus = "no_response" // Patient didn't respond to confirmation
-	AppointmentStatusCompleted   AppointmentStatus = "completed"   // Appointment finished
-	AppointmentStatusRescheduled AppointmentStatus = "rescheduled" // Rescheduled to another time
+	AppointmentStatusAwaitingPayment AppointmentStatus = "awaiting_payment" // Awaiting online payment before confirming
+	AppointmentStatusPending         AppointmentStatus = "pending"          // Awaiting confirmation
+	AppointmentStatusConfirmed       AppointmentStatus = "confirmed"        // Confirmed by patient
+	AppointmentStatusCanceled        AppointmentStatus = "canceled"         // Canceled
+	AppointmentStatusNoShow          AppointmentStatus = "no_show"          // Patient didn't show up
+	AppointmentStatusNoResponse      AppointmentStatus = "no_response"      // Patient didn't respond to confirmation
+	AppointmentStatusCompleted       AppointmentStatus = "completed"        // Appointment finished
+	AppointmentStatusRescheduled     AppointmentStatus = "rescheduled"      // Rescheduled to another time
 )
 
 // AppointmentType represents the type of appointment
@@ -44,7 +45,7 @@ type Appointment struct {
 	PatientNotes   string                 `json:"patient_notes"`                                                      // Notes from patient
 	Procedures     []AppointmentProcedure `json:"procedures,omitempty" gorm:"foreignKey:AppointmentID;references:ID"` // N:N relationship with procedures
 	Price          float64                `json:"price" gorm:"type:decimal(10,2)"`                                    // Total price for this appointment
-	PaymentStatus  PaymentStatus          `json:"payment_status" gorm:"not null;default:'pending';index"`              // Denormalized: pending, partial, paid
+	PaymentStatus  PaymentStatus          `json:"payment_status" gorm:"not null;default:'pending';index"`             // Denormalized: pending, partial, paid
 	ConfirmedAt    *time.Time             `json:"confirmed_at,omitempty"`
 	CanceledAt     *time.Time             `json:"canceled_at,omitempty"`
 	CancelReason   string                 `json:"cancel_reason"`
@@ -56,11 +57,13 @@ type Appointment struct {
 	ConfirmationExpiresAt *time.Time `json:"confirmation_expires_at,omitempty" gorm:"index"`
 
 	// Legacy field (deprecated, use specific reminder fields)
-	ReminderSentAt *time.Time `json:"reminder_sent_at,omitempty"`
-	GoogleEventID  string     `json:"-"` // Google Calendar event ID
-	CreatedAt      time.Time  `json:"created_at"`
-	UpdatedAt      time.Time  `json:"updated_at"`
-	DeletedAt      *time.Time `json:"deleted_at,omitempty" gorm:"index"`
+	ReminderSentAt   *time.Time `json:"reminder_sent_at,omitempty"`
+	GoogleEventID    string     `json:"-"` // Google Calendar event ID
+	PaymentToken     string     `json:"payment_token,omitempty" gorm:"index"`
+	PaymentExpiresAt *time.Time `json:"payment_expires_at,omitempty" gorm:"index"`
+	CreatedAt        time.Time  `json:"created_at"`
+	UpdatedAt        time.Time  `json:"updated_at"`
+	DeletedAt        *time.Time `json:"deleted_at,omitempty" gorm:"index"`
 
 	// Relationships (for preloading)
 	Patient      *PatientInfo      `json:"patient,omitempty" gorm:"foreignKey:PatientID;references:ID"`

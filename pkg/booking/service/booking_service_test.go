@@ -293,6 +293,138 @@ func TestGetSpecialties_ReturnsActiveOnly(t *testing.T) {
 	assert.Equal(t, "Psicologia", result[0].Name)
 }
 
+func TestCreateBooking_RequirePayment_WithPricedProcedure_SetsAwaitingPayment(t *testing.T) {
+	svc, clinicRepo, profRepo, aptRepo, patientRepo, notifSvc, _, procRepo, _ := newTestService()
+	ctx := context.Background()
+
+	clinic := newTestClinic()
+	clinic.Settings.RequirePaymentBeforeBooking = true
+
+	profID := uuid.New()
+	procID := uuid.New()
+	professional := &professionalModel.Professional{ID: profID, ClinicID: clinic.ID, Name: "Dr. Ana"}
+	procedure := &procedureModel.Procedure{ID: procID, ClinicID: clinic.ID, DurationMinutes: 30, Price: 150.0}
+
+	futureTime := time.Now().Add(24 * time.Hour)
+
+	clinicRepo.On("GetBySlug", ctx, "clinica-teste").Return(clinic, nil)
+	profRepo.On("GetByID", ctx, profID, clinic.ID).Return(professional, nil)
+	procRepo.On("GetByID", procID, clinic.ID).Return(procedure, nil)
+	aptRepo.On("CheckConflict", ctx, clinic.ID, profID, futureTime, mock.Anything, mock.Anything).Return(false, nil)
+	patientRepo.On("Create", ctx, mock.AnythingOfType("*model.Patient")).Return(nil)
+	aptRepo.On("Create", ctx, mock.MatchedBy(func(a *appointmentModel.Appointment) bool {
+		return a.Status == appointmentModel.AppointmentStatusAwaitingPayment && a.Price == 150.0
+	})).Return(nil)
+	notifSvc.On("Create", ctx, mock.AnythingOfType("*model.Notification")).Return(nil)
+
+	result, err := svc.CreateBooking(ctx, "clinica-teste", &bookingModel.CreateBookingRequest{
+		ProfessionalID: profID,
+		StartTime:      futureTime,
+		ProcedureID:    &procID,
+		PatientName:    "João",
+		PatientPhone:   "11888887777",
+	})
+
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.Equal(t, "awaiting_payment", result.Status)
+	assert.Equal(t, 150.0, result.Price)
+}
+
+func TestCreateBooking_RequirePayment_NoProcedure_ReturnsError(t *testing.T) {
+	svc, clinicRepo, profRepo, aptRepo, patientRepo, _, _, _, _ := newTestService()
+	ctx := context.Background()
+
+	clinic := newTestClinic()
+	clinic.Settings.RequirePaymentBeforeBooking = true
+
+	profID := uuid.New()
+	professional := &professionalModel.Professional{ID: profID, ClinicID: clinic.ID, Name: "Dr. Ana"}
+
+	futureTime := time.Now().Add(24 * time.Hour)
+
+	clinicRepo.On("GetBySlug", ctx, "clinica-teste").Return(clinic, nil)
+	profRepo.On("GetByID", ctx, profID, clinic.ID).Return(professional, nil)
+	aptRepo.On("CheckConflict", ctx, clinic.ID, profID, futureTime, mock.Anything, mock.Anything).Return(false, nil)
+	patientRepo.On("Create", ctx, mock.AnythingOfType("*model.Patient")).Return(nil)
+
+	_, err := svc.CreateBooking(ctx, "clinica-teste", &bookingModel.CreateBookingRequest{
+		ProfessionalID: profID,
+		StartTime:      futureTime,
+		PatientName:    "João",
+		PatientPhone:   "11888887777",
+	})
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "pagamento antecipado")
+}
+
+func TestCreateBooking_RequirePayment_ProcedureWithNoPrice_ReturnsError(t *testing.T) {
+	svc, clinicRepo, profRepo, aptRepo, patientRepo, _, _, procRepo, _ := newTestService()
+	ctx := context.Background()
+
+	clinic := newTestClinic()
+	clinic.Settings.RequirePaymentBeforeBooking = true
+
+	profID := uuid.New()
+	procID := uuid.New()
+	professional := &professionalModel.Professional{ID: profID, ClinicID: clinic.ID, Name: "Dr. Ana"}
+	procedure := &procedureModel.Procedure{ID: procID, ClinicID: clinic.ID, DurationMinutes: 30, Price: 0}
+
+	futureTime := time.Now().Add(24 * time.Hour)
+
+	clinicRepo.On("GetBySlug", ctx, "clinica-teste").Return(clinic, nil)
+	profRepo.On("GetByID", ctx, profID, clinic.ID).Return(professional, nil)
+	procRepo.On("GetByID", procID, clinic.ID).Return(procedure, nil)
+	aptRepo.On("CheckConflict", ctx, clinic.ID, profID, futureTime, mock.Anything, mock.Anything).Return(false, nil)
+	patientRepo.On("Create", ctx, mock.AnythingOfType("*model.Patient")).Return(nil)
+
+	_, err := svc.CreateBooking(ctx, "clinica-teste", &bookingModel.CreateBookingRequest{
+		ProfessionalID: profID,
+		StartTime:      futureTime,
+		ProcedureID:    &procID,
+		PatientName:    "João",
+		PatientPhone:   "11888887777",
+	})
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "pagamento antecipado")
+}
+
+func TestCreateBooking_NoPaymentRequired_NoProcedure_Works(t *testing.T) {
+	svc, clinicRepo, profRepo, aptRepo, patientRepo, notifSvc, _, _, _ := newTestService()
+	ctx := context.Background()
+
+	clinic := newTestClinic()
+	clinic.Settings.RequirePaymentBeforeBooking = false
+
+	profID := uuid.New()
+	professional := &professionalModel.Professional{ID: profID, ClinicID: clinic.ID, Name: "Dr. Ana"}
+
+	futureTime := time.Now().Add(24 * time.Hour)
+
+	clinicRepo.On("GetBySlug", ctx, "clinica-teste").Return(clinic, nil)
+	profRepo.On("GetByID", ctx, profID, clinic.ID).Return(professional, nil)
+	aptRepo.On("CheckConflict", ctx, clinic.ID, profID, futureTime, mock.Anything, mock.Anything).Return(false, nil)
+	patientRepo.On("Create", ctx, mock.AnythingOfType("*model.Patient")).Return(nil)
+	aptRepo.On("Create", ctx, mock.MatchedBy(func(a *appointmentModel.Appointment) bool {
+		return a.Status == appointmentModel.AppointmentStatusPending && a.Price == 0
+	})).Return(nil)
+	notifSvc.On("Create", ctx, mock.AnythingOfType("*model.Notification")).Return(nil)
+
+	result, err := svc.CreateBooking(ctx, "clinica-teste", &bookingModel.CreateBookingRequest{
+		ProfessionalID: profID,
+		StartTime:      futureTime,
+		PatientName:    "João",
+		PatientPhone:   "11888887777",
+	})
+
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.Equal(t, "pending", result.Status)
+	assert.Equal(t, 0.0, result.Price)
+}
+
 func TestGetProcedures_FilteredBySpecialty(t *testing.T) {
 	svc, clinicRepo, _, _, _, _, _, procRepo, _ := newTestService()
 	ctx := context.Background()

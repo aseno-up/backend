@@ -10,18 +10,19 @@ import (
 
 // ClinicBookingInfo contains public clinic data for booking page
 type ClinicBookingInfo struct {
-	Name                      string `json:"name"`
-	Slug                      string `json:"slug"`
-	LogoURL                   string `json:"logo_url"`
-	PrimaryColor              string `json:"primary_color"`
-	Phone                     string `json:"phone"`
-	Address                   string `json:"address"`
-	City                      string `json:"city"`
-	State                     string `json:"state"`
-	DefaultAppointmentMinutes int    `json:"default_appointment_minutes"`
-	AboutUs                   string `json:"about_us"`
-	ProfessionalCount         int    `json:"professional_count"`
-	SpecialtyCount            int    `json:"specialty_count"`
+	Name                        string `json:"name"`
+	Slug                        string `json:"slug"`
+	LogoURL                     string `json:"logo_url"`
+	PrimaryColor                string `json:"primary_color"`
+	Phone                       string `json:"phone"`
+	Address                     string `json:"address"`
+	City                        string `json:"city"`
+	State                       string `json:"state"`
+	DefaultAppointmentMinutes   int    `json:"default_appointment_minutes"`
+	AboutUs                     string `json:"about_us"`
+	ProfessionalCount           int    `json:"professional_count"`
+	SpecialtyCount              int    `json:"specialty_count"`
+	RequirePaymentBeforeBooking bool   `json:"require_payment_before_booking"`
 }
 
 // SpecialtyBookingInfo contains public specialty data for booking
@@ -80,9 +81,13 @@ type CreateBookingRequest struct {
 // BookingResponse represents the response after creating a booking
 type BookingResponse struct {
 	ID           uuid.UUID `json:"id"`
+	ClinicID     uuid.UUID `json:"clinic_id"`
 	Professional string    `json:"professional"`
 	StartTime    time.Time `json:"start_time"`
 	EndTime      time.Time `json:"end_time"`
 	Status       string    `json:"status"`
+	Price        float64   `json:"price"`
+	PaymentToken string    `json:"payment_token,omitempty"`
+	PaymentURL   string    `json:"payment_url,omitempty"`
 	Message      string    `json:"message"`
 }

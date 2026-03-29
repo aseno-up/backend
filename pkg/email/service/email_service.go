@@ -69,6 +69,7 @@ type BookingConfirmationEmailData struct {
 	StartTime        time.Time
 	EndTime          time.Time
 	PortalLink       string // Link to create portal account
+	PaymentURL       string // Link to payment page (if payment required)
 }
 
 // PortalEmailVerificationData contains data for portal email verification
@@ -491,6 +492,14 @@ func (s *smtpEmailService) renderBookingConfirmationTemplate(data *BookingConfir
             <p style="color:#607d94;font-size:14px;">
                 Aguarde a confirmação da clínica. Você receberá uma notificação quando o agendamento for confirmado.
             </p>
+
+            {{if .PaymentURL}}
+            <div style="background:#fffbeb;border:1px solid #fbbf24;border-radius:8px;padding:16px;margin:20px 0;text-align:center;">
+                <p style="margin:0 0 12px;font-size:14px;color:#92400e;font-weight:600;">Pagamento pendente</p>
+                <p style="margin:0 0 16px;font-size:13px;color:#a16207;">Realize o pagamento para confirmar seu agendamento.</p>
+                <a href="{{.PaymentURL}}" style="display:inline-block;background:#0891b2;color:white;padding:12px 30px;text-decoration:none;border-radius:6px;font-weight:600;font-size:14px;">Pagar agora</a>
+            </div>
+            {{end}}
 
             {{if .PortalLink}}
             <p style="text-align:center;margin:28px 0 12px;">

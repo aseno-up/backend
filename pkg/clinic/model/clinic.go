@@ -73,6 +73,9 @@ type ClinicSettings struct {
 	WhatsAppRemindersEnabled bool `json:"whatsapp_reminders_enabled"`
 	EmailRemindersEnabled    bool `json:"email_reminders_enabled"`
 
+	// Payment settings
+	RequirePaymentBeforeBooking bool `json:"require_payment_before_booking"`
+
 	// Public booking page settings
 	AboutUs string `json:"about_us,omitempty"`
 
@@ -165,6 +168,9 @@ type UpdateClinicSettingsRequest struct {
 	RequireConfirmation       *bool  `json:"require_confirmation,omitempty"`
 	WhatsAppRemindersEnabled  *bool  `json:"whatsapp_reminders_enabled,omitempty"`
 	EmailRemindersEnabled     *bool  `json:"email_reminders_enabled,omitempty"`
+
+	// Payment settings
+	RequirePaymentBeforeBooking *bool `json:"require_payment_before_booking,omitempty"`
 
 	// Public booking page settings
 	AboutUs *string `json:"about_us,omitempty"`

@@ -233,6 +233,17 @@ func (s *brevoEmailService) SendBookingConfirmation(ctx context.Context, data *B
 	dateFormatted := data.StartTime.Format("02/01/2006")
 	timeFormatted := data.StartTime.Format("15:04") + " - " + data.EndTime.Format("15:04")
 
+	paymentSection := ""
+	if data.PaymentURL != "" {
+		paymentSection = fmt.Sprintf(`
+			<div style="background:#fffbeb;border:1px solid #fbbf24;border-radius:8px;padding:16px;margin:20px 0;text-align:center;">
+				<p style="margin:0 0 12px;font-size:14px;color:#92400e;font-weight:600;">Pagamento pendente</p>
+				<p style="margin:0 0 16px;font-size:13px;color:#a16207;">Realize o pagamento para confirmar seu agendamento.</p>
+				<a href="%s" style="display:inline-block;background:#0891b2;color:white;padding:12px 30px;text-decoration:none;border-radius:6px;font-weight:600;font-size:14px;">Pagar agora</a>
+			</div>
+		`, data.PaymentURL)
+	}
+
 	portalSection := ""
 	if data.PortalLink != "" {
 		portalSection = fmt.Sprintf(`
@@ -275,11 +286,12 @@ func (s *brevoEmailService) SendBookingConfirmation(ctx context.Context, data *B
 					Aguarde a confirmação da clínica. Você receberá uma notificação quando o agendamento for confirmado.
 				</p>
 				%s
+				%s
 				<p style="color:#a0aec0;font-size:12px;margin-top:32px;text-align:center;">
 					Agendamento online por <strong>aseno</strong>
 				</p>
 			</div>
-		`, data.RecipientName, data.ClinicName, data.ProfessionalName, dateFormatted, timeFormatted, portalSection),
+		`, data.RecipientName, data.ClinicName, data.ProfessionalName, dateFormatted, timeFormatted, paymentSection, portalSection),
 	})
 
 	if err != nil {

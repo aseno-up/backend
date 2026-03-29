@@ -118,6 +118,10 @@ import (
 	waitlist_model "github.com/aseno/backend/pkg/waitlist/model"
 	waitlist_repository "github.com/aseno/backend/pkg/waitlist/repository"
 	waitlist_service "github.com/aseno/backend/pkg/waitlist/service"
+	marketplace_handler "github.com/aseno/backend/pkg/marketplace/handler"
+	marketplace_model "github.com/aseno/backend/pkg/marketplace/model"
+	marketplace_repository "github.com/aseno/backend/pkg/marketplace/repository"
+	marketplace_service "github.com/aseno/backend/pkg/marketplace/service"
 	lead_crm "github.com/aseno/backend/pkg/lead/crm"
 	lead_notion "github.com/aseno/backend/pkg/lead/crm/notion"
 	lead_handler "github.com/aseno/backend/pkg/lead/handler"
@@ -363,6 +367,7 @@ func main() {
 		portalAccountRepo,
 		emailSvc,
 		cfg.GetFrontendURL(),
+		cfg.GetBookingPaymentTimeoutMinutes(),
 	)
 
 	// Initialize auth service with or without Google OAuth
@@ -573,6 +578,10 @@ func main() {
 	sessionPlanWorker := worker.NewSessionPlanWorker(sessionPlanService, 1*time.Hour)
 	go sessionPlanWorker.Start()
 
+	// Initialize Payment Timeout worker (cancels awaiting_payment appointments)
+	paymentTimeoutWorker := worker.NewPaymentTimeoutWorker(db.GetDB(), cfg.GetBookingPaymentTimeoutMinutes())
+	go paymentTimeoutWorker.Start()
+
 	// Initialize RabbitMQ queue (if configured)
 	var messageQueue queue.Queue
 	var reminderWorker *worker.ReminderWorker
@@ -688,6 +697,36 @@ func main() {
 	var paymentHandler payment_handler.PaymentHandler
 	if paymentService != nil {
 		paymentHandler = payment_handler.NewPaymentHandler(paymentService, cfg.GetAsaasWebhookSecret())
+	}
+
+	// Initialize Marketplace service and handler (if Asaas client and encryption key are configured)
+	var marketplaceHdlr marketplace_handler.MarketplaceHandler
+	if asaasClient != nil && cfg.GetEncryptionKey() != "" {
+		subaccountRepo := marketplace_repository.NewSubaccountRepository(db.GetDB())
+		splitConfigRepo := marketplace_repository.NewSplitConfigRepository(db.GetDB())
+		clinicPaymentRepo := marketplace_repository.NewClinicPaymentRepository(db.GetDB())
+		mktClinicRepo := marketplace_service.NewClinicRepoAdapter(db.GetDB())
+		mktAptRepo := marketplace_service.NewAppointmentRepoAdapter(db.GetDB())
+		mktAptPaymentRepo := marketplace_service.NewAppointmentPaymentRepoAdapter(db.GetDB())
+
+		mktService := marketplace_service.NewMarketplaceService(
+			asaasClient,
+			subaccountRepo,
+			splitConfigRepo,
+			clinicPaymentRepo,
+			mktClinicRepo,
+			mktAptRepo,
+			mktAptPaymentRepo,
+			marketplace_service.MarketplaceServiceConfig{
+				EncryptionKey:         cfg.GetEncryptionKey(),
+				AsenoWalletID:         cfg.GetAsenoWalletID(),
+				DefaultFeePercent:     cfg.GetMarketplaceDefaultFeePercent(),
+				PaymentTimeoutMinutes: cfg.GetBookingPaymentTimeoutMinutes(),
+				WebhookBaseURL:        cfg.GetMarketplaceWebhookURL(),
+			},
+		)
+		marketplaceHdlr = marketplace_handler.NewMarketplaceHandler(mktService, cfg.GetMarketplaceWebhookSecret())
+		logger.Println("Marketplace service initialized")
 	}
 
 	// Initialize Calendar handler (if service is configured)
@@ -814,6 +853,7 @@ func main() {
 		appointmentPaymentHandler,
 		specialtyHandler,
 		portalHdlr,
+		marketplaceHdlr,
 		authMiddleware,
 		tenantMiddleware,
 	)
@@ -903,6 +943,7 @@ func setupRouter(
 	appointmentPaymentHandler appointment_handler.AppointmentPaymentHandler,
 	specialtyHandler *specialty_handler.SpecialtyHandler,
 	portalHandler *portalaccount_handler.PortalHandler,
+	marketplaceHandler marketplace_handler.MarketplaceHandler,
 	authMiddleware auth_middleware.AuthMiddleware,
 	tenantMiddleware auth_middleware.TenantMiddleware,
 ) *gin.Engine {
@@ -977,6 +1018,13 @@ func setupRouter(
 				billingAuthOnly := authOnly.Group("")
 				billingAuthOnly.Use(authMiddleware.RequireFinancialAccess())
 				paymentHandler.RegisterRoutes(billingAuthOnly)
+			}
+
+			// Marketplace routes (financial access required)
+			if marketplaceHandler != nil {
+				mktAuthOnly := authOnly.Group("")
+				mktAuthOnly.Use(authMiddleware.RequireFinancialAccess())
+				marketplaceHandler.RegisterRoutes(mktAuthOnly)
 			}
 		}
 
@@ -1096,6 +1144,12 @@ func setupRouter(
 		// Payment webhook (public, validated by secret)
 		if paymentHandler != nil {
 			v1.POST("/billing/webhook", paymentHandler.Webhook)
+		}
+
+		// Marketplace public routes and webhook
+		if marketplaceHandler != nil {
+			marketplaceHandler.RegisterPublicRoutes(v1)
+			marketplaceHandler.RegisterWebhookRoutes(v1)
 		}
 	}
 
@@ -1217,11 +1271,22 @@ func runMigrations(db *database.Database) error {
 		&specialty_model.Specialty{},
 		&professional_model.ProfessionalSpecialty{},
 		&portalaccount_model.PortalAccount{},
+		// Marketplace (subcontas)
+		&marketplace_model.Subaccount{},
+		&marketplace_model.SplitConfig{},
+		&marketplace_model.ClinicPayment{},
 	}
 
 	if err := db.AutoMigrate(models...); err != nil {
 		return err
 	}
+
+	// Partial index for payment timeout worker (only indexes awaiting_payment rows)
+	db.GetDB().Exec(`
+		CREATE INDEX IF NOT EXISTS idx_appointments_awaiting_payment
+		ON appointments (status, payment_expires_at)
+		WHERE status = 'awaiting_payment'
+	`)
 
 	// Data Migration: Migrando plan, status, e asaas id da tabela clinics para a nova accounts
 	if err := db.GetDB().Exec(`

@@ -80,16 +80,17 @@ type BookingService interface {
 
 // bookingService implements BookingService
 type bookingService struct {
-	clinicRepo       ClinicProvider
-	professionalRepo ProfessionalProvider
-	appointmentRepo  AppointmentProvider
-	patientRepo      PatientProvider
-	notificationSvc  NotificationCreator
-	specialtyRepo    SpecialtyProvider
-	procedureRepo    ProcedureProvider
-	portalRepo       PortalAccountCreator
-	emailSvc         emailService.EmailService
-	frontendURL      string
+	clinicRepo                   ClinicProvider
+	professionalRepo             ProfessionalProvider
+	appointmentRepo              AppointmentProvider
+	patientRepo                  PatientProvider
+	notificationSvc              NotificationCreator
+	specialtyRepo                SpecialtyProvider
+	procedureRepo                ProcedureProvider
+	portalRepo                   PortalAccountCreator
+	emailSvc                     emailService.EmailService
+	frontendURL                  string
+	bookingPaymentTimeoutMinutes int
 }
 
 // NewBookingService creates a new booking service
@@ -104,18 +105,24 @@ func NewBookingService(
 	portalRepo PortalAccountCreator,
 	emailSvc emailService.EmailService,
 	frontendURL string,
+	paymentTimeoutMinutes ...int,
 ) BookingService {
+	timeout := 15
+	if len(paymentTimeoutMinutes) > 0 && paymentTimeoutMinutes[0] > 0 {
+		timeout = paymentTimeoutMinutes[0]
+	}
 	return &bookingService{
-		clinicRepo:       clinicRepo,
-		professionalRepo: professionalRepo,
-		appointmentRepo:  appointmentRepo,
-		patientRepo:      patientRepo,
-		notificationSvc:  notificationSvc,
-		specialtyRepo:    specialtyRepo,
-		procedureRepo:    procedureRepo,
-		portalRepo:       portalRepo,
-		emailSvc:         emailSvc,
-		frontendURL:      frontendURL,
+		clinicRepo:                   clinicRepo,
+		professionalRepo:             professionalRepo,
+		appointmentRepo:              appointmentRepo,
+		patientRepo:                  patientRepo,
+		notificationSvc:              notificationSvc,
+		specialtyRepo:                specialtyRepo,
+		procedureRepo:                procedureRepo,
+		portalRepo:                   portalRepo,
+		emailSvc:                     emailSvc,
+		frontendURL:                  frontendURL,
+		bookingPaymentTimeoutMinutes: timeout,
 	}
 }
 
@@ -165,8 +172,9 @@ func (s *bookingService) GetClinicInfo(ctx context.Context, slug string) (*model
 		State:                     clinic.State,
 		DefaultAppointmentMinutes: defaultMinutes,
 		AboutUs:                   clinic.Settings.AboutUs,
-		ProfessionalCount:         profCount,
-		SpecialtyCount:            int(specCount),
+		ProfessionalCount:           profCount,
+		SpecialtyCount:              int(specCount),
+		RequirePaymentBeforeBooking: clinic.Settings.RequirePaymentBeforeBooking,
 	}, nil
 }
 
@@ -410,9 +418,15 @@ func (s *bookingService) CreateBooking(ctx context.Context, slug string, req *mo
 	if durationMinutes == 0 {
 		durationMinutes = 50
 	}
+	var appointmentPrice float64
 	if req.ProcedureID != nil {
-		if proc, err := s.procedureRepo.GetByID(*req.ProcedureID, clinic.ID); err == nil && proc.DurationMinutes > 0 {
-			durationMinutes = proc.DurationMinutes
+		if proc, err := s.procedureRepo.GetByID(*req.ProcedureID, clinic.ID); err == nil {
+			if proc.DurationMinutes > 0 {
+				durationMinutes = proc.DurationMinutes
+			}
+			if proc.Price > 0 {
+				appointmentPrice = proc.Price
+			}
 		}
 	}
 	endTime := req.StartTime.Add(time.Duration(durationMinutes) * time.Minute)
@@ -461,16 +475,39 @@ func (s *bookingService) CreateBooking(ctx context.Context, slug string, req *mo
 		}
 	}
 
+	// Determine initial status based on payment requirement
+	initialStatus := appointmentModel.AppointmentStatusPending
+	if clinic.Settings.RequirePaymentBeforeBooking {
+		if appointmentPrice <= 0 {
+			return nil, errors.ErrValidationInstance.WithMessage("Esta clínica exige pagamento antecipado. Selecione um procedimento com preço para continuar.")
+		}
+		initialStatus = appointmentModel.AppointmentStatusAwaitingPayment
+	}
+
+	// Generate payment token and expiration for appointments with a price
+	var paymentToken string
+	var paymentExpiresAt *time.Time
+	if appointmentPrice > 0 {
+		paymentToken = uuid.New().String()
+		if clinic.Settings.RequirePaymentBeforeBooking {
+			exp := time.Now().Add(time.Duration(s.bookingPaymentTimeoutMinutes) * time.Minute)
+			paymentExpiresAt = &exp
+		}
+	}
+
 	appointment := &appointmentModel.Appointment{
-		ClinicID:       clinic.ID,
-		PatientID:      newPatient.ID,
-		ProfessionalID: req.ProfessionalID,
-		StartTime:      req.StartTime,
-		EndTime:        endTime,
-		Status:         appointmentModel.AppointmentStatusPending,
-		Type:           appointmentModel.AppointmentTypeRegular,
-		Title:          "Agendamento Online",
-		PatientNotes:   req.PatientNotes,
+		ClinicID:         clinic.ID,
+		PatientID:        newPatient.ID,
+		ProfessionalID:   req.ProfessionalID,
+		StartTime:        req.StartTime,
+		EndTime:          endTime,
+		Status:           initialStatus,
+		Type:             appointmentModel.AppointmentTypeRegular,
+		Title:            "Agendamento Online",
+		PatientNotes:     req.PatientNotes,
+		Price:            appointmentPrice,
+		PaymentToken:     paymentToken,
+		PaymentExpiresAt: paymentExpiresAt,
 	}
 
 	if err := s.appointmentRepo.Create(ctx, appointment); err != nil {
@@ -478,6 +515,12 @@ func (s *bookingService) CreateBooking(ctx context.Context, slug string, req *mo
 	}
 
 	s.createBookingNotification(ctx, clinic.ID, req.PatientName, professional.Name, req.StartTime, appointment.ID)
+
+	// Build payment URL when token exists (for both required and optional payment)
+	var paymentURL string
+	if paymentToken != "" && s.frontendURL != "" {
+		paymentURL = fmt.Sprintf("%s/pagar/%s", s.frontendURL, paymentToken)
+	}
 
 	// Send booking confirmation email to patient (if email provided)
 	if req.PatientEmail != "" && s.emailSvc != nil {
@@ -504,6 +547,7 @@ func (s *bookingService) CreateBooking(ctx context.Context, slug string, req *mo
 			StartTime:        emailStart,
 			EndTime:          emailEnd,
 			PortalLink:       portalLink,
+			PaymentURL:       paymentURL,
 		}); err != nil {
 			fmt.Printf("[BOOKING] Failed to send confirmation email to %s: %v\n", req.PatientEmail, err)
 		}
@@ -511,10 +555,14 @@ func (s *bookingService) CreateBooking(ctx context.Context, slug string, req *mo
 
 	return &model.BookingResponse{
 		ID:           appointment.ID,
+		ClinicID:     clinic.ID,
 		Professional: professional.Name,
 		StartTime:    appointment.StartTime,
 		EndTime:      appointment.EndTime,
 		Status:       string(appointment.Status),
+		Price:        appointment.Price,
+		PaymentToken: paymentToken,
+		PaymentURL:   paymentURL,
 		Message:      "Agendamento realizado com sucesso! Aguarde a confirmacao da clinica.",
 	}, nil
 }

@@ -92,8 +92,16 @@ type Config struct {
 	openrouterTranscriberTitle string
 
 	// Notion CRM
-	notionAPIKey         string
-	notionCRMDatabaseID  string
+	notionAPIKey        string
+	notionCRMDatabaseID string
+
+	// Marketplace (subcontas Asaas)
+	encryptionKey                string
+	asenoWalletID                string
+	marketplaceDefaultFeePercent float64
+	marketplaceWebhookSecret     string
+	bookingPaymentTimeoutMinutes int
+	marketplaceWebhookURL        string
 }
 
 // NewConfig creates a new configuration from environment variables
@@ -154,6 +162,14 @@ func NewConfig() *Config {
 		openrouterTranscriberTitle:      getEnv("OPENROUTER_TRANSCRIBER_TITLE", "Aseno WhatsApp Transcriber"),
 		notionAPIKey:                    getEnv("NOTION_API_KEY", ""),
 		notionCRMDatabaseID:             getEnv("NOTION_CRM_DATABASE_ID", ""),
+
+		// Marketplace
+		encryptionKey:                getEnv("ENCRYPTION_KEY", ""),
+		asenoWalletID:                getEnv("ASENO_WALLET_ID", ""),
+		marketplaceDefaultFeePercent: getEnvAsFloat64("MARKETPLACE_DEFAULT_FEE_PERCENT", 0.0),
+		marketplaceWebhookSecret:      getEnv("MARKETPLACE_WEBHOOK_SECRET", ""),
+		bookingPaymentTimeoutMinutes: getEnvAsInt("BOOKING_PAYMENT_TIMEOUT_MINUTES", 15),
+		marketplaceWebhookURL:        getEnv("MARKETPLACE_WEBHOOK_URL", ""),
 	}
 }
 
@@ -389,6 +405,30 @@ func (c *Config) GetNotionAPIKey() string {
 
 func (c *Config) GetNotionCRMDatabaseID() string {
 	return c.notionCRMDatabaseID
+}
+
+func (c *Config) GetEncryptionKey() string {
+	return c.encryptionKey
+}
+
+func (c *Config) GetAsenoWalletID() string {
+	return c.asenoWalletID
+}
+
+func (c *Config) GetMarketplaceDefaultFeePercent() float64 {
+	return c.marketplaceDefaultFeePercent
+}
+
+func (c *Config) GetMarketplaceWebhookSecret() string {
+	return c.marketplaceWebhookSecret
+}
+
+func (c *Config) GetBookingPaymentTimeoutMinutes() int {
+	return c.bookingPaymentTimeoutMinutes
+}
+
+func (c *Config) GetMarketplaceWebhookURL() string {
+	return c.marketplaceWebhookURL
 }
 
 func getEnv(key, defaultValue string) string {
