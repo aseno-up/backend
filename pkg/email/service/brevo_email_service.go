@@ -287,3 +287,45 @@ func (s *brevoEmailService) SendBookingConfirmation(ctx context.Context, data *B
 	}
 	return nil
 }
+
+// SendPortalEmailVerification sends a portal email verification email using Brevo
+func (s *brevoEmailService) SendPortalEmailVerification(ctx context.Context, data *PortalEmailVerificationData) error {
+	_, _, err := s.client.TransactionalEmailsApi.SendTransacEmail(ctx, lib.SendSmtpEmail{
+		Sender: &lib.SendSmtpEmailSender{
+			Name:  s.senderName,
+			Email: s.senderEmail,
+		},
+		To: []lib.SendSmtpEmailTo{
+			{
+				Email: data.RecipientEmail,
+				Name:  data.RecipientName,
+			},
+		},
+		Subject: fmt.Sprintf("Verifique seu email — %s", data.ClinicName),
+		HtmlContent: fmt.Sprintf(`
+			<div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto;padding:32px 24px;">
+				<h2 style="color:#0d1b2a;margin-bottom:8px;">Verifique seu Email</h2>
+				<p style="color:#607d94;font-size:15px;line-height:1.6;">
+					Para ativar sua conta no portal de agendamentos da <strong>%s</strong>, clique no botão abaixo:
+				</p>
+				<p style="text-align:center;margin:32px 0;">
+					<a href="%s"
+					   style="background:#0891b2;color:#fff;text-decoration:none;padding:12px 32px;border-radius:8px;font-weight:600;font-size:15px;display:inline-block;">
+						Verificar Email
+					</a>
+				</p>
+				<p style="color:#a0aec0;font-size:12px;margin-top:32px;">
+					Se você não solicitou esta verificação, ignore este email.
+				</p>
+				<p style="color:#a0aec0;font-size:12px;text-align:center;margin-top:24px;">
+					Agendamento online por <strong>Aseno</strong>
+				</p>
+			</div>
+		`, data.ClinicName, data.VerifyLink),
+	})
+
+	if err != nil {
+		return fmt.Errorf("failed to send portal verification email via Brevo: %w", err)
+	}
+	return nil
+}

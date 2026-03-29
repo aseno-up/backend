@@ -84,7 +84,11 @@ import (
 	paymentmethod_model "github.com/aseno/backend/pkg/paymentmethod/model"
 	paymentmethod_repository "github.com/aseno/backend/pkg/paymentmethod/repository"
 	paymentmethod_service "github.com/aseno/backend/pkg/paymentmethod/service"
+	portalaccount_handler "github.com/aseno/backend/pkg/portalaccount/handler"
+	portalaccount_middleware "github.com/aseno/backend/pkg/portalaccount/middleware"
 	portalaccount_model "github.com/aseno/backend/pkg/portalaccount/model"
+	portalaccount_repository "github.com/aseno/backend/pkg/portalaccount/repository"
+	portalaccount_service "github.com/aseno/backend/pkg/portalaccount/service"
 	procedure_handler "github.com/aseno/backend/pkg/procedure/handler"
 	procedure_model "github.com/aseno/backend/pkg/procedure/model"
 	procedure_repository "github.com/aseno/backend/pkg/procedure/repository"
@@ -346,6 +350,8 @@ func main() {
 	}
 
 	// Initialize Booking service (needs emailSvc, used by AI Agent and public booking)
+	portalAccountRepo := portalaccount_repository.NewPortalAccountRepository(db.GetDB())
+
 	bookingSvc := booking_service.NewBookingService(
 		clinicRepo,
 		professionalRepo,
@@ -354,6 +360,7 @@ func main() {
 		notificationSvc,
 		specialtyRepo,
 		procedureRepo,
+		portalAccountRepo,
 		emailSvc,
 		cfg.GetFrontendURL(),
 	)
@@ -755,6 +762,22 @@ func main() {
 	// bookingSvc already exists
 	bookingHdlr := booking_handler.NewBookingHandler(bookingSvc)
 
+	// Initialize Portal service, middleware, and handler
+	portalSvc := portalaccount_service.NewPortalService(
+		portalAccountRepo,
+		clinicRepo,
+		patientRepo,
+		appointmentRepo,
+		professionalRepo,
+		procedureRepo,
+		notificationSvc,
+		emailSvc,
+		cfg.GetPortalJWTSecret(),
+		cfg.GetFrontendURL(),
+	)
+	portalMw := portalaccount_middleware.NewPortalMiddleware(portalSvc)
+	portalHdlr := portalaccount_handler.NewPortalHandler(portalSvc, portalMw)
+
 	// Setup router
 	router := setupRouter(
 		cfg,
@@ -790,6 +813,7 @@ func main() {
 		paymentMethodHandler,
 		appointmentPaymentHandler,
 		specialtyHandler,
+		portalHdlr,
 		authMiddleware,
 		tenantMiddleware,
 	)
@@ -878,6 +902,7 @@ func setupRouter(
 	paymentMethodHandler *paymentmethod_handler.PaymentMethodHandler,
 	appointmentPaymentHandler appointment_handler.AppointmentPaymentHandler,
 	specialtyHandler *specialty_handler.SpecialtyHandler,
+	portalHandler *portalaccount_handler.PortalHandler,
 	authMiddleware auth_middleware.AuthMiddleware,
 	tenantMiddleware auth_middleware.TenantMiddleware,
 ) *gin.Engine {
@@ -914,6 +939,9 @@ func setupRouter(
 
 		// Public booking routes (no auth required - online booking)
 		bookingHandler.RegisterRoutes(v1)
+
+		// Portal routes (public + portal-auth protected)
+		portalHandler.RegisterRoutes(v1)
 
 		// Public plan routes (no auth required)
 		planHandler.RegisterPublicRoutes(v1)
@@ -1311,6 +1339,9 @@ func seedDefaultPlans(db *gorm.DB) error {
 			Features: plan_model.StringArray{
 				"Até 5 profissionais",
 				"Agenda ilimitada",
+				"Landing page pública da clínica",
+				"Agendamento online",
+				"Portal do Paciente",
 				"Confirmações WhatsApp",
 				"Sessões recorrentes",
 				"Gestão de pacientes",
@@ -1336,6 +1367,7 @@ func seedDefaultPlans(db *gorm.DB) error {
 				"Até 15 profissionais",
 				"Tudo do Básico",
 				"Integração Google Calendar",
+				"Teleconsulta (Google Meet)",
 				"Lista de Espera Automática",
 				"Detector de Risco de Faltas",
 				"Relatórios de Prejuízo",

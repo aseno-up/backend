@@ -22,6 +22,9 @@ type Config struct {
 	JWTAccessTokenTTL  int // minutes
 	JWTRefreshTokenTTL int // days
 
+	// Portal JWT (separate secret for patient portal)
+	portalJWTSecret string
+
 	// Google OAuth (private - sensitive)
 	googleClientID        string
 	googleClientSecret    string
@@ -105,6 +108,7 @@ func NewConfig() *Config {
 		jwtSecret:                 getEnv("JWT_SECRET", ""),
 		JWTAccessTokenTTL:         getEnvAsInt("JWT_ACCESS_TOKEN_TTL", 15),
 		JWTRefreshTokenTTL:        getEnvAsInt("JWT_REFRESH_TOKEN_TTL", 7),
+		portalJWTSecret:           getEnv("PORTAL_JWT_SECRET", ""),
 		googleClientID:            getEnv("GOOGLE_CLIENT_ID", ""),
 		googleClientSecret:        getEnv("GOOGLE_CLIENT_SECRET", ""),
 		GoogleRedirectURL:         getEnv("GOOGLE_REDIRECT_URL", ""),
@@ -183,6 +187,14 @@ func (c *Config) ValidateForProduction() error {
 // GetDatabaseURL returns the database connection string
 func (c *Config) GetDatabaseURL() string {
 	return c.databaseURL
+}
+
+// GetPortalJWTSecret returns the portal JWT signing secret (falls back to JWT_SECRET if not set)
+func (c *Config) GetPortalJWTSecret() string {
+	if c.portalJWTSecret != "" {
+		return c.portalJWTSecret
+	}
+	return c.jwtSecret + "-portal"
 }
 
 // GetJWTSecret returns the JWT signing secret

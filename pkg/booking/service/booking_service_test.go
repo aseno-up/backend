@@ -17,6 +17,7 @@ import (
 	notificationModel "github.com/aseno/backend/pkg/notification/model"
 	"github.com/aseno/backend/pkg/pagination"
 	patientModel "github.com/aseno/backend/pkg/patient/model"
+	portalModel "github.com/aseno/backend/pkg/portalaccount/model"
 	procedureModel "github.com/aseno/backend/pkg/procedure/model"
 	professionalModel "github.com/aseno/backend/pkg/professional/model"
 	specialtyModel "github.com/aseno/backend/pkg/specialty/model"
@@ -122,6 +123,9 @@ func (m *mockEmailSvc) SendContactForm(ctx context.Context, data *emailSvc.Conta
 func (m *mockEmailSvc) SendBookingConfirmation(ctx context.Context, data *emailSvc.BookingConfirmationEmailData) error {
 	return m.Called(ctx, data).Error(0)
 }
+func (m *mockEmailSvc) SendPortalEmailVerification(ctx context.Context, data *emailSvc.PortalEmailVerificationData) error {
+	return m.Called(ctx, data).Error(0)
+}
 
 type mockProcedureRepo struct{ mock.Mock }
 
@@ -136,6 +140,12 @@ func (m *mockProcedureRepo) GetByID(id, clinicID uuid.UUID) (*procedureModel.Pro
 		return nil, args.Error(1)
 	}
 	return args.Get(0).(*procedureModel.Procedure), args.Error(1)
+}
+
+type mockPortalRepo struct{ mock.Mock }
+
+func (m *mockPortalRepo) Create(ctx context.Context, account *portalModel.PortalAccount) error {
+	return m.Called(ctx, account).Error(0)
 }
 
 // Helpers
@@ -163,9 +173,11 @@ func newTestService() (*bookingService, *mockClinicRepo, *mockProfessionalRepo, 
 	notifSvc := new(mockNotificationSvc)
 	specRepo := new(mockSpecialtyRepo)
 	procRepo := new(mockProcedureRepo)
+	portalRepo := new(mockPortalRepo)
+	portalRepo.On("Create", mock.Anything, mock.Anything).Return(nil)
 	emailMock := new(mockEmailSvc)
 
-	svc := NewBookingService(clinicRepo, profRepo, aptRepo, patientRepo, notifSvc, specRepo, procRepo, emailMock, "http://localhost:3001").(*bookingService)
+	svc := NewBookingService(clinicRepo, profRepo, aptRepo, patientRepo, notifSvc, specRepo, procRepo, portalRepo, emailMock, "http://localhost:3001").(*bookingService)
 	return svc, clinicRepo, profRepo, aptRepo, patientRepo, notifSvc, specRepo, procRepo, emailMock
 }
 

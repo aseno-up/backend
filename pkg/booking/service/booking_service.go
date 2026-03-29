@@ -13,6 +13,7 @@ import (
 	clinicModel "github.com/aseno/backend/pkg/clinic/model"
 	emailService "github.com/aseno/backend/pkg/email/service"
 	notificationModel "github.com/aseno/backend/pkg/notification/model"
+	portalModel "github.com/aseno/backend/pkg/portalaccount/model"
 	"github.com/aseno/backend/pkg/pagination"
 	patientModel "github.com/aseno/backend/pkg/patient/model"
 	procedureModel "github.com/aseno/backend/pkg/procedure/model"
@@ -56,6 +57,11 @@ type SpecialtyProvider interface {
 	GetByProfessionalIDs(professionalIDs []uuid.UUID) (map[uuid.UUID][]*specialtyModel.Specialty, error)
 }
 
+// PortalAccountCreator creates portal accounts for patients
+type PortalAccountCreator interface {
+	Create(ctx context.Context, account *portalModel.PortalAccount) error
+}
+
 // ProcedureProvider provides procedure operations
 type ProcedureProvider interface {
 	ListByClinicAndSpecialty(ctx context.Context, clinicID uuid.UUID, specialtyID *uuid.UUID) ([]*procedureModel.Procedure, error)
@@ -81,6 +87,7 @@ type bookingService struct {
 	notificationSvc  NotificationCreator
 	specialtyRepo    SpecialtyProvider
 	procedureRepo    ProcedureProvider
+	portalRepo       PortalAccountCreator
 	emailSvc         emailService.EmailService
 	frontendURL      string
 }
@@ -94,6 +101,7 @@ func NewBookingService(
 	notificationSvc NotificationCreator,
 	specialtyRepo SpecialtyProvider,
 	procedureRepo ProcedureProvider,
+	portalRepo PortalAccountCreator,
 	emailSvc emailService.EmailService,
 	frontendURL string,
 ) BookingService {
@@ -105,6 +113,7 @@ func NewBookingService(
 		notificationSvc:  notificationSvc,
 		specialtyRepo:    specialtyRepo,
 		procedureRepo:    procedureRepo,
+		portalRepo:       portalRepo,
 		emailSvc:         emailSvc,
 		frontendURL:      frontendURL,
 	}
@@ -432,6 +441,26 @@ func (s *bookingService) CreateBooking(ctx context.Context, slug string, req *mo
 		return nil, err
 	}
 
+	// Create portal account with registration token (for email link)
+	var registrationToken string
+	if req.PatientEmail != "" && s.portalRepo != nil {
+		token, err := portalModel.GenerateToken()
+		if err == nil {
+			registrationToken = token
+			expiresAt := time.Now().Add(portalModel.RegistrationTokenTTL)
+			portalAccount := &portalModel.PortalAccount{
+				PatientID:                  newPatient.ID,
+				ClinicID:                   clinic.ID,
+				Email:                      req.PatientEmail,
+				RegistrationToken:          token,
+				RegistrationTokenExpiresAt: &expiresAt,
+			}
+			if err := s.portalRepo.Create(ctx, portalAccount); err != nil {
+				fmt.Printf("[BOOKING] Failed to create portal account: %v\n", err)
+			}
+		}
+	}
+
 	appointment := &appointmentModel.Appointment{
 		ClinicID:       clinic.ID,
 		PatientID:      newPatient.ID,
@@ -453,8 +482,8 @@ func (s *bookingService) CreateBooking(ctx context.Context, slug string, req *mo
 	// Send booking confirmation email to patient (if email provided)
 	if req.PatientEmail != "" && s.emailSvc != nil {
 		portalLink := ""
-		if s.frontendURL != "" {
-			portalLink = fmt.Sprintf("%s/agendar/%s", s.frontendURL, clinic.Slug)
+		if s.frontendURL != "" && registrationToken != "" {
+			portalLink = fmt.Sprintf("%s/portal/criar-conta?token=%s", s.frontendURL, registrationToken)
 		}
 
 		// Convert times to clinic timezone for display in email

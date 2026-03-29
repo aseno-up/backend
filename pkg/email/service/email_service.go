@@ -18,6 +18,7 @@ type EmailService interface {
 	SendEmailVerification(ctx context.Context, data *EmailVerificationData) error
 	SendContactForm(ctx context.Context, data *ContactFormData) error
 	SendBookingConfirmation(ctx context.Context, data *BookingConfirmationEmailData) error
+	SendPortalEmailVerification(ctx context.Context, data *PortalEmailVerificationData) error
 }
 
 // InviteEmailData contains data for invite emails
@@ -68,6 +69,14 @@ type BookingConfirmationEmailData struct {
 	StartTime        time.Time
 	EndTime          time.Time
 	PortalLink       string // Link to create portal account
+}
+
+// PortalEmailVerificationData contains data for portal email verification
+type PortalEmailVerificationData struct {
+	RecipientEmail string
+	RecipientName  string
+	ClinicName     string
+	VerifyLink     string
 }
 
 // SMTPConfig holds SMTP configuration
@@ -527,6 +536,58 @@ func (s *smtpEmailService) renderBookingConfirmationTemplate(data *BookingConfir
 	return buf.String(), nil
 }
 
+// SendPortalEmailVerification sends a portal email verification email
+func (s *smtpEmailService) SendPortalEmailVerification(ctx context.Context, data *PortalEmailVerificationData) error {
+	subject := "Verifique seu email — " + data.ClinicName
+
+	tmpl := `
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <style>
+        body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+        .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+        .header { background: #0891b2; color: white; padding: 20px; text-align: center; border-radius: 8px 8px 0 0; }
+        .content { background: #f9fafb; padding: 30px; border-radius: 0 0 8px 8px; }
+        .button { display: inline-block; background: #0891b2; color: white; padding: 12px 30px; text-decoration: none; border-radius: 6px; margin: 20px 0; }
+        .footer { text-align: center; color: #666; font-size: 12px; margin-top: 20px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1 style="margin:0;font-size:22px;">Verifique seu Email</h1>
+            <p style="margin:4px 0 0;opacity:0.85;font-size:14px;">{{.ClinicName}}</p>
+        </div>
+        <div class="content">
+            <p>Olá!</p>
+            <p>Para ativar sua conta no portal de agendamentos, clique no botão abaixo:</p>
+            <p style="text-align:center;">
+                <a href="{{.VerifyLink}}" class="button">Verificar Email</a>
+            </p>
+            <p style="color:#666;font-size:13px;">Se você não solicitou esta verificação, ignore este email.</p>
+        </div>
+        <div class="footer">
+            <p>Agendamento online por <strong>Aseno</strong></p>
+        </div>
+    </div>
+</body>
+</html>`
+
+	t, err := template.New("portal_verify").Parse(tmpl)
+	if err != nil {
+		return err
+	}
+
+	var buf bytes.Buffer
+	if err := t.Execute(&buf, data); err != nil {
+		return err
+	}
+
+	return s.sendEmail(data.RecipientEmail, subject, buf.String())
+}
+
 // NoOpEmailService is a no-operation email service for development
 type noOpEmailService struct{}
 
@@ -565,5 +626,11 @@ func (s *noOpEmailService) SendContactForm(ctx context.Context, data *ContactFor
 func (s *noOpEmailService) SendBookingConfirmation(ctx context.Context, data *BookingConfirmationEmailData) error {
 	fmt.Printf("[EMAIL] NoOp: booking confirmation to %s at %s with %s\n",
 		data.RecipientEmail, data.ClinicName, data.ProfessionalName)
+	return nil
+}
+
+func (s *noOpEmailService) SendPortalEmailVerification(ctx context.Context, data *PortalEmailVerificationData) error {
+	fmt.Printf("[EMAIL] NoOp: portal verification to %s for %s (link: %s)\n",
+		data.RecipientEmail, data.ClinicName, data.VerifyLink)
 	return nil
 }
