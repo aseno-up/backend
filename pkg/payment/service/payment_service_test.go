@@ -502,7 +502,7 @@ func TestSwitchPlan_NewSubscription_FromTrial(t *testing.T) {
 	accountRepo.On("Update", ctx, mock.AnythingOfType("*model.Account")).Return(nil)
 
 	// Execute
-	result, err := svc.SwitchPlan(ctx, clinicID, "professional", "PIX", "MONTHLY", nil, nil)
+	result, err := svc.SwitchPlan(ctx, clinicID, "professional", "PIX", "MONTHLY", nil, nil, nil)
 
 	// Assertions
 	assert.NoError(t, err)
@@ -585,7 +585,7 @@ func TestSwitchPlan_ExistingActiveSubscription_UsesNextDueDate(t *testing.T) {
 	accountRepo.On("Update", ctx, mock.AnythingOfType("*model.Account")).Return(nil)
 
 	// Execute
-	result, err := svc.SwitchPlan(ctx, clinicID, "advanced", "CREDIT_CARD", "MONTHLY", nil, nil)
+	result, err := svc.SwitchPlan(ctx, clinicID, "advanced", "CREDIT_CARD", "MONTHLY", nil, nil, nil)
 
 	// Assertions
 	assert.NoError(t, err)
@@ -618,7 +618,7 @@ func TestSwitchPlan_InvalidPlan_ReturnsError(t *testing.T) {
 	planServiceMock.On("ListPlans", ctx).Return([]plan_model.Plan{}, nil)
 
 	// Execute with invalid plan
-	result, err := svc.SwitchPlan(ctx, clinicID, "invalid_plan", "PIX", "MONTHLY", nil, nil)
+	result, err := svc.SwitchPlan(ctx, clinicID, "invalid_plan", "PIX", "MONTHLY", nil, nil, nil)
 
 	// Assertions
 	assert.Error(t, err)
@@ -672,7 +672,7 @@ func TestSwitchPlan_YearlyCycle_CalculatesAnnualPrice(t *testing.T) {
 	accountRepo.On("Update", ctx, mock.AnythingOfType("*model.Account")).Return(nil)
 
 	// Execute
-	result, err := svc.SwitchPlan(ctx, clinicID, "basic", "PIX", "YEARLY", nil, nil)
+	result, err := svc.SwitchPlan(ctx, clinicID, "basic", "PIX", "YEARLY", nil, nil, nil)
 
 	assert.NoError(t, err)
 	assert.NotNil(t, result)
@@ -865,7 +865,7 @@ func TestSwitchPlan_SetsPendingNotActive(t *testing.T) {
 		return acc.SubscriptionStatus == account_model.SubscriptionStatusPending
 	})).Return(nil)
 
-	result, err := svc.SwitchPlan(ctx, clinicID, "basic", "PIX", "MONTHLY", nil, nil)
+	result, err := svc.SwitchPlan(ctx, clinicID, "basic", "PIX", "MONTHLY", nil, nil, nil)
 
 	assert.NoError(t, err)
 	assert.NotNil(t, result)
@@ -909,7 +909,7 @@ func TestSwitchPlan_EmptyAsaasID_ReturnsError(t *testing.T) {
 		NextDueDate: "",
 	}, nil)
 
-	result, err := svc.SwitchPlan(ctx, clinicID, "basic", "PIX", "MONTHLY", nil, nil)
+	result, err := svc.SwitchPlan(ctx, clinicID, "basic", "PIX", "MONTHLY", nil, nil, nil)
 
 	// Should return error, not try to save with empty ID
 	assert.Error(t, err)
@@ -976,7 +976,7 @@ func TestSwitchPlan_PopulatesPlanFields(t *testing.T) {
 		return acc.SubscriptionStatus == account_model.SubscriptionStatusPending
 	})).Return(nil)
 
-	result, err := svc.SwitchPlan(ctx, clinicID, "basic", "PIX", "MONTHLY", nil, nil)
+	result, err := svc.SwitchPlan(ctx, clinicID, "basic", "PIX", "MONTHLY", nil, nil, nil)
 
 	assert.NoError(t, err)
 	assert.NotNil(t, result)
@@ -1048,7 +1048,7 @@ func TestSwitchPlan_GhostSubscription_SkipsAsaasDelete(t *testing.T) {
 		return acc.SubscriptionStatus == account_model.SubscriptionStatusPending
 	})).Return(nil)
 
-	result, err := svc.SwitchPlan(ctx, clinicID, "basic", "PIX", "MONTHLY", nil, nil)
+	result, err := svc.SwitchPlan(ctx, clinicID, "basic", "PIX", "MONTHLY", nil, nil, nil)
 
 	assert.NoError(t, err)
 	assert.NotNil(t, result)

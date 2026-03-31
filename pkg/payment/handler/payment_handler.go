@@ -379,6 +379,7 @@ type SwitchPlanRequest struct {
 	Plan                 string                      `json:"plan" binding:"required,oneof=basic professional advanced"`
 	BillingType          string                      `json:"billing_type" binding:"required"`
 	Cycle                string                      `json:"cycle" binding:"required"`
+	OfferToken           *string                     `json:"offer_token,omitempty"`
 	CreditCard           *model.CreditCardInfo       `json:"credit_card,omitempty"`
 	CreditCardHolderInfo *model.CreditCardHolderInfo `json:"credit_card_holder_info,omitempty"`
 }
@@ -397,7 +398,7 @@ func (h *paymentHandler) SwitchPlan(c *gin.Context) {
 		return
 	}
 
-	subscription, err := h.service.SwitchPlan(c.Request.Context(), clinicID.(uuid.UUID), req.Plan, req.BillingType, req.Cycle, req.CreditCard, req.CreditCardHolderInfo)
+	subscription, err := h.service.SwitchPlan(c.Request.Context(), clinicID.(uuid.UUID), req.Plan, req.BillingType, req.Cycle, req.OfferToken, req.CreditCard, req.CreditCardHolderInfo)
 	if err != nil {
 		statusCode := errors.GetStatusCode(err)
 		c.JSON(statusCode, errors.ToResponse(err))

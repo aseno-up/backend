@@ -92,7 +92,7 @@ type PaymentService interface {
 	CreateSubscription(ctx context.Context, clinicID uuid.UUID, req *CreateSubscriptionInput) (*model.Subscription, error)
 	GetSubscription(ctx context.Context, clinicID uuid.UUID) (*model.Subscription, error)
 	CancelSubscription(ctx context.Context, clinicID uuid.UUID) error
-	SwitchPlan(ctx context.Context, clinicID uuid.UUID, newPlan string, billingType string, cycle string, creditCard *model.CreditCardInfo, creditCardHolder *model.CreditCardHolderInfo) (*model.Subscription, error)
+	SwitchPlan(ctx context.Context, clinicID uuid.UUID, newPlan string, billingType string, cycle string, offerToken *string, creditCard *model.CreditCardInfo, creditCardHolder *model.CreditCardHolderInfo) (*model.Subscription, error)
 	GetSubscriptionPayments(ctx context.Context, clinicID uuid.UUID) (*model.PaymentListResponse, error)
 
 	// Helper methods for registration flow
@@ -896,7 +896,7 @@ func (s *paymentService) CreateSubscriptionForClinic(ctx context.Context, clinic
 // SwitchPlan handles plan switching: cancels current subscription and creates new one
 // For trial/expired accounts: creates immediate subscription
 // For active accounts: cancels current, creates new with nextDueDate = current period end
-func (s *paymentService) SwitchPlan(ctx context.Context, clinicID uuid.UUID, newPlan string, billingType string, cycle string, creditCard *model.CreditCardInfo, creditCardHolder *model.CreditCardHolderInfo) (*model.Subscription, error) {
+func (s *paymentService) SwitchPlan(ctx context.Context, clinicID uuid.UUID, newPlan string, billingType string, cycle string, offerToken *string, creditCard *model.CreditCardInfo, creditCardHolder *model.CreditCardHolderInfo) (*model.Subscription, error) {
 	clinic, err := s.clinicRepo.GetByID(ctx, clinicID)
 	if err != nil {
 		return nil, errors.ErrNotFoundInstance.WithMessage("Clinic not found")
@@ -941,7 +941,16 @@ func (s *paymentService) SwitchPlan(ctx context.Context, clinicID uuid.UUID, new
 		asaasCycle = model.BillingCycleMonthly
 	}
 
-	value, err := s.planService.CalculateBestPrice(ctx, plan, nil, cycleType)
+	// Validate offer if provided
+	var offer *plan_model.Offer
+	if offerToken != nil && *offerToken != "" {
+		o, err := s.planService.ValidateOffer(ctx, *offerToken)
+		if err == nil {
+			offer = o
+		}
+	}
+
+	value, err := s.planService.CalculateBestPrice(ctx, plan, offer, cycleType)
 	if err != nil {
 		return nil, errors.ErrInternalInstance.WithMessage("Falha ao calcular o preço do plano").WithError(err)
 	}
@@ -1024,13 +1033,25 @@ func (s *paymentService) SwitchPlan(ctx context.Context, clinicID uuid.UUID, new
 		Description:         asaasSub.Description,
 		ExternalRef:         asaasSub.ExternalRef,
 
-		// Price Lock fields (were missing before this fix)
+		// Price Lock fields
 		PlanID:                     &plan.ID,
 		PriceAtContract:            value,
 		MaxClinicsAtContract:       plan.MaxClinics,
 		MaxProfessionalsAtContract: plan.MaxProfessionals,
 		MaxWhatsappAtContract:      plan.MaxWhatsappConnections,
 		MaxGoogleAtContract:        plan.MaxGoogleCalendars,
+	}
+
+	// Apply offer-level overrides and track offer usage
+	if offer != nil {
+		subscription.OfferID = &offer.ID
+		_ = s.planService.UseOffer(ctx, offer.ID)
+		if offer.CustomMaxClinics != nil {
+			subscription.MaxClinicsAtContract = *offer.CustomMaxClinics
+		}
+		if offer.CustomMaxProfessionals != nil {
+			subscription.MaxProfessionalsAtContract = *offer.CustomMaxProfessionals
+		}
 	}
 
 	if err := s.subscriptionRepo.Create(ctx, subscription); err != nil {
