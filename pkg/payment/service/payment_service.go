@@ -988,12 +988,19 @@ func (s *paymentService) SwitchPlan(ctx context.Context, clinicID uuid.UUID, new
 	asaasSub, err := s.client.CreateSubscription(ctx, asaasReq)
 	if err != nil {
 		logger.Errorf("[PAYMENT] Error creating Asaas subscription: %v", err)
+		logger.Errorf("[PAYMENT] Asaas request: customer=%s, billingType=%s, value=%.2f, nextDueDate=%s, cycle=%s",
+			asaasReq.CustomerID, asaasReq.BillingType, asaasReq.Value, asaasReq.NextDueDate, asaasReq.Cycle)
 		return nil, errors.ErrPaymentGatewayInstance.WithMessage(fmt.Sprintf("Asaas: %v", err))
 	}
+
+	logger.Infof("[PAYMENT] Asaas response: ID=%s, Status=%s, Value=%.2f, Cycle=%s, NextDueDate=%s",
+		asaasSub.ID, asaasSub.Status, asaasSub.Value, asaasSub.Cycle, asaasSub.NextDueDate)
 
 	// Validate Asaas returned a valid subscription ID
 	if asaasSub.ID == "" {
 		logger.Errorf("[PAYMENT] Asaas returned empty subscription ID for clinic %s", clinicID)
+		logger.Errorf("[PAYMENT] Asaas request was: customer=%s, billingType=%s, value=%.2f, nextDueDate=%s, cycle=%s",
+			asaasReq.CustomerID, asaasReq.BillingType, asaasReq.Value, asaasReq.NextDueDate, asaasReq.Cycle)
 		return nil, errors.ErrPaymentGatewayInstance.WithMessage("Asaas returned empty subscription ID")
 	}
 

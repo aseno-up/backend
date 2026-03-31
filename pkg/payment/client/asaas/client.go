@@ -227,6 +227,8 @@ func (c *Client) CreateSubscription(ctx context.Context, req *payment_model.Crea
 		return nil, err
 	}
 
+	fmt.Printf("[ASAAS_DEBUG] CreateSubscription raw response: %s\n", string(respBody))
+
 	var subscription payment_model.AsaasSubscriptionResponse
 	if err := json.Unmarshal(respBody, &subscription); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal subscription response: %w", err)
