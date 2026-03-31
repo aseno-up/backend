@@ -3,6 +3,7 @@ package handler
 import (
 	"log"
 	"net/http"
+	"strings"
 
 	"github.com/aseno/backend/pkg/auth/middleware"
 	plan_model "github.com/aseno/backend/pkg/plan/model"
@@ -56,6 +57,7 @@ func (h *PlanHandler) ListPlans(c *gin.Context) {
 type ValidateOfferRequest struct {
 	PlanID string `json:"plan_id" binding:"required"`
 	Token  string `json:"token" binding:"required"`
+	Cycle  string `json:"cycle"`
 }
 
 // ValidateOffer validates a coupon token and returns the discounted price
@@ -68,15 +70,34 @@ func (h *PlanHandler) ValidateOffer(c *gin.Context) {
 	}
 
 	planID, err := uuid.Parse(req.PlanID)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid plan ID format"})
-		return
-	}
+	var plan *plan_model.Plan
 
-	plan, err := h.planService.GetPlanByID(c.Request.Context(), planID)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
+	if err == nil {
+		// Valid UUID, fetch by ID
+		plan, err = h.planService.GetPlanByID(c.Request.Context(), planID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+	} else {
+		// Not a UUID, try to find by slug
+		plans, listErr := h.planService.ListPlans(c.Request.Context())
+		if listErr != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to list plans"})
+			return
+		}
+		
+		for _, p := range plans {
+			if p.Slug == req.PlanID {
+				plan = &p
+				break
+			}
+		}
+
+		if plan == nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid plan slug or ID"})
+			return
+		}
 	}
 
 	offer, err := h.planService.ValidateOffer(c.Request.Context(), req.Token)
@@ -85,8 +106,13 @@ func (h *PlanHandler) ValidateOffer(c *gin.Context) {
 		return
 	}
 
+	cycleType := plan_model.CycleTypeMonthly
+	if req.Cycle != "" {
+		cycleType = plan_model.CycleType(strings.ToLower(req.Cycle))
+	}
+
 	// This validates the offer against the plan and returns the best price
-	priceInfo, err := h.planService.CalculateBestPrice(c.Request.Context(), plan, offer, "monthly")
+	priceInfo, err := h.planService.CalculateBestPrice(c.Request.Context(), plan, offer, cycleType)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return

@@ -45,7 +45,7 @@ func (o *Offer) IsValid() bool {
 	if o.ValidUntil != nil && now.After(*o.ValidUntil) {
 		return false
 	}
-	if o.MaxUses != nil && o.CurrentUses >= *o.MaxUses {
+	if o.MaxUses != nil && *o.MaxUses > 0 && o.CurrentUses >= *o.MaxUses {
 		return false
 	}
 	return true
