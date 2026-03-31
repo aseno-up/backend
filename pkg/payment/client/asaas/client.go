@@ -105,6 +105,8 @@ func (c *Client) CreateCustomer(ctx context.Context, req *payment_model.CreateCu
 		return nil, err
 	}
 
+	fmt.Printf("[ASAAS_DEBUG] CreateCustomer raw response: %s\n", string(respBody))
+
 	var customer payment_model.AsaasCustomerResponse
 	if err := json.Unmarshal(respBody, &customer); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal customer response: %w", err)

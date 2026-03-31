@@ -907,6 +907,10 @@ func (s *paymentService) SwitchPlan(ctx context.Context, clinicID uuid.UUID, new
 	if err != nil {
 		return nil, errors.ErrNotFoundInstance.WithMessage("Customer not found. Please create billing profile first.")
 	}
+	if customer.AsaasCustomerID == "" {
+		logger.Errorf("[PAYMENT] Customer found for account %s but AsaasCustomerID is EMPTY. Cannot create subscription.", clinic.AccountID)
+		return nil, errors.ErrPaymentGatewayInstance.WithMessage("Customer billing profile is incomplete. Please update your billing info.")
+	}
 
 	// Fetch the plan
 	var plan *plan_model.Plan
