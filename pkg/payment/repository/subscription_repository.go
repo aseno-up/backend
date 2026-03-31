@@ -23,6 +23,11 @@ func NewSubscriptionRepository(db *gorm.DB) service.SubscriptionRepository {
 
 // Create creates a new subscription
 func (r *subscriptionRepository) Create(ctx context.Context, subscription *model.Subscription) error {
+	// Guard: reject subscriptions without a valid Asaas subscription ID
+	if subscription.AsaasSubscriptionID == "" {
+		return errors.ErrInternalInstance.WithMessage("cannot create subscription without Asaas subscription ID")
+	}
+
 	result := r.db.WithContext(ctx).Create(subscription)
 	if result.Error != nil {
 		return errors.ErrInternalInstance.WithError(result.Error)

@@ -475,6 +475,11 @@ func (s *paymentService) CreateSubscription(ctx context.Context, clinicID uuid.U
 		return nil, errors.ErrPaymentGatewayInstance.WithError(err)
 	}
 
+	// Validate Asaas returned a valid subscription ID
+	if asaasSub.ID == "" {
+		return nil, errors.ErrPaymentGatewayInstance.WithMessage("Asaas returned empty subscription ID")
+	}
+
 	// Parse next due date
 	parsedNextDueDate, _ := time.Parse("2006-01-02", asaasSub.NextDueDate)
 
@@ -838,6 +843,11 @@ func (s *paymentService) CreateSubscriptionForClinic(ctx context.Context, clinic
 		return err
 	}
 
+	// Validate Asaas returned a valid subscription ID
+	if asaasSubscription.ID == "" {
+		return errors.ErrPaymentGatewayInstance.WithMessage("Asaas returned empty subscription ID")
+	}
+
 	// Parse next due date
 	nextDue, _ := time.Parse("2006-01-02", asaasSubscription.NextDueDate)
 
@@ -936,9 +946,14 @@ func (s *paymentService) SwitchPlan(ctx context.Context, clinicID uuid.UUID, new
 	var nextDueDate string
 	existingSub, _ := s.subscriptionRepo.GetByAccountID(ctx, clinic.AccountID)
 	if existingSub != nil && existingSub.Status == model.SubscriptionStatusActive {
-		// Cancel existing subscription in Asaas
-		if err := s.client.DeleteSubscription(ctx, existingSub.AsaasSubscriptionID); err != nil {
-			logger.Warnf("[PAYMENT] Warning: failed to cancel Asaas subscription %s: %v", existingSub.AsaasSubscriptionID, err)
+		if existingSub.AsaasSubscriptionID != "" {
+			// Cancel existing valid subscription in Asaas
+			if err := s.client.DeleteSubscription(ctx, existingSub.AsaasSubscriptionID); err != nil {
+				logger.Warnf("[PAYMENT] Warning: failed to cancel Asaas subscription %s: %v", existingSub.AsaasSubscriptionID, err)
+			}
+		} else {
+			// Ghost subscription (no Asaas ID) — skip Asaas cancellation
+			logger.Warnf("[PAYMENT] Found ghost subscription %s with empty Asaas ID for account %s, skipping Asaas cancel", existingSub.ID, clinic.AccountID)
 		}
 
 		// Mark as inactive in our DB
@@ -947,8 +962,12 @@ func (s *paymentService) SwitchPlan(ctx context.Context, clinicID uuid.UUID, new
 			logger.Errorf("[PAYMENT] Error updating subscription status: %v", err)
 		}
 
-		// Set nextDueDate to the current subscription's next billing date
-		nextDueDate = existingSub.NextDueDate.Format("2006-01-02")
+		// Use existing NextDueDate only if it's valid, otherwise charge immediately
+		if existingSub.AsaasSubscriptionID != "" && !existingSub.NextDueDate.IsZero() {
+			nextDueDate = existingSub.NextDueDate.Format("2006-01-02")
+		} else {
+			nextDueDate = time.Now().Format("2006-01-02")
+		}
 	} else {
 		// No active subscription (trial or expired): charge immediately
 		nextDueDate = time.Now().Format("2006-01-02")
@@ -972,6 +991,12 @@ func (s *paymentService) SwitchPlan(ctx context.Context, clinicID uuid.UUID, new
 		return nil, errors.ErrPaymentGatewayInstance.WithMessage(fmt.Sprintf("Asaas: %v", err))
 	}
 
+	// Validate Asaas returned a valid subscription ID
+	if asaasSub.ID == "" {
+		logger.Errorf("[PAYMENT] Asaas returned empty subscription ID for clinic %s", clinicID)
+		return nil, errors.ErrPaymentGatewayInstance.WithMessage("Asaas returned empty subscription ID")
+	}
+
 	// Parse next due date
 	parsedNextDueDate, _ := time.Parse("2006-01-02", asaasSub.NextDueDate)
 
@@ -987,6 +1012,14 @@ func (s *paymentService) SwitchPlan(ctx context.Context, clinicID uuid.UUID, new
 		NextDueDate:         parsedNextDueDate,
 		Description:         asaasSub.Description,
 		ExternalRef:         asaasSub.ExternalRef,
+
+		// Price Lock fields (were missing before this fix)
+		PlanID:                     &plan.ID,
+		PriceAtContract:            value,
+		MaxClinicsAtContract:       plan.MaxClinics,
+		MaxProfessionalsAtContract: plan.MaxProfessionals,
+		MaxWhatsappAtContract:      plan.MaxWhatsappConnections,
+		MaxGoogleAtContract:        plan.MaxGoogleCalendars,
 	}
 
 	if err := s.subscriptionRepo.Create(ctx, subscription); err != nil {

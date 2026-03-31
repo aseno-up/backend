@@ -357,6 +357,14 @@ func (m *mockAccountRepo) Delete(ctx context.Context, id uuid.UUID) error {
 	return m.Called(ctx, id).Error(0)
 }
 
+func (m *mockAccountRepo) ListAll(ctx context.Context) ([]account_model.Account, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]account_model.Account), args.Error(1)
+}
+
 type mockSettingsRepo struct {
 	mock.Mock
 }
@@ -866,4 +874,192 @@ func TestSwitchPlan_SetsPendingNotActive(t *testing.T) {
 	accountRepo.AssertCalled(t, "Update", ctx, mock.MatchedBy(func(acc *account_model.Account) bool {
 		return acc.SubscriptionStatus == account_model.SubscriptionStatusPending
 	}))
+}
+
+func TestSwitchPlan_EmptyAsaasID_ReturnsError(t *testing.T) {
+	svc, client, customerRepo, _, subscriptionRepo, clinicRepo, _, planServiceMock := setupTestService()
+	ctx := context.Background()
+
+	clinicID := uuid.New()
+	accountID := uuid.New()
+
+	clinicRepo.On("GetByID", ctx, clinicID).Return(&clinic_model.Clinic{
+		ID:        clinicID,
+		AccountID: accountID,
+	}, nil)
+
+	customerRepo.On("GetByAccountID", ctx, accountID).Return(&model.Customer{
+		ID:              uuid.New(),
+		AsaasCustomerID: "cus_empty_test",
+	}, nil)
+
+	subscriptionRepo.On("GetByAccountID", ctx, accountID).Return(nil, assert.AnError)
+
+	basicPlan := plan_model.Plan{ID: uuid.New(), Slug: "basic", Name: "Plano Básico"}
+	planServiceMock.On("ListPlans", ctx).Return([]plan_model.Plan{basicPlan}, nil)
+	planServiceMock.On("CalculateBestPrice", ctx, mock.Anything, mock.Anything, mock.Anything).Return(99.00, nil)
+
+	// Asaas returns empty subscription ID
+	client.On("CreateSubscription", ctx, mock.AnythingOfType("*model.CreateSubscriptionRequest")).Return(&model.AsaasSubscriptionResponse{
+		ID:          "", // Empty ID — this is the bug scenario
+		Status:      "ACTIVE",
+		BillingType: "PIX",
+		Value:       0,
+		Cycle:       "MONTHLY",
+		NextDueDate: "",
+	}, nil)
+
+	result, err := svc.SwitchPlan(ctx, clinicID, "basic", "PIX", "MONTHLY", nil, nil)
+
+	// Should return error, not try to save with empty ID
+	assert.Error(t, err)
+	assert.Nil(t, result)
+	assert.Contains(t, err.Error(), "empty subscription ID")
+
+	// Verify subscription was NOT saved
+	subscriptionRepo.AssertNotCalled(t, "Create", mock.Anything, mock.Anything)
+}
+
+func TestSwitchPlan_PopulatesPlanFields(t *testing.T) {
+	svc, client, customerRepo, _, subscriptionRepo, clinicRepo, accountRepo, planServiceMock := setupTestService()
+	ctx := context.Background()
+
+	clinicID := uuid.New()
+	accountID := uuid.New()
+	planID := uuid.New()
+
+	clinicRepo.On("GetByID", ctx, clinicID).Return(&clinic_model.Clinic{
+		ID:        clinicID,
+		AccountID: accountID,
+	}, nil)
+
+	customerRepo.On("GetByAccountID", ctx, accountID).Return(&model.Customer{
+		ID:              uuid.New(),
+		AsaasCustomerID: "cus_plan_fields",
+	}, nil)
+
+	subscriptionRepo.On("GetByAccountID", ctx, accountID).Return(nil, assert.AnError)
+
+	basicPlan := plan_model.Plan{
+		ID:                     planID,
+		Slug:                   "basic",
+		Name:                   "Plano Básico",
+		MaxClinics:             2,
+		MaxProfessionals:       5,
+		MaxWhatsappConnections: 3,
+		MaxGoogleCalendars:     2,
+	}
+	planServiceMock.On("ListPlans", ctx).Return([]plan_model.Plan{basicPlan}, nil)
+	planServiceMock.On("CalculateBestPrice", ctx, mock.Anything, mock.Anything, mock.Anything).Return(99.00, nil)
+
+	client.On("CreateSubscription", ctx, mock.AnythingOfType("*model.CreateSubscriptionRequest")).Return(&model.AsaasSubscriptionResponse{
+		ID:          "sub_plan_fields_test",
+		Status:      "ACTIVE",
+		BillingType: "PIX",
+		Value:       99.00,
+		Cycle:       "MONTHLY",
+		NextDueDate: time.Now().Format("2006-01-02"),
+		Description: "Plano Básico - Aseno",
+	}, nil)
+
+	// Capture the subscription passed to Create
+	var savedSubscription *model.Subscription
+	subscriptionRepo.On("Create", ctx, mock.AnythingOfType("*model.Subscription")).Run(func(args mock.Arguments) {
+		savedSubscription = args.Get(1).(*model.Subscription)
+	}).Return(nil)
+
+	accountRepo.On("GetByID", ctx, accountID).Return(&account_model.Account{
+		ID:                 accountID,
+		SubscriptionStatus: account_model.SubscriptionStatusTrial,
+	}, nil)
+	accountRepo.On("Update", ctx, mock.MatchedBy(func(acc *account_model.Account) bool {
+		return acc.SubscriptionStatus == account_model.SubscriptionStatusPending
+	})).Return(nil)
+
+	result, err := svc.SwitchPlan(ctx, clinicID, "basic", "PIX", "MONTHLY", nil, nil)
+
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+
+	// Verify PlanID and Price Lock fields are populated
+	assert.NotNil(t, savedSubscription, "subscription should have been saved")
+	assert.NotNil(t, savedSubscription.PlanID, "PlanID should be set")
+	assert.Equal(t, planID, *savedSubscription.PlanID)
+	assert.Equal(t, 99.00, savedSubscription.PriceAtContract)
+	assert.Equal(t, 2, savedSubscription.MaxClinicsAtContract)
+	assert.Equal(t, 5, savedSubscription.MaxProfessionalsAtContract)
+	assert.Equal(t, 3, savedSubscription.MaxWhatsappAtContract)
+	assert.Equal(t, 2, savedSubscription.MaxGoogleAtContract)
+}
+
+func TestSwitchPlan_GhostSubscription_SkipsAsaasDelete(t *testing.T) {
+	svc, client, customerRepo, _, subscriptionRepo, clinicRepo, accountRepo, planServiceMock := setupTestService()
+	ctx := context.Background()
+
+	clinicID := uuid.New()
+	accountID := uuid.New()
+	ghostSubID := uuid.New()
+
+	clinicRepo.On("GetByID", ctx, clinicID).Return(&clinic_model.Clinic{
+		ID:        clinicID,
+		AccountID: accountID,
+	}, nil)
+
+	customerRepo.On("GetByAccountID", ctx, accountID).Return(&model.Customer{
+		ID:              uuid.New(),
+		AsaasCustomerID: "cus_ghost_test",
+	}, nil)
+
+	// Ghost subscription: ACTIVE but with empty AsaasSubscriptionID and zero NextDueDate
+	subscriptionRepo.On("GetByAccountID", ctx, accountID).Return(&model.Subscription{
+		ID:                  ghostSubID,
+		AsaasSubscriptionID: "", // Ghost — no Asaas ID
+		Status:              model.SubscriptionStatusActive,
+		NextDueDate:         time.Time{}, // Zero value
+	}, nil)
+
+	// Mark ghost as inactive
+	subscriptionRepo.On("UpdateStatus", ctx, ghostSubID, model.SubscriptionStatusInactive).Return(nil)
+
+	basicPlan := plan_model.Plan{ID: uuid.New(), Slug: "basic", Name: "Plano Básico"}
+	planServiceMock.On("ListPlans", ctx).Return([]plan_model.Plan{basicPlan}, nil)
+	planServiceMock.On("CalculateBestPrice", ctx, mock.Anything, mock.Anything, mock.Anything).Return(99.00, nil)
+
+	// Asaas should create new subscription with today's date (not the ghost's zero date)
+	client.On("CreateSubscription", ctx, mock.MatchedBy(func(req *model.CreateSubscriptionRequest) bool {
+		return req.NextDueDate == time.Now().Format("2006-01-02")
+	})).Return(&model.AsaasSubscriptionResponse{
+		ID:          "sub_after_ghost",
+		Status:      "ACTIVE",
+		BillingType: "PIX",
+		Value:       99.00,
+		Cycle:       "MONTHLY",
+		NextDueDate: time.Now().Format("2006-01-02"),
+		Description: "Plano Básico - Aseno",
+	}, nil)
+
+	subscriptionRepo.On("Create", ctx, mock.AnythingOfType("*model.Subscription")).Return(nil)
+
+	accountRepo.On("GetByID", ctx, accountID).Return(&account_model.Account{
+		ID:                 accountID,
+		SubscriptionStatus: account_model.SubscriptionStatusTrial,
+	}, nil)
+	accountRepo.On("Update", ctx, mock.MatchedBy(func(acc *account_model.Account) bool {
+		return acc.SubscriptionStatus == account_model.SubscriptionStatusPending
+	})).Return(nil)
+
+	result, err := svc.SwitchPlan(ctx, clinicID, "basic", "PIX", "MONTHLY", nil, nil)
+
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.Equal(t, "sub_after_ghost", result.AsaasSubscriptionID)
+
+	// Verify Asaas DeleteSubscription was NOT called (ghost has no Asaas ID)
+	client.AssertNotCalled(t, "DeleteSubscription", mock.Anything, mock.Anything)
+
+	// Verify ghost was marked as inactive
+	subscriptionRepo.AssertCalled(t, "UpdateStatus", ctx, ghostSubID, model.SubscriptionStatusInactive)
+
+	// Verify new subscription was created
+	subscriptionRepo.AssertCalled(t, "Create", ctx, mock.AnythingOfType("*model.Subscription"))
 }
