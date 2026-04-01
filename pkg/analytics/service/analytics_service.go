@@ -42,8 +42,11 @@ func (s *analyticsService) checkPlanRestriction(ctx context.Context, clinicID uu
 		return err
 	}
 
-	if clinic.Account != nil && clinic.Account.Plan != nil && !clinic.Account.Plan.HasApiAccess {
-		return errors.ErrUpgradeRequiredInstance.WithMessage("Relatórios avançados disponíveis apenas nos planos Profissional e Avançado")
+	if clinic.Account != nil && clinic.Account.Plan != nil {
+		slug := clinic.Account.Plan.Slug
+		if slug != "professional" && slug != "advanced" {
+			return errors.ErrUpgradeRequiredInstance.WithMessage("Relatórios avançados disponíveis apenas nos planos Profissional e Avançado")
+		}
 	}
 
 	return nil
