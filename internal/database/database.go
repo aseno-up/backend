@@ -44,6 +44,10 @@ func NewDatabase(dsn string, isDebug bool) (*Database, error) {
 	}
 	pgxConfig.RuntimeParams["search_path"] = "aseno"
 
+	// Disable prepared statements at the pgx level because Supabase's PgBouncer
+	// (in transaction mode) does not support them and throws "prepared statement already exists".
+	pgxConfig.DefaultQueryExecMode = pgx.QueryExecModeSimpleProtocol
+
 	// Open connection pool via pgx stdlib (compatible with database/sql)
 	sqlDB := stdlib.OpenDB(*pgxConfig)
 	sqlDB.SetMaxIdleConns(10)
@@ -59,6 +63,9 @@ func NewDatabase(dsn string, isDebug bool) (*Database, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to database: %w", err)
 	}
+
+	// Ensure the schema exists so AutoMigrate doesn't fail with "no schema has been selected to create in"
+	db.Exec("CREATE SCHEMA IF NOT EXISTS aseno")
 
 	return &Database{db: db}, nil
 }
