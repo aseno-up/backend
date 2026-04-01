@@ -40,7 +40,7 @@ func NewDatabase(dsn string, isDebug bool) (*Database, error) {
 	}), &gorm.Config{
 		Logger: gormLogger,
 		NamingStrategy: schema.NamingStrategy{
-			TablePrefix: "public.", // force all queries to use public schema
+			TablePrefix: "aseno.", // force all queries to use public schema
 		},
 	})
 	if err != nil {
@@ -58,7 +58,7 @@ func NewDatabase(dsn string, isDebug bool) (*Database, error) {
 	sqlDB.SetConnMaxLifetime(time.Hour)
 
 	// Ensure search_path is set to public (Supabase pooler defaults to "evolution")
-	db.Exec("SET search_path TO public")
+	db.Exec("SET search_path TO aseno")
 
 	return &Database{db: db}, nil
 }
