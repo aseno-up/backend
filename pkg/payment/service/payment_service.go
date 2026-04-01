@@ -594,13 +594,16 @@ func (s *paymentService) HandleWebhook(ctx context.Context, payload *model.Asaas
 			// Find subscription
 			subscription, err := s.subscriptionRepo.GetByID(ctx, *payment.SubscriptionID)
 			if err == nil {
-				// Update Account with Price Lock values
+				// Update Account with Price Lock values and correct PlanID
 				account, err := s.accountRepo.GetByID(ctx, payment.AccountID)
 				if err == nil {
 					account.MaxClinics = subscription.MaxClinicsAtContract
 					account.MaxProfessionals = subscription.MaxProfessionalsAtContract
 					account.MaxWhatsappConnections = subscription.MaxWhatsappAtContract
 					account.MaxGoogleCalendars = subscription.MaxGoogleAtContract
+					if subscription.PlanID != nil {
+						account.PlanID = subscription.PlanID
+					}
 					s.accountRepo.Update(ctx, account)
 				}
 			}
@@ -1062,10 +1065,11 @@ func (s *paymentService) SwitchPlan(ctx context.Context, clinicID uuid.UUID, new
 	if s.accountRepo != nil {
 		account, err := s.accountRepo.GetByID(ctx, clinic.AccountID)
 		if err == nil && plan != nil {
-			account.Plan = plan
 			account.PlanID = &plan.ID
 			account.SubscriptionStatus = account_model.SubscriptionStatusPending
-			_ = s.accountRepo.Update(ctx, account)
+			if err := s.accountRepo.Update(ctx, account); err != nil {
+				logger.Errorf("[PAYMENT] Error updating account plan: %v", err)
+			}
 		}
 	}
 

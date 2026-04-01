@@ -992,6 +992,200 @@ func TestSwitchPlan_PopulatesPlanFields(t *testing.T) {
 	assert.Equal(t, 2, savedSubscription.MaxGoogleAtContract)
 }
 
+func TestSwitchPlan_AccountPlanID_MatchesSelectedPlan(t *testing.T) {
+	svc, client, customerRepo, _, subscriptionRepo, clinicRepo, accountRepo, planServiceMock := setupTestService()
+	ctx := context.Background()
+
+	clinicID := uuid.New()
+	accountID := uuid.New()
+	basicPlanID := uuid.New()
+	professionalPlanID := uuid.New()
+
+	clinicRepo.On("GetByID", ctx, clinicID).Return(&clinic_model.Clinic{
+		ID:        clinicID,
+		AccountID: accountID,
+	}, nil)
+
+	customerRepo.On("GetByAccountID", ctx, accountID).Return(&model.Customer{
+		ID:              uuid.New(),
+		AsaasCustomerID: "cus_plan_test",
+	}, nil)
+
+	subscriptionRepo.On("GetByAccountID", ctx, accountID).Return(nil, assert.AnError)
+
+	// Both plans available — user selects professional
+	basicPlan := plan_model.Plan{ID: basicPlanID, Slug: "basic", Name: "Básico"}
+	professionalPlan := plan_model.Plan{ID: professionalPlanID, Slug: "professional", Name: "Profissional"}
+	planServiceMock.On("ListPlans", ctx).Return([]plan_model.Plan{basicPlan, professionalPlan}, nil)
+	planServiceMock.On("CalculateBestPrice", ctx, mock.Anything, mock.Anything, mock.Anything).Return(199.00, nil)
+
+	client.On("CreateSubscription", ctx, mock.AnythingOfType("*model.CreateSubscriptionRequest")).Return(&model.AsaasSubscriptionResponse{
+		ID:          "sub_prof_test",
+		Status:      "ACTIVE",
+		BillingType: "PIX",
+		Value:       199.00,
+		Cycle:       "MONTHLY",
+		NextDueDate: time.Now().Format("2006-01-02"),
+		Description: "Profissional - Aseno",
+	}, nil)
+
+	subscriptionRepo.On("Create", ctx, mock.AnythingOfType("*model.Subscription")).Return(nil)
+
+	// Account currently has basic plan
+	accountRepo.On("GetByID", ctx, accountID).Return(&account_model.Account{
+		ID:                 accountID,
+		PlanID:             &basicPlanID,
+		SubscriptionStatus: account_model.SubscriptionStatusTrial,
+	}, nil)
+
+	// Verify account is updated with the PROFESSIONAL plan ID, not basic
+	var updatedAccount *account_model.Account
+	accountRepo.On("Update", ctx, mock.MatchedBy(func(acc *account_model.Account) bool {
+		return true
+	})).Run(func(args mock.Arguments) {
+		updatedAccount = args.Get(1).(*account_model.Account)
+	}).Return(nil)
+
+	result, err := svc.SwitchPlan(ctx, clinicID, "professional", "PIX", "MONTHLY", nil, nil, nil)
+
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.NotNil(t, updatedAccount, "account should have been updated")
+	assert.NotNil(t, updatedAccount.PlanID, "PlanID should be set")
+	assert.Equal(t, professionalPlanID, *updatedAccount.PlanID, "account PlanID must match the selected professional plan, not the old basic plan")
+	assert.Nil(t, updatedAccount.Plan, "account.Plan association must NOT be set to avoid GORM auto-save issues")
+}
+
+func TestSwitchPlan_AccountUpdate_DoesNotSetPlanAssociation(t *testing.T) {
+	svc, client, customerRepo, _, subscriptionRepo, clinicRepo, accountRepo, planServiceMock := setupTestService()
+	ctx := context.Background()
+
+	clinicID := uuid.New()
+	accountID := uuid.New()
+	planID := uuid.New()
+
+	clinicRepo.On("GetByID", ctx, clinicID).Return(&clinic_model.Clinic{
+		ID:        clinicID,
+		AccountID: accountID,
+	}, nil)
+
+	customerRepo.On("GetByAccountID", ctx, accountID).Return(&model.Customer{
+		ID:              uuid.New(),
+		AsaasCustomerID: "cus_no_assoc",
+	}, nil)
+
+	subscriptionRepo.On("GetByAccountID", ctx, accountID).Return(nil, assert.AnError)
+
+	plan := plan_model.Plan{
+		ID:   planID,
+		Slug: "professional",
+		Name: "Profissional",
+		Features: plan_model.StringArray{"feature1", "feature2"},
+	}
+	planServiceMock.On("ListPlans", ctx).Return([]plan_model.Plan{plan}, nil)
+	planServiceMock.On("CalculateBestPrice", ctx, mock.Anything, mock.Anything, mock.Anything).Return(199.00, nil)
+
+	client.On("CreateSubscription", ctx, mock.AnythingOfType("*model.CreateSubscriptionRequest")).Return(&model.AsaasSubscriptionResponse{
+		ID:          "sub_no_assoc",
+		Status:      "ACTIVE",
+		BillingType: "PIX",
+		Value:       199.00,
+		Cycle:       "MONTHLY",
+		NextDueDate: time.Now().Format("2006-01-02"),
+		Description: "Profissional - Aseno",
+	}, nil)
+
+	subscriptionRepo.On("Create", ctx, mock.AnythingOfType("*model.Subscription")).Return(nil)
+
+	accountRepo.On("GetByID", ctx, accountID).Return(&account_model.Account{
+		ID:                 accountID,
+		SubscriptionStatus: account_model.SubscriptionStatusTrial,
+	}, nil)
+
+	var updatedAccount *account_model.Account
+	accountRepo.On("Update", ctx, mock.MatchedBy(func(acc *account_model.Account) bool {
+		return true
+	})).Run(func(args mock.Arguments) {
+		updatedAccount = args.Get(1).(*account_model.Account)
+	}).Return(nil)
+
+	result, err := svc.SwitchPlan(ctx, clinicID, "professional", "PIX", "MONTHLY", nil, nil, nil)
+
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.NotNil(t, updatedAccount)
+	// The Plan association must be nil to prevent GORM from trying to auto-save the Plan record
+	// which causes "invalid input syntax for type json" errors with the Features jsonb column
+	assert.Nil(t, updatedAccount.Plan, "Plan association must be nil to prevent GORM auto-save of Plan record")
+}
+
+func TestHandleWebhook_PaymentConfirmed_UpdatesAccountPlanID(t *testing.T) {
+	svc, _, _, paymentRepo, subscriptionRepo, _, accountRepo, _ := setupTestService()
+	ctx := context.Background()
+
+	accountID := uuid.New()
+	subscriptionID := uuid.New()
+	paymentID := uuid.New()
+	professionalPlanID := uuid.New()
+
+	paymentRepo.On("GetByAsaasID", ctx, "pay_plan_update").Return(&model.Payment{
+		ID:             paymentID,
+		AccountID:      accountID,
+		SubscriptionID: &subscriptionID,
+	}, nil)
+	paymentRepo.On("UpdateStatus", ctx, paymentID, model.PaymentStatus("RECEIVED")).Return(nil)
+
+	// Subscription has professional plan
+	subscriptionRepo.On("GetByID", ctx, subscriptionID).Return(&model.Subscription{
+		ID:                         subscriptionID,
+		AccountID:                  accountID,
+		PlanID:                     &professionalPlanID,
+		MaxClinicsAtContract:       1,
+		MaxProfessionalsAtContract: 15,
+		MaxWhatsappAtContract:      1,
+		MaxGoogleAtContract:        1,
+	}, nil)
+	subscriptionRepo.On("GetByAsaasID", ctx, "sub_plan_update").Return(&model.Subscription{
+		ID:        subscriptionID,
+		AccountID: accountID,
+	}, nil)
+
+	// Account currently has wrong (basic) plan
+	basicPlanID := uuid.New()
+	accountRepo.On("GetByID", ctx, accountID).Return(&account_model.Account{
+		ID:                 accountID,
+		PlanID:             &basicPlanID,
+		SubscriptionStatus: account_model.SubscriptionStatusPending,
+	}, nil)
+
+	var lastUpdatedAccount *account_model.Account
+	accountRepo.On("Update", ctx, mock.MatchedBy(func(acc *account_model.Account) bool {
+		return true
+	})).Run(func(args mock.Arguments) {
+		lastUpdatedAccount = args.Get(1).(*account_model.Account)
+	}).Return(nil)
+
+	payload := &model.AsaasWebhookPayload{
+		Event: model.WebhookEventPaymentReceived,
+		Payment: &model.WebhookPayment{
+			ID:           "pay_plan_update",
+			Customer:     "cus_test",
+			Subscription: "sub_plan_update",
+			Status:       "RECEIVED",
+			Value:        199.00,
+		},
+	}
+
+	err := svc.HandleWebhook(ctx, payload)
+	assert.NoError(t, err)
+
+	// The webhook handler must update the account's PlanID from the subscription
+	assert.NotNil(t, lastUpdatedAccount, "account should have been updated")
+	assert.NotNil(t, lastUpdatedAccount.PlanID, "PlanID should be set")
+	assert.Equal(t, professionalPlanID, *lastUpdatedAccount.PlanID,
+		"webhook must update account PlanID from subscription to ensure consistency")
+}
+
 func TestSwitchPlan_GhostSubscription_SkipsAsaasDelete(t *testing.T) {
 	svc, client, customerRepo, _, subscriptionRepo, clinicRepo, accountRepo, planServiceMock := setupTestService()
 	ctx := context.Background()
