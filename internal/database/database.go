@@ -6,10 +6,11 @@ import (
 	"os"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/stdlib"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	gormlogger "gorm.io/gorm/logger"
-	"gorm.io/gorm/schema"
 )
 
 // Database wraps the GORM DB connection
@@ -34,31 +35,30 @@ func NewDatabase(dsn string, isDebug bool) (*Database, error) {
 		},
 	)
 
-	db, err := gorm.Open(postgres.New(postgres.Config{
-		DSN:                  dsn,
-		PreferSimpleProtocol: true, // disable prepared statements for connection pooler compatibility
-	}), &gorm.Config{
-		Logger: gormLogger,
-		NamingStrategy: schema.NamingStrategy{
-			TablePrefix: "aseno.", // force all queries to use public schema
-		},
-	})
+	// Parse DSN with pgx to set search_path as a startup parameter.
+	// This ensures every connection from the pool gets the correct schema,
+	// even through Supabase's connection pooler (Supavisor on port 6543).
+	pgxConfig, err := pgx.ParseConfig(dsn)
 	if err != nil {
-		return nil, fmt.Errorf("failed to connect to database: %w", err)
+		return nil, fmt.Errorf("failed to parse database DSN: %w", err)
 	}
+	pgxConfig.RuntimeParams["search_path"] = "aseno"
 
-	// Configure connection pool
-	sqlDB, err := db.DB()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get underlying sql.DB: %w", err)
-	}
-
+	// Open connection pool via pgx stdlib (compatible with database/sql)
+	sqlDB := stdlib.OpenDB(*pgxConfig)
 	sqlDB.SetMaxIdleConns(10)
 	sqlDB.SetMaxOpenConns(100)
 	sqlDB.SetConnMaxLifetime(time.Hour)
 
-	// Ensure search_path is set to public (Supabase pooler defaults to "evolution")
-	db.Exec("SET search_path TO aseno")
+	db, err := gorm.Open(postgres.New(postgres.Config{
+		Conn:                 sqlDB,
+		PreferSimpleProtocol: true, // disable prepared statements for connection pooler compatibility
+	}), &gorm.Config{
+		Logger: gormLogger,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to database: %w", err)
+	}
 
 	return &Database{db: db}, nil
 }
