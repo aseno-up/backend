@@ -105,6 +105,7 @@ func (r *appointmentRepository) GetByID(ctx context.Context, id, clinicID uuid.U
 		Preload("Patient").
 		Preload("Professional").
 		Preload("Procedures.Procedure").
+		Preload("Specialties").
 		Where("id = ? AND clinic_id = ? AND deleted_at IS NULL", id, clinicID).
 		First(&appointment)
 	if result.Error != nil {
@@ -162,6 +163,7 @@ func (r *appointmentRepository) List(ctx context.Context, clinicID uuid.UUID, fi
 		Preload("Patient").
 		Preload("Professional").
 		Preload("Procedures.Procedure").
+		Preload("Specialties").
 		Order("start_time ASC").
 		Limit(perPage).
 		Offset(offset).
@@ -182,6 +184,7 @@ func (r *appointmentRepository) GetByDateRange(ctx context.Context, clinicID uui
 		Preload("Patient").
 		Preload("Professional").
 		Preload("Procedures.Procedure").
+		Preload("Specialties").
 		Where("clinic_id = ? AND deleted_at IS NULL", clinicID).
 		Where("start_time >= ? AND start_time < ?", start, end).
 		Where("status NOT IN (?)", []model.AppointmentStatus{model.AppointmentStatusCanceled})
@@ -211,25 +214,39 @@ func (r *appointmentRepository) GetByDay(ctx context.Context, clinicID uuid.UUID
 // Update updates an appointment
 func (r *appointmentRepository) Update(ctx context.Context, appointment *model.Appointment) error {
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		// Save the core appointment but omit relations so we handle Procedures explicitly
-		if err := tx.Omit("Patient", "Professional", "Procedures").Save(appointment).Error; err != nil {
+		// Save the core appointment but omit relations so we handle Procedures and Specialties explicitly
+		if err := tx.Omit("Patient", "Professional", "Procedures", "Specialties").Save(appointment).Error; err != nil {
 			return errors.ErrInternalInstance.WithError(err)
 		}
 
 		// Explicitly replace the Procedures association
-		// Rather than rely on GORM's Replace (which attempts to NULL the foreign key causing constraint failures),
-		// we explicitly delete old records for this appointment and insert the new ones.
 		if appointment.Procedures != nil {
 			if err := tx.Where("appointment_id = ?", appointment.ID).Delete(&model.AppointmentProcedure{}).Error; err != nil {
 				return errors.ErrInternalInstance.WithError(err)
 			}
 
 			if len(appointment.Procedures) > 0 {
-				// Ensure the appointment_id is mapped correctly and insert the new procedures
 				for i := range appointment.Procedures {
 					appointment.Procedures[i].AppointmentID = appointment.ID
 				}
 				if err := tx.Create(&appointment.Procedures).Error; err != nil {
+					return errors.ErrInternalInstance.WithError(err)
+				}
+			}
+		}
+
+		// Explicitly replace the Specialties association
+		if appointment.Specialties != nil {
+			if err := tx.Where("appointment_id = ?", appointment.ID).Delete(&model.AppointmentSpecialty{}).Error; err != nil {
+				return errors.ErrInternalInstance.WithError(err)
+			}
+
+			if len(appointment.Specialties) > 0 {
+				for i := range appointment.Specialties {
+					appointment.Specialties[i].AppointmentID = appointment.ID
+					appointment.Specialties[i].ClinicID = appointment.ClinicID
+				}
+				if err := tx.Create(&appointment.Specialties).Error; err != nil {
 					return errors.ErrInternalInstance.WithError(err)
 				}
 			}

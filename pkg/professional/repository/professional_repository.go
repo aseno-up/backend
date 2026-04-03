@@ -45,6 +45,7 @@ func (r *professionalRepository) Create(ctx context.Context, professional *model
 func (r *professionalRepository) GetByID(ctx context.Context, id, clinicID uuid.UUID) (*model.Professional, error) {
 	var professional model.Professional
 	result := r.db.WithContext(ctx).
+		Preload("Specialties").
 		Where("id = ? AND clinic_id = ? AND deleted_at IS NULL", id, clinicID).
 		First(&professional)
 	if result.Error != nil {

@@ -401,6 +401,33 @@ func (s *appointmentService) Create(ctx context.Context, clinicID uuid.UUID, req
 		calculatedProceduresPriceCents += int64(math.Round(*p.Price * 100))
 	}
 
+	// Map and validate specialties
+	var appointmentSpecialties []model.AppointmentSpecialty
+	if len(req.SpecialtyIDs) > 0 {
+		prof, err := s.profRepo.GetByID(ctx, req.ProfessionalID, clinicID)
+		if err != nil {
+			return nil, err
+		}
+
+		// Create a map of active professional specialties for fast lookup
+		profSpecs := make(map[uuid.UUID]bool)
+		for _, ps := range prof.Specialties {
+			if ps.IsActive {
+				profSpecs[ps.SpecialtyID] = true
+			}
+		}
+
+		for _, sid := range req.SpecialtyIDs {
+			if !profSpecs[sid] {
+				return nil, errors.ErrValidationInstance.WithMessage(fmt.Sprintf("Esse profissional não possui a especialidade %s", sid))
+			}
+			appointmentSpecialties = append(appointmentSpecialties, model.AppointmentSpecialty{
+				ClinicID:    clinicID,
+				SpecialtyID: sid,
+			})
+		}
+	}
+
 	priceToUse := req.Price
 	if req.Price == 0 && len(appointmentProcedures) > 0 {
 		priceToUse = float64(calculatedProceduresPriceCents) / 100.0
@@ -417,6 +444,7 @@ func (s *appointmentService) Create(ctx context.Context, clinicID uuid.UUID, req
 		Title:          req.Title,
 		Notes:          req.Notes,
 		Procedures:     appointmentProcedures,
+		Specialties:    appointmentSpecialties,
 		Price:          priceToUse,
 	}
 
@@ -621,6 +649,35 @@ func (s *appointmentService) Update(ctx context.Context, id, clinicID uuid.UUID,
 		if req.Price == nil {
 			appointment.Price = float64(calculatedProceduresPriceCents) / 100.0
 		}
+	}
+
+	if req.SpecialtyIDs != nil {
+		var appointmentSpecialties []model.AppointmentSpecialty
+		if len(*req.SpecialtyIDs) > 0 {
+			prof, err := s.profRepo.GetByID(ctx, professionalID, clinicID)
+			if err != nil {
+				return nil, err
+			}
+
+			profSpecs := make(map[uuid.UUID]bool)
+			for _, ps := range prof.Specialties {
+				if ps.IsActive {
+					profSpecs[ps.SpecialtyID] = true
+				}
+			}
+
+			for _, sid := range *req.SpecialtyIDs {
+				if !profSpecs[sid] {
+					return nil, errors.ErrValidationInstance.WithMessage(fmt.Sprintf("Esse profissional não possui a especialidade %s", sid))
+				}
+				appointmentSpecialties = append(appointmentSpecialties, model.AppointmentSpecialty{
+					AppointmentID: appointment.ID,
+					ClinicID:      clinicID,
+					SpecialtyID:   sid,
+				})
+			}
+		}
+		appointment.Specialties = appointmentSpecialties
 	}
 
 	if req.Price != nil {

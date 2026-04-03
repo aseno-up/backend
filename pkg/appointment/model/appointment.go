@@ -44,6 +44,7 @@ type Appointment struct {
 	Notes          string                 `json:"notes"`                                                              // Internal notes
 	PatientNotes   string                 `json:"patient_notes"`                                                      // Notes from patient
 	Procedures     []AppointmentProcedure `json:"procedures,omitempty" gorm:"foreignKey:AppointmentID;references:ID"` // N:N relationship with procedures
+	Specialties    []AppointmentSpecialty `json:"specialties,omitempty" gorm:"foreignKey:AppointmentID;references:ID"` // N:N relationship with specialties
 	Price          float64                `json:"price" gorm:"type:decimal(10,2)"`                                    // Total price for this appointment
 	PaymentStatus  PaymentStatus          `json:"payment_status" gorm:"not null;default:'pending';index"`             // Denormalized: pending, partial, paid
 	ConfirmedAt    *time.Time             `json:"confirmed_at,omitempty"`
@@ -68,6 +69,27 @@ type Appointment struct {
 	// Relationships (for preloading)
 	Patient      *PatientInfo      `json:"patient,omitempty" gorm:"foreignKey:PatientID;references:ID"`
 	Professional *ProfessionalInfo `json:"professional,omitempty" gorm:"foreignKey:ProfessionalID;references:ID"`
+}
+
+// AppointmentSpecialty represents the many-to-many relationship between appointments and specialties
+type AppointmentSpecialty struct {
+	ID            uuid.UUID  `json:"id" gorm:"type:uuid;primary_key;default:gen_random_uuid()"`
+	ClinicID      uuid.UUID  `json:"clinic_id" gorm:"type:uuid;not null;index"`
+	AppointmentID uuid.UUID  `json:"appointment_id" gorm:"type:uuid;not null;index"`
+	SpecialtyID   uuid.UUID  `json:"specialty_id" gorm:"type:uuid;not null;index"`
+	CreatedAt     time.Time  `json:"created_at"`
+	UpdatedAt     time.Time  `json:"updated_at"`
+	DeletedAt     *time.Time `json:"deleted_at,omitempty" gorm:"index"`
+}
+
+func (AppointmentSpecialty) TableName() string {
+	return "appointment_specialties"
+}
+
+// AppointmentSpecialtyResponse represents the API response for an appointment specialty
+type AppointmentSpecialtyResponse struct {
+	SpecialtyID uuid.UUID `json:"specialty_id"`
+	Name        string    `json:"name,omitempty"`
 }
 
 // PatientInfo is a slim version of Patient for embedding
@@ -115,6 +137,7 @@ type AppointmentResponse struct {
 	Notes          string                          `json:"notes"`
 	PatientNotes   string                          `json:"patient_notes"`
 	Procedures     []*AppointmentProcedureResponse `json:"procedures,omitempty"`
+	Specialties    []*AppointmentSpecialtyResponse `json:"specialties,omitempty"`
 	Price          float64                         `json:"price"`
 	PaymentStatus  PaymentStatus                   `json:"payment_status"`
 	ConfirmedAt    *time.Time                      `json:"confirmed_at,omitempty"`
@@ -157,6 +180,15 @@ func (a *Appointment) ToResponse() *AppointmentResponse {
 		}
 	}
 
+	if len(a.Specialties) > 0 {
+		resp.Specialties = make([]*AppointmentSpecialtyResponse, len(a.Specialties))
+		for i, s := range a.Specialties {
+			resp.Specialties[i] = &AppointmentSpecialtyResponse{
+				SpecialtyID: s.SpecialtyID,
+			}
+		}
+	}
+
 	return resp
 }
 
@@ -169,6 +201,7 @@ func (a *Appointment) DurationMinutes() int {
 type CreateAppointmentRequest struct {
 	PatientID         uuid.UUID                   `json:"patient_id" binding:"required"`
 	ProfessionalID    uuid.UUID                   `json:"professional_id" binding:"required"`
+	SpecialtyIDs      []uuid.UUID                 `json:"specialty_ids"`
 	StartTime         time.Time                   `json:"start_time" binding:"required"`
 	DurationMinutes   int                         `json:"duration_minutes" binding:"required,min=5,max=480"`
 	Title             string                      `json:"title"`
@@ -183,6 +216,7 @@ type CreateAppointmentRequest struct {
 type UpdateAppointmentRequest struct {
 	PatientID         *uuid.UUID                   `json:"patient_id"`
 	ProfessionalID    *uuid.UUID                   `json:"professional_id"`
+	SpecialtyIDs      *[]uuid.UUID                 `json:"specialty_ids"`
 	StartTime         *time.Time                   `json:"start_time"`
 	DurationMinutes   *int                         `json:"duration_minutes" binding:"omitempty,min=5,max=480"`
 	Status            AppointmentStatus            `json:"status"`

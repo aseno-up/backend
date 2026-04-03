@@ -20,6 +20,7 @@ type Professional struct {
 	Color           string       `json:"color" gorm:"default:'#7C3AED'"` // Color for calendar display
 	IsActive        bool         `json:"is_active" gorm:"default:true"`
 	WorkingHours    WorkingHours `json:"working_hours" gorm:"serializer:json"`
+	Specialties     []ProfessionalSpecialty `json:"specialties,omitempty" gorm:"foreignKey:ProfessionalID;references:ID"`
 	CreatedAt       time.Time    `json:"created_at"`
 	UpdatedAt       time.Time    `json:"updated_at"`
 	DeletedAt       *time.Time   `json:"deleted_at,omitempty" gorm:"index"`
@@ -27,8 +28,14 @@ type Professional struct {
 
 // ProfessionalSpecialty is the junction table for the N:N relationship
 type ProfessionalSpecialty struct {
-	ProfessionalID uuid.UUID `json:"professional_id" gorm:"type:uuid;primaryKey"`
-	SpecialtyID    uuid.UUID `json:"specialty_id" gorm:"type:uuid;primaryKey"`
+	ID             uuid.UUID  `json:"id" gorm:"type:uuid;primary_key;default:gen_random_uuid()"`
+	ClinicID       uuid.UUID  `json:"clinic_id" gorm:"type:uuid;not null;index"`
+	ProfessionalID uuid.UUID  `json:"professional_id" gorm:"type:uuid;not null;index"`
+	SpecialtyID    uuid.UUID  `json:"specialty_id" gorm:"type:uuid;not null;index"`
+	IsActive       bool       `json:"is_active" gorm:"default:true"`
+	CreatedAt      time.Time  `json:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at"`
+	DeletedAt      *time.Time `json:"deleted_at,omitempty" gorm:"index"`
 }
 
 func (ProfessionalSpecialty) TableName() string {

@@ -559,7 +559,8 @@ func main() {
 	userSvc := user_service.NewUserService(userRepo, professionalRepo)
 
 	// Initialize Patient Record service
-	patientRecordSvc := patientrecord_service.NewPatientRecordService(patientRecordRepo)
+	patientRecordSvc := patientrecord_service.NewPatientRecordService(patientRecordRepo, appointmentRepo)
+	authService.SetTemplateSeedService(patientRecordSvc)
 
 	// Initialize Dashboard service
 	dashboardSvc := dashboard_service.NewDashboardService(dashboardRepo, clinicRepo)
@@ -1245,6 +1246,9 @@ func runMigrations(db *database.Database) error {
 		&invite_model.Invite{},
 		&patientrecord_model.PatientRecord{},
 		&patientrecord_model.SessionNote{},
+		&patientrecord_model.AnamneseTemplate{},
+		&patientrecord_model.AnamneseTemplateField{},
+		&patientrecord_model.AnamneseTemplateSpecialty{},
 		&auth_model.PasswordReset{},
 		&auth_model.EmailVerification{},
 		&notification_model.Notification{},
@@ -1254,6 +1258,7 @@ func runMigrations(db *database.Database) error {
 		// Procedure models
 		&procedure_model.Procedure{},
 		&appointment_model.AppointmentProcedure{},
+		&appointment_model.AppointmentSpecialty{},
 		// AI Agent conversation tables
 		&conversation.ConversationContext{},
 		&conversation.ToolCallLog{},
@@ -1288,6 +1293,16 @@ func runMigrations(db *database.Database) error {
 		CREATE INDEX IF NOT EXISTS idx_appointments_awaiting_payment
 		ON appointments (status, payment_expires_at)
 		WHERE status = 'awaiting_payment'
+	`)
+
+	// Indexes for patient records (append-only and JSONB search)
+	db.GetDB().Exec(`
+		CREATE INDEX IF NOT EXISTS idx_patient_records_latest 
+		ON patient_records(patient_id, clinic_id, recorded_at DESC)
+	`)
+	db.GetDB().Exec(`
+		CREATE INDEX IF NOT EXISTS idx_patient_records_custom_fields 
+		ON patient_records USING GIN (custom_fields)
 	`)
 
 	// Data Migration: Migrando plan, status, e asaas id da tabela clinics para a nova accounts

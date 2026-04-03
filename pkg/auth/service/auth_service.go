@@ -46,6 +46,7 @@ type AuthService interface {
 	ResendVerificationEmail(ctx context.Context, email string) error
 	// Payment service injection (for creating Asaas subscriptions during registration)
 	SetPaymentService(paymentService PaymentService)
+	SetTemplateSeedService(svc TemplateSeedService)
 }
 
 // GoogleAuthClient defines the interface for Google authentication
@@ -57,6 +58,11 @@ type GoogleAuthClient interface {
 type PaymentService interface {
 	CreateCustomerForClinic(ctx context.Context, clinicID uuid.UUID, req *payment_model.CreateCustomerRequest) error
 	CreateSubscriptionForClinic(ctx context.Context, clinicID uuid.UUID, planID uuid.UUID, offerToken *string, billing string) error
+}
+
+// TemplateSeedService defines minimal interface for seeding default templates on clinic creation
+type TemplateSeedService interface {
+	SeedDefaultTemplates(ctx context.Context, clinicID uuid.UUID) error
 }
 
 // GoogleUserInfo represents user information from Google
@@ -83,7 +89,8 @@ type authService struct {
 	jwtService            JWTService
 	googleClient          GoogleAuthClient
 	emailService          email_service.EmailService
-	paymentService        PaymentService // Optional: for creating Asaas subscriptions during registration
+	paymentService        PaymentService      // Optional: for creating Asaas subscriptions during registration
+	templateSeedService   TemplateSeedService // Optional: for seeding default anamnese templates on clinic creation
 	frontendURL           string
 }
 
@@ -150,6 +157,10 @@ func NewAuthServiceWithGoogle(
 // SetPaymentService sets the payment service (used to avoid circular dependency)
 func (s *authService) SetPaymentService(paymentService PaymentService) {
 	s.paymentService = paymentService
+}
+
+func (s *authService) SetTemplateSeedService(svc TemplateSeedService) {
+	s.templateSeedService = svc
 }
 
 // buildTokenContext constructs a TokenContext for JWT generation from a user and their clinic membership.
@@ -301,6 +312,11 @@ func (s *authService) Register(ctx context.Context, req *model.RegisterRequest) 
 	if err := s.clinicRepo.Create(ctx, clinic); err != nil {
 		_ = s.accountRepo.Delete(ctx, accountID)
 		return nil, err
+	}
+
+	// Seed default anamnese templates for the new clinic
+	if s.templateSeedService != nil {
+		_ = s.templateSeedService.SeedDefaultTemplates(ctx, clinicID)
 	}
 
 	// Create owner user
