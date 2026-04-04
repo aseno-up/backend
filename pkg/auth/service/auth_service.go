@@ -280,11 +280,15 @@ func (s *authService) Register(ctx context.Context, req *model.RegisterRequest) 
 
 	// Create Account (don't set Plan association to avoid GORM upsert conflict)
 	account := &account_model.Account{
-		ID:                 accountID,
-		OwnerID:            userID,
-		PlanID:             &plan.ID,
-		SubscriptionStatus: subscriptionStatus,
-		TrialEndsAt:        trialEndsAt,
+		ID:                     accountID,
+		OwnerID:                userID,
+		PlanID:                 &plan.ID,
+		SubscriptionStatus:     subscriptionStatus,
+		TrialEndsAt:            trialEndsAt,
+		MaxClinics:             plan.MaxClinics,
+		MaxProfessionals:       plan.MaxProfessionals,
+		MaxWhatsappConnections: plan.MaxWhatsappConnections,
+		MaxGoogleCalendars:     plan.MaxGoogleCalendars,
 	}
 
 	if err := s.accountRepo.Create(ctx, account); err != nil {
@@ -541,11 +545,15 @@ func (s *authService) GoogleLogin(ctx context.Context, req *model.GoogleLoginReq
 
 		// Create Account (don't set Plan association to avoid GORM upsert conflict)
 		account := &account_model.Account{
-			ID:                 accountID,
-			OwnerID:            userID,
-			PlanID:             &plan.ID,
-			SubscriptionStatus: account_model.SubscriptionStatusTrial,
-			TrialEndsAt:        &trialEndsAt,
+			ID:                     accountID,
+			OwnerID:                userID,
+			PlanID:                 &plan.ID,
+			SubscriptionStatus:     account_model.SubscriptionStatusTrial,
+			TrialEndsAt:            &trialEndsAt,
+			MaxClinics:             plan.MaxClinics,
+			MaxProfessionals:       plan.MaxProfessionals,
+			MaxWhatsappConnections: plan.MaxWhatsappConnections,
+			MaxGoogleCalendars:     plan.MaxGoogleCalendars,
 		}
 
 		if err := s.accountRepo.Create(ctx, account); err != nil {

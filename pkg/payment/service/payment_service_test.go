@@ -327,6 +327,11 @@ func (m *mockClinicRepo) List(ctx context.Context, limit, offset int) ([]*clinic
 	return args.Get(0).([]*clinic_model.Clinic), args.Get(1).(int64), args.Error(2)
 }
 
+func (m *mockClinicRepo) CountByAccountID(ctx context.Context, accountID uuid.UUID) (int64, error) {
+	args := m.Called(ctx, accountID)
+	return args.Get(0).(int64), args.Error(1)
+}
+
 // Mock AccountRepository
 type mockAccountRepo struct {
 	mock.Mock
@@ -425,6 +430,9 @@ func (m *mockPlanService) ListOffers(ctx context.Context) ([]plan_model.Offer, e
 	return nil, nil
 }
 func (m *mockPlanService) UpdateOffer(ctx context.Context, offer *plan_model.Offer) error { return nil }
+func (m *mockPlanService) GetBySlug(ctx context.Context, slug string) (*plan_model.Plan, error) {
+	return nil, nil
+}
 
 // Test helper to create service with mocks
 func setupTestService() (*paymentService, *mockPaymentClient, *mockCustomerRepo, *mockPaymentRepo, *mockSubscriptionRepo, *mockClinicRepo, *mockAccountRepo, *mockPlanService) {

@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/aseno/backend/internal/errors"
+	"github.com/aseno/backend/internal/planlimit"
 	clinic_model "github.com/aseno/backend/pkg/clinic/model"
 	clinic_repository "github.com/aseno/backend/pkg/clinic/repository"
 	"github.com/aseno/backend/pkg/whatsapp/client/evolution"
@@ -200,6 +201,27 @@ func (h *whatsAppHandler) Connect(c *gin.Context) {
 		statusCode := errors.GetStatusCode(err)
 		c.JSON(statusCode, errors.ToResponse(err))
 		return
+	}
+
+	// Check WhatsApp connection limit via Account
+	if clinic.Account != nil {
+		limit := clinic.Account.MaxWhatsappConnections
+		if !planlimit.IsUnlimited(limit) {
+			count, err := h.connRepo.CountActiveByAccountID(c.Request.Context(), clinic.AccountID)
+			if err != nil {
+				statusCode := errors.GetStatusCode(err)
+				c.JSON(statusCode, errors.ToResponse(err))
+				return
+			}
+			// Allow if this clinic already has a connection (reconnecting), block only new ones
+			_, existingErr := h.connRepo.GetActiveByClinicID(c.Request.Context(), clinic.ID)
+			if existingErr != nil && int(count) >= limit {
+				c.JSON(http.StatusForbidden, errors.ToResponse(
+					errors.ErrValidationInstance.WithMessage(
+						fmt.Sprintf("Limite de %d conexões WhatsApp atingido. Faça upgrade para adicionar mais.", limit))))
+				return
+			}
+		}
 	}
 
 	// Get or create the active WhatsApp connection for this clinic

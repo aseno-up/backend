@@ -2,10 +2,13 @@ package handler
 
 import (
 	"net/http"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/aseno/backend/internal/logger"
 	clinic_model "github.com/aseno/backend/pkg/clinic/model"
+	plan_service "github.com/aseno/backend/pkg/plan/service"
 	"github.com/aseno/backend/pkg/settings/model"
 	"github.com/aseno/backend/pkg/settings/service"
 )
@@ -20,12 +23,14 @@ type SettingsHandler interface {
 // settingsHandler implements SettingsHandler
 type settingsHandler struct {
 	service service.SettingsService
+	planSvc plan_service.PlanService
 }
 
 // NewSettingsHandler creates a new settings handler
-func NewSettingsHandler(service service.SettingsService) SettingsHandler {
+func NewSettingsHandler(service service.SettingsService, planSvc plan_service.PlanService) SettingsHandler {
 	return &settingsHandler{
 		service: service,
+		planSvc: planSvc,
 	}
 }
 
@@ -109,9 +114,46 @@ func (h *settingsHandler) Update(c *gin.Context) {
 		return
 	}
 
+	// Propagate plan limit changes to the Plan entity so new accounts inherit updated values
+	h.propagatePlanLimit(c, key, req.Value)
+
 	c.JSON(http.StatusOK, gin.H{
 		"message": "Configuração atualizada com sucesso",
 		"key":     key,
 		"value":   req.Value,
 	})
+}
+
+// planLimitSettings maps setting keys to plan slugs for propagation
+var planLimitSettings = map[string]string{
+	model.SettingPlanBasicLimit:    "basic",
+	model.SettingPlanProLimit:      "professional",
+	model.SettingPlanAdvancedLimit: "advanced",
+}
+
+// propagatePlanLimit updates the Plan entity when a plan limit setting changes.
+// This ensures new accounts created after the change inherit the updated limits.
+// Existing accounts are NOT affected (they keep their Account.Max* values).
+func (h *settingsHandler) propagatePlanLimit(c *gin.Context, key, value string) {
+	slug, ok := planLimitSettings[key]
+	if !ok {
+		return
+	}
+
+	limit, err := strconv.Atoi(value)
+	if err != nil {
+		logger.Printf("[Settings] Failed to parse plan limit value '%s': %v", value, err)
+		return
+	}
+
+	plan, err := h.planSvc.GetBySlug(c.Request.Context(), slug)
+	if err != nil {
+		logger.Printf("[Settings] Failed to find plan '%s' for limit propagation: %v", slug, err)
+		return
+	}
+
+	plan.MaxProfessionals = limit
+	if err := h.planSvc.UpdatePlan(c.Request.Context(), plan); err != nil {
+		logger.Printf("[Settings] Failed to propagate limit to plan '%s': %v", slug, err)
+	}
 }

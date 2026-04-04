@@ -379,7 +379,7 @@ func main() {
 	} else {
 		authService = auth_service.NewAuthService(userRepo, clinicRepo, accountRepo, passwordResetRepo, emailVerificationRepo, planRepo, professionalRepo, clinicMemberRepo, jwtService, emailSvc, cfg.GetFrontendURL())
 	}
-	professionalService := professional_service.NewProfessionalService(professionalRepo, clinicRepo, appointmentRepo, settingsSvc)
+	professionalService := professional_service.NewProfessionalService(professionalRepo, clinicRepo, appointmentRepo)
 	patientService := patient_service.NewPatientService(patientRepo, clinicRepo)
 	appointmentService := appointment_service.NewAppointmentService(appointmentRepo, professionalRepo)
 	procedureService := procedure_service.NewProcedureService(procedureRepo)
@@ -778,7 +778,7 @@ func main() {
 	}
 
 	// Initialize Settings handler (admin only - dev clinics)
-	settingsHdlr := settings_handler.NewSettingsHandler(settingsSvc)
+	settingsHdlr := settings_handler.NewSettingsHandler(settingsSvc, planService)
 
 	// Initialize CRM Lead service and handler
 	var crmProvider lead_crm.CRMProvider

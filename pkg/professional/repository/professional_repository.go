@@ -20,6 +20,7 @@ type ProfessionalRepository interface {
 	Delete(ctx context.Context, id, clinicID uuid.UUID) error
 	BulkDelete(ctx context.Context, ids []uuid.UUID, clinicID uuid.UUID) error
 	GetByUserID(ctx context.Context, userID, clinicID uuid.UUID) (*model.Professional, error)
+	CountActiveByAccountID(ctx context.Context, accountID uuid.UUID) (int64, error)
 }
 
 // professionalRepository implements ProfessionalRepository
@@ -144,6 +145,20 @@ func (r *professionalRepository) BulkDelete(ctx context.Context, ids []uuid.UUID
 		return errors.ErrInternalInstance.WithError(result.Error)
 	}
 	return nil
+}
+
+// CountActiveByAccountID counts active professionals across all clinics belonging to an account
+func (r *professionalRepository) CountActiveByAccountID(ctx context.Context, accountID uuid.UUID) (int64, error) {
+	var count int64
+	err := r.db.WithContext(ctx).
+		Model(&model.Professional{}).
+		Joins("JOIN clinics ON clinics.id = professionals.clinic_id AND clinics.deleted_at IS NULL").
+		Where("clinics.account_id = ? AND professionals.is_active = true AND professionals.deleted_at IS NULL", accountID).
+		Count(&count).Error
+	if err != nil {
+		return 0, errors.ErrInternalInstance.WithError(err)
+	}
+	return count, nil
 }
 
 // GetByUserID retrieves a professional by their linked user ID

@@ -56,6 +56,9 @@ func (r *stubClinicRepo) List(_ context.Context, _, _ int) ([]*clinic_model.Clin
 }
 func (r *stubClinicRepo) ExistsBySlug(_ context.Context, _ string) (bool, error)  { return false, nil }
 func (r *stubClinicRepo) ExistsByEmail(_ context.Context, _ string) (bool, error) { return false, nil }
+func (r *stubClinicRepo) CountByAccountID(_ context.Context, _ uuid.UUID) (int64, error) {
+	return 0, nil
+}
 
 // stubConnRepo implementa WhatsAppConnectionRepository em memória.
 type stubConnRepo struct {
@@ -121,6 +124,10 @@ func (r *stubConnRepo) UpsertInstance(_ context.Context, clinicID uuid.UUID, ins
 	r.activeConn = conn
 	r.byInstance[instance] = conn
 	return nil
+}
+
+func (r *stubConnRepo) CountActiveByAccountID(_ context.Context, _ uuid.UUID) (int64, error) {
+	return 0, nil
 }
 
 // stubWhatsAppSvc implementa service.WhatsAppService completamente.

@@ -60,6 +60,10 @@ func (m *mockClinicRepo) ExistsByEmail(_ context.Context, _ string) (bool, error
 	return false, nil
 }
 
+func (m *mockClinicRepo) CountByAccountID(_ context.Context, _ uuid.UUID) (int64, error) {
+	return 0, nil
+}
+
 type notFoundErr struct{}
 
 func (e *notFoundErr) Error() string { return "not found" }

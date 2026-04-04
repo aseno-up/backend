@@ -53,6 +53,9 @@ func (m *MockPlanService) UpdatePlan(ctx context.Context, plan *model.Plan) erro
 func (m *MockPlanService) CreateOffer(ctx context.Context, offer *model.Offer) error   { return nil }
 func (m *MockPlanService) ListOffers(ctx context.Context) ([]model.Offer, error)       { return nil, nil }
 func (m *MockPlanService) UpdateOffer(ctx context.Context, offer *model.Offer) error   { return nil }
+func (m *MockPlanService) GetBySlug(ctx context.Context, slug string) (*model.Plan, error) {
+	return nil, nil
+}
 
 func TestValidateOffer_WithSlug(t *testing.T) {
 	gin.SetMode(gin.TestMode)

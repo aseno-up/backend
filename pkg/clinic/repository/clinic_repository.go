@@ -21,6 +21,7 @@ type ClinicRepository interface {
 	List(ctx context.Context, limit, offset int) ([]*model.Clinic, int64, error)
 	ExistsBySlug(ctx context.Context, slug string) (bool, error)
 	ExistsByEmail(ctx context.Context, email string) (bool, error)
+	CountByAccountID(ctx context.Context, accountID uuid.UUID) (int64, error)
 }
 
 // clinicRepository implements ClinicRepository
@@ -151,6 +152,16 @@ func (r *clinicRepository) List(ctx context.Context, limit, offset int) ([]*mode
 	}
 
 	return clinics, total, nil
+}
+
+// CountByAccountID counts clinics belonging to an account
+func (r *clinicRepository) CountByAccountID(ctx context.Context, accountID uuid.UUID) (int64, error) {
+	var count int64
+	result := r.db.WithContext(ctx).Model(&model.Clinic{}).Where("account_id = ? AND deleted_at IS NULL", accountID).Count(&count)
+	if result.Error != nil {
+		return 0, errors.ErrInternalInstance.WithError(result.Error)
+	}
+	return count, nil
 }
 
 // ExistsBySlug checks if a clinic with the given slug exists

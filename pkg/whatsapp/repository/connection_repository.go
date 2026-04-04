@@ -18,6 +18,7 @@ type WhatsAppConnectionRepository interface {
 	Update(ctx context.Context, conn *model.WhatsAppConnection) error
 	UpdateConnected(ctx context.Context, clinicID uuid.UUID, connected bool) error
 	UpsertInstance(ctx context.Context, clinicID uuid.UUID, instance string) error
+	CountActiveByAccountID(ctx context.Context, accountID uuid.UUID) (int64, error)
 }
 
 // whatsAppConnectionRepository implements WhatsAppConnectionRepository
@@ -114,4 +115,18 @@ func (r *whatsAppConnectionRepository) UpsertInstance(ctx context.Context, clini
 		return errors.ErrInternalInstance.WithError(result.Error)
 	}
 	return nil
+}
+
+// CountActiveByAccountID counts active WhatsApp connections across all clinics belonging to an account
+func (r *whatsAppConnectionRepository) CountActiveByAccountID(ctx context.Context, accountID uuid.UUID) (int64, error) {
+	var count int64
+	err := r.db.WithContext(ctx).
+		Table("whatsapp_connections wc").
+		Joins("JOIN clinics c ON c.id = wc.clinic_id AND c.deleted_at IS NULL").
+		Where("c.account_id = ? AND wc.is_active = true AND wc.deleted_at IS NULL", accountID).
+		Count(&count).Error
+	if err != nil {
+		return 0, errors.ErrInternalInstance.WithError(err)
+	}
+	return count, nil
 }

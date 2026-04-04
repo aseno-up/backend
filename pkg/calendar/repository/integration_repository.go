@@ -96,6 +96,20 @@ func (r *integrationRepository) UpdateTokens(ctx context.Context, clinicID uuid.
 	return nil
 }
 
+// CountByAccountID counts calendar integrations across all clinics belonging to an account
+func (r *integrationRepository) CountByAccountID(ctx context.Context, accountID uuid.UUID) (int64, error) {
+	var count int64
+	err := r.db.WithContext(ctx).
+		Table("calendar_integrations ci").
+		Joins("JOIN clinics c ON c.id = ci.clinic_id AND c.deleted_at IS NULL").
+		Where("c.account_id = ? AND ci.deleted_at IS NULL", accountID).
+		Count(&count).Error
+	if err != nil {
+		return 0, errors.ErrInternalInstance.WithError(err)
+	}
+	return count, nil
+}
+
 // UpdateLastSync updates the last sync timestamp and error
 func (r *integrationRepository) UpdateLastSync(ctx context.Context, clinicID uuid.UUID, lastSyncAt time.Time, syncError string) error {
 	updates := map[string]interface{}{

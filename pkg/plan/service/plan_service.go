@@ -19,6 +19,7 @@ var (
 type PlanService interface {
 	ListPlans(ctx context.Context) ([]model.Plan, error)
 	GetPlanByID(ctx context.Context, id uuid.UUID) (*model.Plan, error)
+	GetBySlug(ctx context.Context, slug string) (*model.Plan, error)
 	ValidateOffer(ctx context.Context, token string) (*model.Offer, error)
 	CalculateBestPrice(ctx context.Context, plan *model.Plan, offer *model.Offer, cycleType model.CycleType) (float64, error)
 	UseOffer(ctx context.Context, offerID uuid.UUID) error
@@ -47,6 +48,10 @@ func (s *planService) ListPlans(ctx context.Context) ([]model.Plan, error) {
 
 func (s *planService) GetPlanByID(ctx context.Context, id uuid.UUID) (*model.Plan, error) {
 	return s.planRepo.GetByID(ctx, id)
+}
+
+func (s *planService) GetBySlug(ctx context.Context, slug string) (*model.Plan, error) {
+	return s.planRepo.GetBySlug(ctx, slug)
 }
 
 func (s *planService) ValidateOffer(ctx context.Context, token string) (*model.Offer, error) {

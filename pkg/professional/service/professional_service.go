@@ -7,12 +7,12 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/aseno/backend/internal/errors"
+	"github.com/aseno/backend/internal/planlimit"
 	appointment_repository "github.com/aseno/backend/pkg/appointment/repository"
 	clinic_repository "github.com/aseno/backend/pkg/clinic/repository"
 	"github.com/aseno/backend/pkg/pagination"
 	"github.com/aseno/backend/pkg/professional/model"
 	"github.com/aseno/backend/pkg/professional/repository"
-	settings_service "github.com/aseno/backend/pkg/settings/service"
 )
 
 // ProfessionalService defines the interface for professional business logic
@@ -30,49 +30,37 @@ type professionalService struct {
 	repo            repository.ProfessionalRepository
 	clinicRepo      clinic_repository.ClinicRepository
 	appointmentRepo appointment_repository.AppointmentRepository
-	settings        settings_service.SettingsService
 }
 
 // NewProfessionalService creates a new professional service
-func NewProfessionalService(repo repository.ProfessionalRepository, clinicRepo clinic_repository.ClinicRepository, appointmentRepo appointment_repository.AppointmentRepository, settings settings_service.SettingsService) ProfessionalService {
+func NewProfessionalService(repo repository.ProfessionalRepository, clinicRepo clinic_repository.ClinicRepository, appointmentRepo appointment_repository.AppointmentRepository) ProfessionalService {
 	return &professionalService{
 		repo:            repo,
 		clinicRepo:      clinicRepo,
 		appointmentRepo: appointmentRepo,
-		settings:        settings,
 	}
 }
 
 // Create creates a new professional
 func (s *professionalService) Create(ctx context.Context, clinicID uuid.UUID, req *model.CreateProfessionalRequest) (*model.ProfessionalResponse, error) {
-	// 1. Check plan limits
+	// 1. Check plan limits via Account (source of truth)
 	clinic, err := s.clinicRepo.GetByID(ctx, clinicID)
 	if err != nil {
 		return nil, err
 	}
 
-	// Count active professionals (using default limit 1 to just get count)
-	_, count, err := s.repo.List(ctx, clinicID, pagination.Filter{Limit: 1, Status: "active"})
-	if err != nil {
-		return nil, err
-	}
-
-	// Get limit from settings service
-	planName := "basic"
-	if clinic.Account != nil && clinic.Account.Plan != nil {
-		planName = string(clinic.Account.Plan.Slug)
-	}
-	limit := s.settings.GetPlanLimit(ctx, planName)
-
-	// Check if limit is exceeded (-1 means unlimited)
-	if !s.settings.IsUnlimited(limit) && int(count) >= limit {
-		// MVP: just block, no excess billing
-		if !s.settings.IsExcessBillingEnabled(ctx) {
-			return nil, errors.ErrValidationInstance.WithMessage(
-				fmt.Sprintf("Limite de %d profissionais do plano %s atingido. Faça upgrade para adicionar mais.",
-					limit, planName))
+	if clinic.Account != nil {
+		limit := clinic.Account.MaxProfessionals
+		if !planlimit.IsUnlimited(limit) {
+			count, err := s.repo.CountActiveByAccountID(ctx, clinic.AccountID)
+			if err != nil {
+				return nil, err
+			}
+			if int(count) >= limit {
+				return nil, errors.ErrValidationInstance.WithMessage(
+					fmt.Sprintf("Limite de %d profissionais atingido. Faça upgrade para adicionar mais.", limit))
+			}
 		}
-		// Future: allow excess with billing (not implemented yet)
 	}
 
 	// 2. Create professional
