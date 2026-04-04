@@ -28,6 +28,9 @@ type PatientHandler interface {
 	// Self-registered patient management
 	ListSelfRegistered(c *gin.Context)
 	MergePatient(c *gin.Context)
+	// Patient merge (bulk) endpoints
+	SearchPatients(c *gin.Context)
+	BulkMergePatients(c *gin.Context)
 }
 
 // patientHandler implements PatientHandler
@@ -46,6 +49,8 @@ func (h *patientHandler) RegisterRoutes(router gin.IRouter) {
 	{
 		patients.POST("", h.Create)
 		patients.GET("", h.List)
+		patients.GET("/search", h.SearchPatients)
+		patients.POST("/merge", h.BulkMergePatients)
 		patients.POST("/risk/recalculate-all", h.RecalculateAllRisks)
 		patients.GET("/self-registered", h.ListSelfRegistered)
 		patients.GET("/:id", h.GetByID)
@@ -100,8 +105,21 @@ func (h *patientHandler) GetByID(c *gin.Context) {
 }
 
 // List handles listing patients (with optional search and filters)
+// If ?unlinked=true is passed, returns provisional patients pending verification
 func (h *patientHandler) List(c *gin.Context) {
 	clinicID, _ := c.Get("clinic_id")
+
+	// Handle ?unlinked=true for provisional patients
+	if c.Query("unlinked") == "true" {
+		results, err := h.service.ListUnlinkedProvisional(c.Request.Context(), clinicID.(uuid.UUID))
+		if err != nil {
+			statusCode := errors.GetStatusCode(err)
+			c.JSON(statusCode, errors.ToResponse(err))
+			return
+		}
+		c.JSON(http.StatusOK, results)
+		return
+	}
 
 	var filter pagination.Filter
 	if err := c.ShouldBindQuery(&filter); err != nil {
@@ -265,6 +283,52 @@ func (h *patientHandler) ListSelfRegistered(c *gin.Context) {
 	}
 
 	result, err := h.service.ListSelfRegistered(c.Request.Context(), clinicID.(uuid.UUID), filter)
+	if err != nil {
+		statusCode := errors.GetStatusCode(err)
+		c.JSON(statusCode, errors.ToResponse(err))
+		return
+	}
+
+	c.JSON(http.StatusOK, result)
+}
+
+// SearchPatients searches patients by name or CPF, excluding provisional patients
+func (h *patientHandler) SearchPatients(c *gin.Context) {
+	clinicID, _ := c.Get("clinic_id")
+
+	query := c.Query("q")
+	if query == "" {
+		c.JSON(http.StatusOK, []interface{}{})
+		return
+	}
+
+	results, err := h.service.SearchExcludingProvisional(c.Request.Context(), clinicID.(uuid.UUID), query)
+	if err != nil {
+		statusCode := errors.GetStatusCode(err)
+		c.JSON(statusCode, errors.ToResponse(err))
+		return
+	}
+
+	c.JSON(http.StatusOK, results)
+}
+
+// BulkMergePatients merges multiple provisional patients into a target patient
+func (h *patientHandler) BulkMergePatients(c *gin.Context) {
+	clinicID, _ := c.Get("clinic_id")
+	actorID, _ := c.Get("user_id")
+
+	var req model.BulkMergePatientRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, errors.ToResponse(errors.ErrValidationInstance.WithError(err)))
+		return
+	}
+
+	if len(req.ProvisionalIDs) == 0 {
+		c.JSON(http.StatusBadRequest, errors.ToResponse(errors.ErrValidationInstance.WithMessage("provisional_ids cannot be empty")))
+		return
+	}
+
+	result, err := h.service.MergePatientsBulk(c.Request.Context(), clinicID.(uuid.UUID), actorID.(uuid.UUID), &req)
 	if err != nil {
 		statusCode := errors.GetStatusCode(err)
 		c.JSON(statusCode, errors.ToResponse(err))

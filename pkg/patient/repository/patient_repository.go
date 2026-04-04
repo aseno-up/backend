@@ -27,6 +27,10 @@ type PatientRepository interface {
 	GetAllByClinicID(ctx context.Context, clinicID uuid.UUID) ([]*model.Patient, error)
 	ListBySource(ctx context.Context, clinicID uuid.UUID, source model.PatientSource, filter pagination.Filter) ([]*model.Patient, int64, error)
 	MergePatients(ctx context.Context, clinicID, targetID, sourceID uuid.UUID) error
+	// Patient merge methods
+	GetUnlinkedProvisionalPatients(ctx context.Context, clinicID uuid.UUID) ([]*model.Patient, error)
+	SearchPatientsExcludingProvisional(ctx context.Context, clinicID uuid.UUID, query string, limit int) ([]*model.Patient, error)
+	MergePatientsBulk(ctx context.Context, clinicID, targetID uuid.UUID, provisionalIDs []uuid.UUID, actorID uuid.UUID) (int64, error)
 }
 
 // patientRepository implements PatientRepository

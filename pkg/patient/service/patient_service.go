@@ -27,6 +27,10 @@ type PatientService interface {
 	// Self-registered patient management
 	ListSelfRegistered(ctx context.Context, clinicID uuid.UUID, filter pagination.Filter) (pagination.Response[*model.PatientResponse], error)
 	MergePatients(ctx context.Context, clinicID, targetID, sourceID uuid.UUID) error
+	// Patient merge (bulk) methods
+	ListUnlinkedProvisional(ctx context.Context, clinicID uuid.UUID) ([]*model.UnlinkedPatientResponse, error)
+	SearchExcludingProvisional(ctx context.Context, clinicID uuid.UUID, query string) ([]*model.PatientSearchResult, error)
+	MergePatientsBulk(ctx context.Context, clinicID uuid.UUID, actorID uuid.UUID, req *model.BulkMergePatientRequest) (*model.BulkMergePatientResponse, error)
 }
 
 // patientService implements PatientService
@@ -289,6 +293,73 @@ func (s *patientService) MergePatients(ctx context.Context, clinicID, targetID, 
 		return errors.ErrInternalInstance.WithError(err)
 	}
 	return nil
+}
+
+// ListUnlinkedProvisional returns provisional patients pending verification
+func (s *patientService) ListUnlinkedProvisional(ctx context.Context, clinicID uuid.UUID) ([]*model.UnlinkedPatientResponse, error) {
+	patients, err := s.repo.GetUnlinkedProvisionalPatients(ctx, clinicID)
+	if err != nil {
+		return nil, err
+	}
+
+	results := make([]*model.UnlinkedPatientResponse, len(patients))
+	for i, p := range patients {
+		results[i] = &model.UnlinkedPatientResponse{
+			ID:        p.ID,
+			Name:      p.Name,
+			Email:     p.Email,
+			CPF:       p.Document,
+			Phone:     p.Phone,
+			CreatedAt: p.CreatedAt,
+		}
+	}
+	return results, nil
+}
+
+// SearchExcludingProvisional searches for confirmed patients by name or CPF
+func (s *patientService) SearchExcludingProvisional(ctx context.Context, clinicID uuid.UUID, query string) ([]*model.PatientSearchResult, error) {
+	patients, err := s.repo.SearchPatientsExcludingProvisional(ctx, clinicID, query, 10)
+	if err != nil {
+		return nil, err
+	}
+
+	results := make([]*model.PatientSearchResult, len(patients))
+	for i, p := range patients {
+		results[i] = &model.PatientSearchResult{
+			ID:     p.ID,
+			Name:   p.Name,
+			CPF:    p.Document,
+			Email:  p.Email,
+			Phone:  p.Phone,
+			Source: p.Source,
+		}
+	}
+	return results, nil
+}
+
+// MergePatientsBulk merges multiple provisional patients into a target patient
+func (s *patientService) MergePatientsBulk(ctx context.Context, clinicID uuid.UUID, actorID uuid.UUID, req *model.BulkMergePatientRequest) (*model.BulkMergePatientResponse, error) {
+	if len(req.ProvisionalIDs) == 0 {
+		return nil, errors.ErrValidationInstance.WithMessage("provisional_ids cannot be empty")
+	}
+
+	// Check none of the provisional IDs is the same as the target
+	for _, pid := range req.ProvisionalIDs {
+		if pid == req.TargetPatientID {
+			return nil, errors.ErrValidationInstance.WithMessage("Target patient cannot be in the provisional list")
+		}
+	}
+
+	reassigned, err := s.repo.MergePatientsBulk(ctx, clinicID, req.TargetPatientID, req.ProvisionalIDs, actorID)
+	if err != nil {
+		return nil, err
+	}
+
+	return &model.BulkMergePatientResponse{
+		AppointmentsReassigned: reassigned,
+		TargetPatientID:        req.TargetPatientID,
+		MergedCount:            len(req.ProvisionalIDs),
+	}, nil
 }
 
 // calculateRisk determines the risk level based on attendance statistics
