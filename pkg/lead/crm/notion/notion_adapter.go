@@ -413,6 +413,8 @@ func mapStatus(s model.LeadStatus) string {
 		return "Sem resposta"
 	case model.LeadStatusDescartado:
 		return "Descartado"
+	case model.LeadStatusIsca:
+		return "Isca"
 	default:
 		return string(s)
 	}

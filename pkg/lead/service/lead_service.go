@@ -14,11 +14,11 @@ import (
 
 // LeadService defines the interface for lead business logic
 type LeadService interface {
-	Create(ctx context.Context, clinicID uuid.UUID, req *model.CreateLeadRequest) (*model.LeadResponse, error)
-	GetByID(ctx context.Context, id, clinicID uuid.UUID) (*model.LeadResponse, error)
-	List(ctx context.Context, clinicID uuid.UUID, filter model.LeadFilter) (pagination.Response[*model.LeadResponse], error)
-	Update(ctx context.Context, id, clinicID uuid.UUID, req *model.UpdateLeadRequest) (*model.LeadResponse, error)
-	Delete(ctx context.Context, id, clinicID uuid.UUID) error
+	Create(ctx context.Context, req *model.CreateLeadRequest) (*model.LeadResponse, error)
+	GetByID(ctx context.Context, id uuid.UUID) (*model.LeadResponse, error)
+	List(ctx context.Context, filter model.LeadFilter) (pagination.Response[*model.LeadResponse], error)
+	Update(ctx context.Context, id uuid.UUID, req *model.UpdateLeadRequest) (*model.LeadResponse, error)
+	Delete(ctx context.Context, id uuid.UUID) error
 }
 
 type leadService struct {
@@ -33,16 +33,16 @@ func NewLeadService(repo repository.LeadRepository, crmProvider crm.CRMProvider)
 	}
 }
 
-func (s *leadService) Create(ctx context.Context, clinicID uuid.UUID, req *model.CreateLeadRequest) (*model.LeadResponse, error) {
+func (s *leadService) Create(ctx context.Context, req *model.CreateLeadRequest) (*model.LeadResponse, error) {
 	status := req.Status
 	if status == "" {
 		status = model.LeadStatusIdentificado
 	}
 
 	lead := &model.Lead{
-		ClinicID:           clinicID,
 		ClinicName:         req.ClinicName,
 		ContactName:        req.ContactName,
+		Email:              req.Email,
 		Phone:              req.Phone,
 		City:               req.City,
 		Type:               req.Type,
@@ -74,16 +74,16 @@ func (s *leadService) Create(ctx context.Context, clinicID uuid.UUID, req *model
 	return lead.ToResponse(), nil
 }
 
-func (s *leadService) GetByID(ctx context.Context, id, clinicID uuid.UUID) (*model.LeadResponse, error) {
-	lead, err := s.repo.GetByID(ctx, id, clinicID)
+func (s *leadService) GetByID(ctx context.Context, id uuid.UUID) (*model.LeadResponse, error) {
+	lead, err := s.repo.GetByID(ctx, id)
 	if err != nil {
 		return nil, err
 	}
 	return lead.ToResponse(), nil
 }
 
-func (s *leadService) List(ctx context.Context, clinicID uuid.UUID, filter model.LeadFilter) (pagination.Response[*model.LeadResponse], error) {
-	leads, total, err := s.repo.List(ctx, clinicID, filter)
+func (s *leadService) List(ctx context.Context, filter model.LeadFilter) (pagination.Response[*model.LeadResponse], error) {
+	leads, total, err := s.repo.List(ctx, filter)
 	if err != nil {
 		return pagination.Response[*model.LeadResponse]{}, err
 	}
@@ -99,8 +99,8 @@ func (s *leadService) List(ctx context.Context, clinicID uuid.UUID, filter model
 	}, nil
 }
 
-func (s *leadService) Update(ctx context.Context, id, clinicID uuid.UUID, req *model.UpdateLeadRequest) (*model.LeadResponse, error) {
-	lead, err := s.repo.GetByID(ctx, id, clinicID)
+func (s *leadService) Update(ctx context.Context, id uuid.UUID, req *model.UpdateLeadRequest) (*model.LeadResponse, error) {
+	lead, err := s.repo.GetByID(ctx, id)
 	if err != nil {
 		return nil, err
 	}
@@ -110,6 +110,9 @@ func (s *leadService) Update(ctx context.Context, id, clinicID uuid.UUID, req *m
 	}
 	if req.ContactName != nil {
 		lead.ContactName = *req.ContactName
+	}
+	if req.Email != nil {
+		lead.Email = *req.Email
 	}
 	if req.Phone != nil {
 		lead.Phone = *req.Phone
@@ -199,8 +202,8 @@ func (s *leadService) Update(ctx context.Context, id, clinicID uuid.UUID, req *m
 	return lead.ToResponse(), nil
 }
 
-func (s *leadService) Delete(ctx context.Context, id, clinicID uuid.UUID) error {
-	return s.repo.Delete(ctx, id, clinicID)
+func (s *leadService) Delete(ctx context.Context, id uuid.UUID) error {
+	return s.repo.Delete(ctx, id)
 }
 
 func (s *leadService) syncCRM(ctx context.Context, lead *model.Lead) {

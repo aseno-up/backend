@@ -23,37 +23,37 @@ type mockLeadService struct {
 	mock.Mock
 }
 
-func (m *mockLeadService) Create(ctx context.Context, clinicID uuid.UUID, req *model.CreateLeadRequest) (*model.LeadResponse, error) {
-	args := m.Called(ctx, clinicID, req)
+func (m *mockLeadService) Create(ctx context.Context, req *model.CreateLeadRequest) (*model.LeadResponse, error) {
+	args := m.Called(ctx, req)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
 	return args.Get(0).(*model.LeadResponse), args.Error(1)
 }
 
-func (m *mockLeadService) GetByID(ctx context.Context, id, clinicID uuid.UUID) (*model.LeadResponse, error) {
-	args := m.Called(ctx, id, clinicID)
+func (m *mockLeadService) GetByID(ctx context.Context, id uuid.UUID) (*model.LeadResponse, error) {
+	args := m.Called(ctx, id)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
 	return args.Get(0).(*model.LeadResponse), args.Error(1)
 }
 
-func (m *mockLeadService) List(ctx context.Context, clinicID uuid.UUID, filter model.LeadFilter) (pagination.Response[*model.LeadResponse], error) {
-	args := m.Called(ctx, clinicID, filter)
+func (m *mockLeadService) List(ctx context.Context, filter model.LeadFilter) (pagination.Response[*model.LeadResponse], error) {
+	args := m.Called(ctx, filter)
 	return args.Get(0).(pagination.Response[*model.LeadResponse]), args.Error(1)
 }
 
-func (m *mockLeadService) Update(ctx context.Context, id, clinicID uuid.UUID, req *model.UpdateLeadRequest) (*model.LeadResponse, error) {
-	args := m.Called(ctx, id, clinicID, req)
+func (m *mockLeadService) Update(ctx context.Context, id uuid.UUID, req *model.UpdateLeadRequest) (*model.LeadResponse, error) {
+	args := m.Called(ctx, id, req)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
 	return args.Get(0).(*model.LeadResponse), args.Error(1)
 }
 
-func (m *mockLeadService) Delete(ctx context.Context, id, clinicID uuid.UUID) error {
-	args := m.Called(ctx, id, clinicID)
+func (m *mockLeadService) Delete(ctx context.Context, id uuid.UUID) error {
+	args := m.Called(ctx, id)
 	return args.Error(0)
 }
 
@@ -90,15 +90,6 @@ func setupTestRouter(svc *mockLeadService) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
 
-	clinicID := uuid.MustParse("d6b10acc-2307-413f-a4de-4c2edf3f9a70")
-	userID := uuid.New()
-
-	r.Use(func(c *gin.Context) {
-		c.Set("clinic_id", clinicID)
-		c.Set("user_id", userID)
-		c.Next()
-	})
-
 	accRepo := new(mockAccountRepo)
 	h := NewLeadHandler(svc, accRepo, nil)
 	h.RegisterRoutes(r)
@@ -116,7 +107,7 @@ func TestHandler_Create_Success(t *testing.T) {
 		Status:     model.LeadStatusIdentificado,
 	}
 
-	svc.On("Create", mock.Anything, mock.Anything, mock.Anything).Return(expected, nil)
+	svc.On("Create", mock.Anything, mock.Anything).Return(expected, nil)
 
 	body, _ := json.Marshal(map[string]string{
 		"clinic_name":  "Test Clinic",
@@ -156,7 +147,7 @@ func TestHandler_GetByID_Success(t *testing.T) {
 		ClinicName: "Found",
 	}
 
-	svc.On("GetByID", mock.Anything, leadID, mock.Anything).Return(expected, nil)
+	svc.On("GetByID", mock.Anything, leadID).Return(expected, nil)
 
 	w := httptest.NewRecorder()
 	req, _ := http.NewRequest("GET", "/leads/"+leadID.String(), nil)
@@ -182,7 +173,7 @@ func TestHandler_GetByID_NotFound(t *testing.T) {
 	router := setupTestRouter(svc)
 
 	leadID := uuid.New()
-	svc.On("GetByID", mock.Anything, leadID, mock.Anything).Return(nil, errors.ErrLeadNotFoundInstance)
+	svc.On("GetByID", mock.Anything, leadID).Return(nil, errors.ErrLeadNotFoundInstance)
 
 	w := httptest.NewRecorder()
 	req, _ := http.NewRequest("GET", "/leads/"+leadID.String(), nil)
@@ -197,7 +188,7 @@ func TestHandler_Delete_Success(t *testing.T) {
 	router := setupTestRouter(svc)
 
 	leadID := uuid.New()
-	svc.On("Delete", mock.Anything, leadID, mock.Anything).Return(nil)
+	svc.On("Delete", mock.Anything, leadID).Return(nil)
 
 	w := httptest.NewRecorder()
 	req, _ := http.NewRequest("DELETE", "/leads/"+leadID.String(), nil)

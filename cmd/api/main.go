@@ -788,6 +788,7 @@ func main() {
 	}
 	leadSvc := lead_service.NewLeadService(leadRepo, crmProvider)
 	leadHdlr := lead_handler.NewLeadHandler(leadSvc, accountRepo, db.GetDB())
+	leadIscaHdlr := lead_handler.NewLeadIscaHandler(leadRepo, emailSvc, "sheets")
 
 	// Initialize Sprint 6 handlers (admin only)
 	auditHdlr := audit_handler.NewAuditHandler(auditSvc)
@@ -850,6 +851,7 @@ func main() {
 		featureFlagHdlr,
 		usageMetricHdlr,
 		leadHdlr,
+		leadIscaHdlr,
 		paymentMethodHandler,
 		appointmentPaymentHandler,
 		specialtyHandler,
@@ -940,6 +942,7 @@ func setupRouter(
 	featureFlagHandler featureflag_handler.FeatureFlagHandler,
 	usageMetricHandler usagemetric_handler.UsageMetricHandler,
 	leadHandler lead_handler.LeadHandler,
+	leadIscaHandler lead_handler.LeadIscaHandler,
 	paymentMethodHandler *paymentmethod_handler.PaymentMethodHandler,
 	appointmentPaymentHandler appointment_handler.AppointmentPaymentHandler,
 	specialtyHandler *specialty_handler.SpecialtyHandler,
@@ -978,6 +981,9 @@ func setupRouter(
 
 		// Public config routes (no auth required - landing page)
 		publicHandler.RegisterRoutes(v1)
+
+		// Public lead isca routes (no auth required - lead capture)
+		leadIscaHandler.RegisterRoutes(v1)
 
 		// Public booking routes (no auth required - online booking)
 		bookingHandler.RegisterRoutes(v1)

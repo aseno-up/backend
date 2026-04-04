@@ -300,6 +300,63 @@ func (s *brevoEmailService) SendBookingConfirmation(ctx context.Context, data *B
 	return nil
 }
 
+// SendLeadIsca sends the lead isca email with spreadsheet attachments using Brevo
+func (s *brevoEmailService) SendLeadIsca(ctx context.Context, data *LeadIscaEmailData) error {
+	attachments := make([]lib.SendSmtpEmailAttachment, len(data.Attachments))
+	for i, a := range data.Attachments {
+		attachments[i] = lib.SendSmtpEmailAttachment{
+			Content: a.Content,
+			Name:    a.Name,
+		}
+	}
+
+	_, _, err := s.client.TransactionalEmailsApi.SendTransacEmail(ctx, lib.SendSmtpEmail{
+		Sender: &lib.SendSmtpEmailSender{
+			Name:  s.senderName,
+			Email: s.senderEmail,
+		},
+		To: []lib.SendSmtpEmailTo{
+			{
+				Email: data.RecipientEmail,
+				Name:  data.RecipientName,
+			},
+		},
+		Subject:    "Seu Kit de Planilhas para Clínicas — Aseno",
+		Attachment: attachments,
+		HtmlContent: fmt.Sprintf(`
+			<div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto;padding:32px 24px;">
+				<h2 style="color:#0d1b2a;margin-bottom:8px;">Olá, %s!</h2>
+				<p style="color:#607d94;font-size:15px;line-height:1.6;">
+					Obrigado por baixar o <strong>Kit de Planilhas para Clínicas</strong> da Aseno.
+				</p>
+				<p style="color:#607d94;font-size:15px;line-height:1.6;">
+					Em anexo você encontra as 3 planilhas prontas para usar:
+				</p>
+				<ul style="color:#607d94;font-size:14px;line-height:1.8;">
+					<li>Controle de Agenda & No-Show</li>
+					<li>Controle Financeiro da Cl��nica</li>
+					<li>Calculadora de Precificação de Procedimentos</li>
+				</ul>
+				<p style="color:#607d94;font-size:15px;line-height:1.6;">
+					Abra no Google Sheets ou Excel e comece a usar hoje mesmo.
+				</p>
+				<p style="color:#607d94;font-size:15px;line-height:1.6;">
+					Se precisar de ajuda ou quiser conhecer nosso sistema completo de gestão para clínicas,
+					acesse <a href="https://aseno.com.br" style="color:#38b6ff;font-weight:600;">aseno.com.br</a>.
+				</p>
+				<p style="color:#a0aec0;font-size:12px;margin-top:32px;text-align:center;">
+					Enviado por <strong>Aseno</strong> — Software de gestão para clínicas
+				</p>
+			</div>
+		`, data.RecipientName),
+	})
+
+	if err != nil {
+		return fmt.Errorf("failed to send lead isca email via Brevo: %w", err)
+	}
+	return nil
+}
+
 // SendPortalEmailVerification sends a portal email verification email using Brevo
 func (s *brevoEmailService) SendPortalEmailVerification(ctx context.Context, data *PortalEmailVerificationData) error {
 	_, _, err := s.client.TransactionalEmailsApi.SendTransacEmail(ctx, lib.SendSmtpEmail{

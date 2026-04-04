@@ -49,15 +49,13 @@ func (h *leadHandler) RegisterRoutes(router gin.IRouter) {
 }
 
 func (h *leadHandler) Create(c *gin.Context) {
-	clinicID, _ := c.Get("clinic_id")
-
 	var req model.CreateLeadRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, errors.ToResponse(errors.ErrValidationInstance.WithError(err)))
 		return
 	}
 
-	lead, err := h.service.Create(c.Request.Context(), clinicID.(uuid.UUID), &req)
+	lead, err := h.service.Create(c.Request.Context(), &req)
 	if err != nil {
 		statusCode := errors.GetStatusCode(err)
 		c.JSON(statusCode, errors.ToResponse(err))
@@ -68,8 +66,6 @@ func (h *leadHandler) Create(c *gin.Context) {
 }
 
 func (h *leadHandler) GetByID(c *gin.Context) {
-	clinicID, _ := c.Get("clinic_id")
-
 	idParam := c.Param("id")
 	id, err := uuid.Parse(idParam)
 	if err != nil {
@@ -77,7 +73,7 @@ func (h *leadHandler) GetByID(c *gin.Context) {
 		return
 	}
 
-	lead, err := h.service.GetByID(c.Request.Context(), id, clinicID.(uuid.UUID))
+	lead, err := h.service.GetByID(c.Request.Context(), id)
 	if err != nil {
 		statusCode := errors.GetStatusCode(err)
 		c.JSON(statusCode, errors.ToResponse(err))
@@ -88,15 +84,13 @@ func (h *leadHandler) GetByID(c *gin.Context) {
 }
 
 func (h *leadHandler) List(c *gin.Context) {
-	clinicID, _ := c.Get("clinic_id")
-
 	var filter model.LeadFilter
 	if err := c.ShouldBindQuery(&filter); err != nil {
 		c.JSON(http.StatusBadRequest, errors.ToResponse(errors.ErrValidationInstance.WithError(err)))
 		return
 	}
 
-	result, err := h.service.List(c.Request.Context(), clinicID.(uuid.UUID), filter)
+	result, err := h.service.List(c.Request.Context(), filter)
 	if err != nil {
 		statusCode := errors.GetStatusCode(err)
 		c.JSON(statusCode, errors.ToResponse(err))
@@ -107,8 +101,6 @@ func (h *leadHandler) List(c *gin.Context) {
 }
 
 func (h *leadHandler) Update(c *gin.Context) {
-	clinicID, _ := c.Get("clinic_id")
-
 	idParam := c.Param("id")
 	id, err := uuid.Parse(idParam)
 	if err != nil {
@@ -122,7 +114,7 @@ func (h *leadHandler) Update(c *gin.Context) {
 		return
 	}
 
-	lead, err := h.service.Update(c.Request.Context(), id, clinicID.(uuid.UUID), &req)
+	lead, err := h.service.Update(c.Request.Context(), id, &req)
 	if err != nil {
 		statusCode := errors.GetStatusCode(err)
 		c.JSON(statusCode, errors.ToResponse(err))
@@ -133,8 +125,6 @@ func (h *leadHandler) Update(c *gin.Context) {
 }
 
 func (h *leadHandler) Delete(c *gin.Context) {
-	clinicID, _ := c.Get("clinic_id")
-
 	idParam := c.Param("id")
 	id, err := uuid.Parse(idParam)
 	if err != nil {
@@ -142,7 +132,7 @@ func (h *leadHandler) Delete(c *gin.Context) {
 		return
 	}
 
-	if err := h.service.Delete(c.Request.Context(), id, clinicID.(uuid.UUID)); err != nil {
+	if err := h.service.Delete(c.Request.Context(), id); err != nil {
 		statusCode := errors.GetStatusCode(err)
 		c.JSON(statusCode, errors.ToResponse(err))
 		return
@@ -193,31 +183,29 @@ func (h *leadHandler) ListAccounts(c *gin.Context) {
 }
 
 func (h *leadHandler) Dashboard(c *gin.Context) {
-	clinicID, _ := c.Get("clinic_id")
-
 	// Lead stats by status
 	type statusCount struct {
 		Status string `json:"status"`
 		Count  int    `json:"count"`
 	}
 	var leadsByStatus []statusCount
-	h.db.Raw("SELECT status, count(*) as count FROM leads WHERE clinic_id = ? AND deleted_at IS NULL GROUP BY status ORDER BY count DESC", clinicID).Scan(&leadsByStatus)
+	h.db.Raw("SELECT status, count(*) as count FROM leads WHERE deleted_at IS NULL GROUP BY status ORDER BY count DESC").Scan(&leadsByStatus)
 
 	// Total MRR from converted leads
 	var totalMRR float64
-	h.db.Raw("SELECT COALESCE(SUM(mrr), 0) FROM leads WHERE clinic_id = ? AND deleted_at IS NULL AND status = 'convertido'", clinicID).Scan(&totalMRR)
+	h.db.Raw("SELECT COALESCE(SUM(mrr), 0) FROM leads WHERE deleted_at IS NULL AND status = 'convertido'").Scan(&totalMRR)
 
 	// Total leads
 	var totalLeads int
-	h.db.Raw("SELECT count(*) FROM leads WHERE clinic_id = ? AND deleted_at IS NULL", clinicID).Scan(&totalLeads)
+	h.db.Raw("SELECT count(*) FROM leads WHERE deleted_at IS NULL").Scan(&totalLeads)
 
 	// Converted leads
 	var convertedLeads int
-	h.db.Raw("SELECT count(*) FROM leads WHERE clinic_id = ? AND deleted_at IS NULL AND status = 'convertido'", clinicID).Scan(&convertedLeads)
+	h.db.Raw("SELECT count(*) FROM leads WHERE deleted_at IS NULL AND status = 'convertido'").Scan(&convertedLeads)
 
 	// Active trials
 	var activeTrials int
-	h.db.Raw("SELECT count(*) FROM leads WHERE clinic_id = ? AND deleted_at IS NULL AND status = 'trial_ativo'", clinicID).Scan(&activeTrials)
+	h.db.Raw("SELECT count(*) FROM leads WHERE deleted_at IS NULL AND status = 'trial_ativo'").Scan(&activeTrials)
 
 	// All clinics with plan info and MRR
 	type clinicRow struct {

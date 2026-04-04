@@ -19,6 +19,7 @@ type EmailService interface {
 	SendContactForm(ctx context.Context, data *ContactFormData) error
 	SendBookingConfirmation(ctx context.Context, data *BookingConfirmationEmailData) error
 	SendPortalEmailVerification(ctx context.Context, data *PortalEmailVerificationData) error
+	SendLeadIsca(ctx context.Context, data *LeadIscaEmailData) error
 }
 
 // InviteEmailData contains data for invite emails
@@ -78,6 +79,19 @@ type PortalEmailVerificationData struct {
 	RecipientName  string
 	ClinicName     string
 	VerifyLink     string
+}
+
+// LeadIscaEmailData contains data for lead isca (bait) emails with spreadsheet attachments
+type LeadIscaEmailData struct {
+	RecipientEmail string
+	RecipientName  string
+	Attachments    []EmailAttachment
+}
+
+// EmailAttachment represents a file attachment for an email
+type EmailAttachment struct {
+	Name    string // filename
+	Content string // base64-encoded content
 }
 
 // SMTPConfig holds SMTP configuration
@@ -413,6 +427,32 @@ func (s *smtpEmailService) renderEmailVerificationTemplate(data *EmailVerificati
 	return buf.String(), nil
 }
 
+// SendLeadIsca sends the lead isca email with spreadsheet attachments via SMTP
+func (s *smtpEmailService) SendLeadIsca(ctx context.Context, data *LeadIscaEmailData) error {
+	subject := "Seu Kit de Planilhas para Clínicas — Aseno"
+	body := fmt.Sprintf(`
+<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"></head>
+<body style="font-family:Arial,sans-serif;">
+	<div style="max-width:520px;margin:0 auto;padding:32px 24px;">
+		<h2 style="color:#0d1b2a;">Olá, %s!</h2>
+		<p style="color:#607d94;font-size:15px;line-height:1.6;">
+			Obrigado por baixar o <strong>Kit de Planilhas para Clínicas</strong> da Aseno.
+		</p>
+		<p style="color:#607d94;font-size:15px;line-height:1.6;">
+			Em anexo você encontra as 3 planilhas prontas para usar.
+		</p>
+		<p style="color:#a0aec0;font-size:12px;text-align:center;">
+			Enviado por <strong>Aseno</strong> — Software de gestão para clínicas
+		</p>
+	</div>
+</body>
+</html>`, data.RecipientName)
+
+	return s.sendEmail(data.RecipientEmail, subject, body)
+}
+
 // SendContactForm sends a contact form submission to the support email via SMTP
 func (s *smtpEmailService) SendContactForm(ctx context.Context, data *ContactFormData) error {
 	subject := fmt.Sprintf("Contato via site — %s", data.Name)
@@ -641,5 +681,11 @@ func (s *noOpEmailService) SendBookingConfirmation(ctx context.Context, data *Bo
 func (s *noOpEmailService) SendPortalEmailVerification(ctx context.Context, data *PortalEmailVerificationData) error {
 	fmt.Printf("[EMAIL] NoOp: portal verification to %s for %s (link: %s)\n",
 		data.RecipientEmail, data.ClinicName, data.VerifyLink)
+	return nil
+}
+
+func (s *noOpEmailService) SendLeadIsca(ctx context.Context, data *LeadIscaEmailData) error {
+	fmt.Printf("[EMAIL] NoOp: lead isca email to %s (%s) with %d attachments\n",
+		data.RecipientName, data.RecipientEmail, len(data.Attachments))
 	return nil
 }

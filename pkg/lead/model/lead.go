@@ -47,6 +47,7 @@ const (
 	LeadStatusConvertido    LeadStatus = "convertido"
 	LeadStatusSemResposta   LeadStatus = "sem_resposta"
 	LeadStatusDescartado    LeadStatus = "descartado"
+	LeadStatusIsca          LeadStatus = "isca"
 )
 
 // PainScore represents the pain level of the lead
@@ -65,6 +66,7 @@ type Lead struct {
 	AccountID          *uuid.UUID  `json:"account_id,omitempty" gorm:"type:uuid;index"`
 	ClinicName         string      `json:"clinic_name" gorm:"not null"`
 	ContactName        string      `json:"contact_name" gorm:"not null"`
+	Email              string      `json:"email"`
 	Phone              string      `json:"phone"`
 	City               string      `json:"city"`
 	Type               LeadType    `json:"type"`
@@ -104,6 +106,7 @@ type LeadResponse struct {
 	AccountID          *uuid.UUID  `json:"account_id,omitempty"`
 	ClinicName         string      `json:"clinic_name"`
 	ContactName        string      `json:"contact_name"`
+	Email              string      `json:"email"`
 	Phone              string      `json:"phone"`
 	City               string      `json:"city"`
 	Type               LeadType    `json:"type"`
@@ -138,6 +141,7 @@ func (l *Lead) ToResponse() *LeadResponse {
 		AccountID:          l.AccountID,
 		ClinicName:         l.ClinicName,
 		ContactName:        l.ContactName,
+		Email:              l.Email,
 		Phone:              l.Phone,
 		City:               l.City,
 		Type:               l.Type,
@@ -170,12 +174,13 @@ func (l *Lead) ToResponse() *LeadResponse {
 type CreateLeadRequest struct {
 	ClinicName         string      `json:"clinic_name" binding:"required"`
 	ContactName        string      `json:"contact_name" binding:"required"`
+	Email              string      `json:"email"`
 	Phone              string      `json:"phone"`
 	City               string      `json:"city"`
 	Type               LeadType    `json:"type" binding:"omitempty,oneof=estetica fisioterapia misto psicologia"`
 	Channel            LeadChannel `json:"channel" binding:"omitempty,oneof=outbound inbound"`
 	Source             LeadSource  `json:"source" binding:"omitempty,oneof=google_maps instagram indicacao anuncio"`
-	Status             LeadStatus  `json:"status" binding:"omitempty,oneof=identificado contactado respondeu demo_agendada trial_ativo negociando convertido sem_resposta descartado"`
+	Status             LeadStatus  `json:"status" binding:"omitempty,oneof=identificado contactado respondeu demo_agendada trial_ativo negociando convertido sem_resposta descartado isca"`
 	PainScore          PainScore   `json:"pain_score" binding:"omitempty,oneof=alto medio baixo"`
 	FirstContactAt     *time.Time  `json:"first_contact_at"`
 	NextFollowUpAt     *time.Time  `json:"next_follow_up_at"`
@@ -197,12 +202,13 @@ type UpdateLeadRequest struct {
 	AccountID          *uuid.UUID   `json:"account_id"`
 	ClinicName         *string      `json:"clinic_name"`
 	ContactName        *string      `json:"contact_name"`
+	Email              *string      `json:"email"`
 	Phone              *string      `json:"phone"`
 	City               *string      `json:"city"`
 	Type               *LeadType    `json:"type" binding:"omitempty,oneof=estetica fisioterapia misto psicologia"`
 	Channel            *LeadChannel `json:"channel" binding:"omitempty,oneof=outbound inbound"`
 	Source             *LeadSource  `json:"source" binding:"omitempty,oneof=google_maps instagram indicacao anuncio"`
-	Status             *LeadStatus  `json:"status" binding:"omitempty,oneof=identificado contactado respondeu demo_agendada trial_ativo negociando convertido sem_resposta descartado"`
+	Status             *LeadStatus  `json:"status" binding:"omitempty,oneof=identificado contactado respondeu demo_agendada trial_ativo negociando convertido sem_resposta descartado isca"`
 	PainScore          *PainScore   `json:"pain_score" binding:"omitempty,oneof=alto medio baixo"`
 	FirstContactAt     *time.Time   `json:"first_contact_at"`
 	NextFollowUpAt     *time.Time   `json:"next_follow_up_at"`

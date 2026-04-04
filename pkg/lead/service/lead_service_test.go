@@ -22,16 +22,16 @@ func (m *mockLeadRepository) Create(ctx context.Context, lead *model.Lead) error
 	return args.Error(0)
 }
 
-func (m *mockLeadRepository) GetByID(ctx context.Context, id, clinicID uuid.UUID) (*model.Lead, error) {
-	args := m.Called(ctx, id, clinicID)
+func (m *mockLeadRepository) GetByID(ctx context.Context, id uuid.UUID) (*model.Lead, error) {
+	args := m.Called(ctx, id)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
 	return args.Get(0).(*model.Lead), args.Error(1)
 }
 
-func (m *mockLeadRepository) List(ctx context.Context, clinicID uuid.UUID, filter model.LeadFilter) ([]*model.Lead, int64, error) {
-	args := m.Called(ctx, clinicID, filter)
+func (m *mockLeadRepository) List(ctx context.Context, filter model.LeadFilter) ([]*model.Lead, int64, error) {
+	args := m.Called(ctx, filter)
 	return args.Get(0).([]*model.Lead), args.Get(1).(int64), args.Error(2)
 }
 
@@ -40,13 +40,13 @@ func (m *mockLeadRepository) Update(ctx context.Context, lead *model.Lead) error
 	return args.Error(0)
 }
 
-func (m *mockLeadRepository) Delete(ctx context.Context, id, clinicID uuid.UUID) error {
-	args := m.Called(ctx, id, clinicID)
+func (m *mockLeadRepository) Delete(ctx context.Context, id uuid.UUID) error {
+	args := m.Called(ctx, id)
 	return args.Error(0)
 }
 
-func (m *mockLeadRepository) GetByExternalID(ctx context.Context, externalID string, clinicID uuid.UUID) (*model.Lead, error) {
-	args := m.Called(ctx, externalID, clinicID)
+func (m *mockLeadRepository) GetByExternalID(ctx context.Context, externalID string) (*model.Lead, error) {
+	args := m.Called(ctx, externalID)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
@@ -82,7 +82,7 @@ func TestCreate_DefaultStatus(t *testing.T) {
 		ContactName: "João",
 	}
 
-	resp, err := svc.Create(context.Background(), uuid.New(), req)
+	resp, err := svc.Create(context.Background(), req)
 
 	assert.NoError(t, err)
 	assert.NotNil(t, resp)
@@ -104,7 +104,7 @@ func TestCreate_WithExplicitStatus(t *testing.T) {
 		Status:      model.LeadStatusContactado,
 	}
 
-	resp, err := svc.Create(context.Background(), uuid.New(), req)
+	resp, err := svc.Create(context.Background(), req)
 
 	assert.NoError(t, err)
 	assert.Equal(t, model.LeadStatusContactado, resp.Status)
@@ -127,7 +127,7 @@ func TestCreate_WithCRMSync(t *testing.T) {
 		ContactName: "Test",
 	}
 
-	resp, err := svc.Create(context.Background(), uuid.New(), req)
+	resp, err := svc.Create(context.Background(), req)
 
 	assert.NoError(t, err)
 	assert.NotNil(t, resp)
@@ -138,19 +138,17 @@ func TestUpdate_PartialFields(t *testing.T) {
 	repo := new(mockLeadRepository)
 	svc := NewLeadService(repo, nil)
 
-	clinicID := uuid.New()
 	leadID := uuid.New()
 
 	existing := &model.Lead{
 		ID:          leadID,
-		ClinicID:    clinicID,
 		ClinicName:  "Original",
 		ContactName: "Original Contact",
 		Phone:       "11999999999",
 		Status:      model.LeadStatusIdentificado,
 	}
 
-	repo.On("GetByID", mock.Anything, leadID, clinicID).Return(existing, nil)
+	repo.On("GetByID", mock.Anything, leadID).Return(existing, nil)
 	repo.On("Update", mock.Anything, mock.MatchedBy(func(l *model.Lead) bool {
 		return l.ClinicName == "Updated" && l.ContactName == "Original Contact"
 	})).Return(nil)
@@ -160,7 +158,7 @@ func TestUpdate_PartialFields(t *testing.T) {
 		ClinicName: &newName,
 	}
 
-	resp, err := svc.Update(context.Background(), leadID, clinicID, req)
+	resp, err := svc.Update(context.Background(), leadID, req)
 
 	assert.NoError(t, err)
 	assert.Equal(t, "Updated", resp.ClinicName)
@@ -172,17 +170,15 @@ func TestUpdate_LinkAccountAutoConverts(t *testing.T) {
 	repo := new(mockLeadRepository)
 	svc := NewLeadService(repo, nil)
 
-	clinicID := uuid.New()
 	leadID := uuid.New()
 	accountID := uuid.New()
 
 	existing := &model.Lead{
-		ID:       leadID,
-		ClinicID: clinicID,
-		Status:   model.LeadStatusNegociando,
+		ID:     leadID,
+		Status: model.LeadStatusNegociando,
 	}
 
-	repo.On("GetByID", mock.Anything, leadID, clinicID).Return(existing, nil)
+	repo.On("GetByID", mock.Anything, leadID).Return(existing, nil)
 	repo.On("Update", mock.Anything, mock.MatchedBy(func(l *model.Lead) bool {
 		return l.Status == model.LeadStatusConvertido && l.AccountID != nil && l.ConvertedAt != nil
 	})).Return(nil)
@@ -191,7 +187,7 @@ func TestUpdate_LinkAccountAutoConverts(t *testing.T) {
 		AccountID: &accountID,
 	}
 
-	resp, err := svc.Update(context.Background(), leadID, clinicID, req)
+	resp, err := svc.Update(context.Background(), leadID, req)
 
 	assert.NoError(t, err)
 	assert.Equal(t, model.LeadStatusConvertido, resp.Status)
@@ -204,7 +200,6 @@ func TestList_Pagination(t *testing.T) {
 	repo := new(mockLeadRepository)
 	svc := NewLeadService(repo, nil)
 
-	clinicID := uuid.New()
 	filter := model.LeadFilter{Page: 1, Limit: 10}
 
 	leads := []*model.Lead{
@@ -212,9 +207,9 @@ func TestList_Pagination(t *testing.T) {
 		{ID: uuid.New(), ClinicName: "Lead 2", Status: model.LeadStatusContactado},
 	}
 
-	repo.On("List", mock.Anything, clinicID, filter).Return(leads, int64(2), nil)
+	repo.On("List", mock.Anything, filter).Return(leads, int64(2), nil)
 
-	resp, err := svc.List(context.Background(), clinicID, filter)
+	resp, err := svc.List(context.Background(), filter)
 
 	assert.NoError(t, err)
 	assert.Len(t, resp.Data, 2)
