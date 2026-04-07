@@ -158,3 +158,57 @@ func GetMonthName(month int) string {
 	}
 	return "Desconhecido"
 }
+
+// FinancialSummary represents aggregated financial metrics for a period
+type FinancialSummary struct {
+	TotalExpected    float64 `json:"total_expected"`    // sum of price for completed appointments
+	TotalReceived    float64 `json:"total_received"`    // sum of actual payments (appointment_payments.amount)
+	TotalPending     float64 `json:"total_pending"`     // expected - received
+	TotalDiscount    float64 `json:"total_discount"`    // sum of discounts given
+	TotalSessions    int     `json:"total_sessions"`    // count of completed appointments
+	PaidSessions     int     `json:"paid_sessions"`     // completed + payment_status = paid
+	PendingSessions  int     `json:"pending_sessions"`  // completed + payment_status in (pending, partial)
+	ConciliationRate float64 `json:"conciliation_rate"` // paid / total * 100
+}
+
+// DailyReceivable represents financial data for a single day
+type DailyReceivable struct {
+	Date     string  `json:"date"`
+	Sessions int     `json:"sessions"`
+	Expected float64 `json:"expected"`
+	Received float64 `json:"received"`
+	Pending  float64 `json:"pending"`
+}
+
+// PaymentMethodBreakdown represents revenue breakdown by payment method
+type PaymentMethodBreakdown struct {
+	MethodName string  `json:"method_name"`
+	MethodType string  `json:"method_type"`
+	Total      float64 `json:"total"`
+	Count      int     `json:"count"`
+	Percentage float64 `json:"percentage"`
+}
+
+// UnconciliatedAppointment represents a completed appointment without full payment
+type UnconciliatedAppointment struct {
+	AppointmentID    string  `json:"appointment_id"`
+	Date             string  `json:"date"`
+	PatientName      string  `json:"patient_name"`
+	ProfessionalName string  `json:"professional_name"`
+	Price            float64 `json:"price"`
+	PaymentStatus    string  `json:"payment_status"`
+}
+
+// FinancialReport represents the complete financial report response
+type FinancialReport struct {
+	Summary                   FinancialSummary         `json:"summary"`
+	DailyBreakdown            []DailyReceivable        `json:"daily_breakdown"`
+	PaymentMethodBreakdown    []PaymentMethodBreakdown  `json:"payment_method_breakdown"`
+	UnconciliatedAppointments []UnconciliatedAppointment `json:"unconciliated_appointments"`
+}
+
+// FinancialFilter represents filter parameters for financial report queries
+type FinancialFilter struct {
+	Month          string     `form:"month"`           // YYYY-MM format
+	ProfessionalID *uuid.UUID `form:"professional_id"`
+}

@@ -19,6 +19,7 @@ type AnalyticsService interface {
 	GetBestSlots(ctx context.Context, clinicID uuid.UUID, professionalID *uuid.UUID, limit int) ([]model.SlotSuggestion, error)
 	GetWorstSlots(ctx context.Context, clinicID uuid.UUID, professionalID *uuid.UUID, limit int) ([]model.SlotSuggestion, error)
 	GetReportMetrics(ctx context.Context, clinicID uuid.UUID, filter *model.ReportFilter) (*model.ReportMetrics, error)
+	GetFinancialReport(ctx context.Context, clinicID uuid.UUID, filter *model.FinancialFilter) (*model.FinancialReport, error)
 }
 
 // analyticsService implements AnalyticsService
@@ -334,6 +335,58 @@ func (s *analyticsService) GetReportMetrics(ctx context.Context, clinicID uuid.U
 		WhatsAppMetrics:      whatsAppMetrics,
 		AppointmentsSummary:  appointmentsSummary,
 	}, nil
+}
+
+// GetFinancialReport returns the complete financial report for a period
+func (s *analyticsService) GetFinancialReport(ctx context.Context, clinicID uuid.UUID, filter *model.FinancialFilter) (*model.FinancialReport, error) {
+	start, end := s.getMonthRange(filter.Month)
+
+	summary, err := s.repo.GetFinancialSummary(ctx, clinicID, filter.ProfessionalID, start, end)
+	if err != nil {
+		return nil, err
+	}
+
+	daily, err := s.repo.GetDailyReceivables(ctx, clinicID, filter.ProfessionalID, start, end)
+	if err != nil {
+		return nil, err
+	}
+
+	paymentMethods, err := s.repo.GetPaymentMethodBreakdown(ctx, clinicID, start, end)
+	if err != nil {
+		return nil, err
+	}
+
+	unconciliated, err := s.repo.GetUnconciliatedAppointments(ctx, clinicID, filter.ProfessionalID, start, end)
+	if err != nil {
+		return nil, err
+	}
+
+	return &model.FinancialReport{
+		Summary:                   *summary,
+		DailyBreakdown:            daily,
+		PaymentMethodBreakdown:    paymentMethods,
+		UnconciliatedAppointments: unconciliated,
+	}, nil
+}
+
+// getMonthRange returns start and end time for a YYYY-MM month string
+func (s *analyticsService) getMonthRange(month string) (time.Time, time.Time) {
+	if month == "" {
+		now := time.Now()
+		start := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.Local)
+		end := start.AddDate(0, 1, 0).Add(-time.Second)
+		return start, end
+	}
+
+	t, err := time.Parse("2006-01", month)
+	if err != nil {
+		now := time.Now()
+		t = time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.Local)
+	}
+
+	start := time.Date(t.Year(), t.Month(), 1, 0, 0, 0, 0, time.Local)
+	end := start.AddDate(0, 1, 0).Add(-time.Second)
+	return start, end
 }
 
 // getReportPeriodRange returns the start and end time for report period

@@ -20,6 +20,10 @@ type AnalyticsRepository interface {
 	GetReportMetrics(ctx context.Context, clinicID uuid.UUID, professionalID *uuid.UUID, start, end time.Time) ([]model.MonthlyMetrics, error)
 	GetWhatsAppMetrics(ctx context.Context, clinicID uuid.UUID, professionalID *uuid.UUID, start, end time.Time) (*model.WhatsAppMetrics, error)
 	GetAppointmentsSummary(ctx context.Context, clinicID uuid.UUID, professionalID *uuid.UUID, start, end time.Time) (*model.AppointmentsSummary, error)
+	GetFinancialSummary(ctx context.Context, clinicID uuid.UUID, professionalID *uuid.UUID, start, end time.Time) (*model.FinancialSummary, error)
+	GetDailyReceivables(ctx context.Context, clinicID uuid.UUID, professionalID *uuid.UUID, start, end time.Time) ([]model.DailyReceivable, error)
+	GetPaymentMethodBreakdown(ctx context.Context, clinicID uuid.UUID, start, end time.Time) ([]model.PaymentMethodBreakdown, error)
+	GetUnconciliatedAppointments(ctx context.Context, clinicID uuid.UUID, professionalID *uuid.UUID, start, end time.Time) ([]model.UnconciliatedAppointment, error)
 }
 
 // analyticsRepository implements AnalyticsRepository
@@ -289,4 +293,210 @@ func (r *analyticsRepository) GetAppointmentsSummary(ctx context.Context, clinic
 	}
 
 	return &summary, nil
+}
+
+// GetFinancialSummary retrieves aggregated financial metrics for a period
+func (r *analyticsRepository) GetFinancialSummary(ctx context.Context, clinicID uuid.UUID, professionalID *uuid.UUID, start, end time.Time) (*model.FinancialSummary, error) {
+	var summary model.FinancialSummary
+
+	// Get appointment-level metrics (expected, sessions, paid/pending counts)
+	appointmentQuery := `
+		SELECT
+			COALESCE(SUM(price), 0) as total_expected,
+			COUNT(*) as total_sessions,
+			COUNT(CASE WHEN payment_status = 'paid' THEN 1 END) as paid_sessions,
+			COUNT(CASE WHEN payment_status IN ('pending', 'partial') THEN 1 END) as pending_sessions
+		FROM appointments
+		WHERE clinic_id = ?
+			AND start_time BETWEEN ? AND ?
+			AND status = 'completed'
+			AND deleted_at IS NULL
+	`
+
+	if professionalID != nil {
+		appointmentQuery += " AND professional_id = ?"
+		err := r.db.WithContext(ctx).Raw(appointmentQuery, clinicID, start, end, *professionalID).Scan(&summary).Error
+		if err != nil {
+			return nil, errors.ErrInternalInstance.WithError(err)
+		}
+	} else {
+		err := r.db.WithContext(ctx).Raw(appointmentQuery, clinicID, start, end).Scan(&summary).Error
+		if err != nil {
+			return nil, errors.ErrInternalInstance.WithError(err)
+		}
+	}
+
+	// Get actual received amounts from appointment_payments
+	paymentQuery := `
+		SELECT
+			COALESCE(SUM(ap.amount), 0) as total_received,
+			COALESCE(SUM(ap.discount), 0) as total_discount
+		FROM appointment_payments ap
+		INNER JOIN appointments a ON ap.appointment_id = a.id
+		WHERE a.clinic_id = ?
+			AND a.start_time BETWEEN ? AND ?
+			AND a.status = 'completed'
+			AND a.deleted_at IS NULL
+			AND ap.deleted_at IS NULL
+	`
+
+	var paymentData struct {
+		TotalReceived float64 `gorm:"column:total_received"`
+		TotalDiscount float64 `gorm:"column:total_discount"`
+	}
+
+	if professionalID != nil {
+		paymentQuery += " AND a.professional_id = ?"
+		err := r.db.WithContext(ctx).Raw(paymentQuery, clinicID, start, end, *professionalID).Scan(&paymentData).Error
+		if err != nil {
+			return nil, errors.ErrInternalInstance.WithError(err)
+		}
+	} else {
+		err := r.db.WithContext(ctx).Raw(paymentQuery, clinicID, start, end).Scan(&paymentData).Error
+		if err != nil {
+			return nil, errors.ErrInternalInstance.WithError(err)
+		}
+	}
+
+	summary.TotalReceived = paymentData.TotalReceived
+	summary.TotalDiscount = paymentData.TotalDiscount
+	summary.TotalPending = summary.TotalExpected - summary.TotalReceived - summary.TotalDiscount
+	if summary.TotalPending < 0 {
+		summary.TotalPending = 0
+	}
+
+	if summary.TotalSessions > 0 {
+		summary.ConciliationRate = float64(summary.PaidSessions) / float64(summary.TotalSessions) * 100
+	}
+
+	return &summary, nil
+}
+
+// GetDailyReceivables retrieves financial data grouped by day
+func (r *analyticsRepository) GetDailyReceivables(ctx context.Context, clinicID uuid.UUID, professionalID *uuid.UUID, start, end time.Time) ([]model.DailyReceivable, error) {
+	query := `
+		SELECT
+			TO_CHAR(a.start_time, 'YYYY-MM-DD') as date,
+			COUNT(*) as sessions,
+			COALESCE(SUM(a.price), 0) as expected,
+			COALESCE(SUM(
+				(SELECT COALESCE(SUM(ap.amount), 0) FROM appointment_payments ap WHERE ap.appointment_id = a.id AND ap.deleted_at IS NULL)
+			), 0) as received
+		FROM appointments a
+		WHERE a.clinic_id = ?
+			AND a.start_time BETWEEN ? AND ?
+			AND a.status = 'completed'
+			AND a.deleted_at IS NULL
+	`
+
+	if professionalID != nil {
+		query += " AND a.professional_id = ?"
+		query += " GROUP BY TO_CHAR(a.start_time, 'YYYY-MM-DD') ORDER BY date DESC"
+		var results []model.DailyReceivable
+		err := r.db.WithContext(ctx).Raw(query, clinicID, start, end, *professionalID).Scan(&results).Error
+		if err != nil {
+			return nil, errors.ErrInternalInstance.WithError(err)
+		}
+		for i := range results {
+			results[i].Pending = results[i].Expected - results[i].Received
+			if results[i].Pending < 0 {
+				results[i].Pending = 0
+			}
+		}
+		return results, nil
+	}
+
+	query += " GROUP BY TO_CHAR(a.start_time, 'YYYY-MM-DD') ORDER BY date DESC"
+	var results []model.DailyReceivable
+	err := r.db.WithContext(ctx).Raw(query, clinicID, start, end).Scan(&results).Error
+	if err != nil {
+		return nil, errors.ErrInternalInstance.WithError(err)
+	}
+	for i := range results {
+		results[i].Pending = results[i].Expected - results[i].Received
+		if results[i].Pending < 0 {
+			results[i].Pending = 0
+		}
+	}
+	return results, nil
+}
+
+// GetPaymentMethodBreakdown retrieves revenue breakdown by payment method
+func (r *analyticsRepository) GetPaymentMethodBreakdown(ctx context.Context, clinicID uuid.UUID, start, end time.Time) ([]model.PaymentMethodBreakdown, error) {
+	query := `
+		SELECT
+			pm.name as method_name,
+			pm.type as method_type,
+			COALESCE(SUM(ap.amount), 0) as total,
+			COUNT(*) as count
+		FROM appointment_payments ap
+		INNER JOIN appointments a ON ap.appointment_id = a.id
+		INNER JOIN payment_methods pm ON ap.payment_method_id = pm.id
+		WHERE a.clinic_id = ?
+			AND a.start_time BETWEEN ? AND ?
+			AND a.status = 'completed'
+			AND a.deleted_at IS NULL
+			AND ap.deleted_at IS NULL
+		GROUP BY pm.id, pm.name, pm.type
+		ORDER BY total DESC
+	`
+
+	var results []model.PaymentMethodBreakdown
+	err := r.db.WithContext(ctx).Raw(query, clinicID, start, end).Scan(&results).Error
+	if err != nil {
+		return nil, errors.ErrInternalInstance.WithError(err)
+	}
+
+	// Calculate percentages
+	var grandTotal float64
+	for _, r := range results {
+		grandTotal += r.Total
+	}
+	if grandTotal > 0 {
+		for i := range results {
+			results[i].Percentage = results[i].Total / grandTotal * 100
+		}
+	}
+
+	return results, nil
+}
+
+// GetUnconciliatedAppointments retrieves completed appointments without full payment
+func (r *analyticsRepository) GetUnconciliatedAppointments(ctx context.Context, clinicID uuid.UUID, professionalID *uuid.UUID, start, end time.Time) ([]model.UnconciliatedAppointment, error) {
+	query := `
+		SELECT
+			a.id::text as appointment_id,
+			TO_CHAR(a.start_time, 'YYYY-MM-DD') as date,
+			p.name as patient_name,
+			pr.name as professional_name,
+			a.price,
+			a.payment_status
+		FROM appointments a
+		INNER JOIN patients p ON a.patient_id = p.id
+		INNER JOIN professionals pr ON a.professional_id = pr.id
+		WHERE a.clinic_id = ?
+			AND a.start_time BETWEEN ? AND ?
+			AND a.status = 'completed'
+			AND a.payment_status != 'paid'
+			AND a.deleted_at IS NULL
+	`
+
+	if professionalID != nil {
+		query += " AND a.professional_id = ?"
+		query += " ORDER BY a.start_time DESC"
+		var results []model.UnconciliatedAppointment
+		err := r.db.WithContext(ctx).Raw(query, clinicID, start, end, *professionalID).Scan(&results).Error
+		if err != nil {
+			return nil, errors.ErrInternalInstance.WithError(err)
+		}
+		return results, nil
+	}
+
+	query += " ORDER BY a.start_time DESC"
+	var results []model.UnconciliatedAppointment
+	err := r.db.WithContext(ctx).Raw(query, clinicID, start, end).Scan(&results).Error
+	if err != nil {
+		return nil, errors.ErrInternalInstance.WithError(err)
+	}
+	return results, nil
 }
