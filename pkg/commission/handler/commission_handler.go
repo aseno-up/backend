@@ -8,6 +8,8 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/aseno/backend/internal/errors"
+	audit_model "github.com/aseno/backend/pkg/audit/model"
+	audit_service "github.com/aseno/backend/pkg/audit/service"
 	"github.com/aseno/backend/pkg/commission/service"
 )
 
@@ -20,11 +22,12 @@ type CommissionHandler interface {
 }
 
 type commissionHandler struct {
-	service service.CommissionService
+	service  service.CommissionService
+	auditSvc audit_service.AuditService
 }
 
-func NewCommissionHandler(service service.CommissionService) CommissionHandler {
-	return &commissionHandler{service: service}
+func NewCommissionHandler(service service.CommissionService, auditSvc audit_service.AuditService) CommissionHandler {
+	return &commissionHandler{service: service, auditSvc: auditSvc}
 }
 
 func (h *commissionHandler) RegisterRoutes(router gin.IRouter) {
@@ -138,6 +141,10 @@ func (h *commissionHandler) BulkMarkPaid(c *gin.Context) {
 		return
 	}
 
+	if h.auditSvc != nil {
+		_ = h.auditSvc.LogFromGin(c, audit_model.AuditActionUpdate, audit_model.AuditEntityCommission, "bulk-pay", nil, req.IDs)
+	}
+
 	c.JSON(http.StatusOK, gin.H{"message": "Commissions marked as paid"})
 }
 
@@ -165,6 +172,10 @@ func (h *commissionHandler) MarkAllPendingPaid(c *gin.Context) {
 		statusCode := errors.GetStatusCode(err)
 		c.JSON(statusCode, errors.ToResponse(err))
 		return
+	}
+
+	if h.auditSvc != nil {
+		_ = h.auditSvc.LogFromGin(c, audit_model.AuditActionUpdate, audit_model.AuditEntityCommission, req.ProfessionalID.String(), nil, gin.H{"month": req.Month, "action": "pay-all"})
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "All pending commissions marked as paid"})

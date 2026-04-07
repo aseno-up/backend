@@ -695,7 +695,7 @@ func main() {
 	authHandler := auth_handler.NewAuthHandler(authService)
 	professionalHandler := professional_handler.NewProfessionalHandler(professionalService, auditSvc)
 	professionalProcedureHandler := professional_handler.NewProfessionalProcedureHandler(professionalProcedureService, auditSvc)
-	commissionHandler := commission_handler.NewCommissionHandler(commissionSvc)
+	commissionHandler := commission_handler.NewCommissionHandler(commissionSvc, auditSvc)
 	patientHandler := patient_handler.NewPatientHandler(patientService)
 	appointmentHandler := appointment_handler.NewAppointmentHandler(appointmentService)
 	procedureHandler := procedure_handler.NewProcedureHandler(procedureService)

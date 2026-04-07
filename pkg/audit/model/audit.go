@@ -37,6 +37,7 @@ const (
 	AuditEntityAppointmentPayment AuditEntityType = "APPOINTMENT_PAYMENT"
 	AuditEntitySpecialty              AuditEntityType = "SPECIALTY"
 	AuditEntityProfessionalProcedure AuditEntityType = "PROFESSIONAL_PROCEDURE"
+	AuditEntityCommission            AuditEntityType = "COMMISSION"
 )
 
 // AuditLog represents an audit trail entry
