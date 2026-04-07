@@ -68,12 +68,17 @@ type ProcedureProvider interface {
 	GetByID(id, clinicID uuid.UUID) (*procedureModel.Procedure, error)
 }
 
+// ProfessionalProcedureProvider provides professional-procedure relationship data
+type ProfessionalProcedureProvider interface {
+	ListByProfessional(ctx context.Context, professionalID, clinicID uuid.UUID) ([]professionalModel.ProfessionalProcedure, error)
+}
+
 // BookingService defines the interface for public booking operations
 type BookingService interface {
 	GetClinicInfo(ctx context.Context, slug string) (*model.ClinicBookingInfo, error)
 	GetProfessionals(ctx context.Context, slug string) ([]*model.ProfessionalBookingInfo, error)
 	GetSpecialties(ctx context.Context, slug string) ([]*model.SpecialtyBookingInfo, error)
-	GetProcedures(ctx context.Context, slug string, specialtyID *uuid.UUID) ([]*model.ProcedureBookingInfo, error)
+	GetProcedures(ctx context.Context, slug string, specialtyID *uuid.UUID, professionalID *uuid.UUID) ([]*model.ProcedureBookingInfo, error)
 	GetAvailableSlots(ctx context.Context, slug string, professionalID uuid.UUID, date time.Time, procedureID *uuid.UUID) (*model.AvailableSlotsResponse, error)
 	CreateBooking(ctx context.Context, slug string, req *model.CreateBookingRequest) (*model.BookingResponse, error)
 }
@@ -87,6 +92,7 @@ type bookingService struct {
 	notificationSvc              NotificationCreator
 	specialtyRepo                SpecialtyProvider
 	procedureRepo                ProcedureProvider
+	profProcRepo                 ProfessionalProcedureProvider
 	portalRepo                   PortalAccountCreator
 	emailSvc                     emailService.EmailService
 	frontendURL                  string
@@ -102,6 +108,7 @@ func NewBookingService(
 	notificationSvc NotificationCreator,
 	specialtyRepo SpecialtyProvider,
 	procedureRepo ProcedureProvider,
+	profProcRepo ProfessionalProcedureProvider,
 	portalRepo PortalAccountCreator,
 	emailSvc emailService.EmailService,
 	frontendURL string,
@@ -119,6 +126,7 @@ func NewBookingService(
 		notificationSvc:              notificationSvc,
 		specialtyRepo:                specialtyRepo,
 		procedureRepo:                procedureRepo,
+		profProcRepo:                 profProcRepo,
 		portalRepo:                   portalRepo,
 		emailSvc:                     emailSvc,
 		frontendURL:                  frontendURL,
@@ -251,13 +259,53 @@ func (s *bookingService) GetSpecialties(ctx context.Context, slug string) ([]*mo
 	return result, nil
 }
 
-// GetProcedures returns procedures for a clinic, optionally filtered by specialty
-func (s *bookingService) GetProcedures(ctx context.Context, slug string, specialtyID *uuid.UUID) ([]*model.ProcedureBookingInfo, error) {
+// GetProcedures returns procedures for a clinic, optionally filtered by specialty and/or professional.
+// When professionalID is provided, only procedures assigned to that professional (via professional_procedures) are returned.
+func (s *bookingService) GetProcedures(ctx context.Context, slug string, specialtyID *uuid.UUID, professionalID *uuid.UUID) ([]*model.ProcedureBookingInfo, error) {
 	clinic, err := s.clinicRepo.GetBySlug(ctx, slug)
 	if err != nil {
 		return nil, err
 	}
 
+	// If professional is specified and we have the profProcRepo, filter by professional_procedures
+	if professionalID != nil && s.profProcRepo != nil {
+		profProcs, err := s.profProcRepo.ListByProfessional(ctx, *professionalID, clinic.ID)
+		if err != nil {
+			return nil, err
+		}
+
+		if len(profProcs) == 0 {
+			return []*model.ProcedureBookingInfo{}, nil
+		}
+
+		// Build set of allowed procedure IDs
+		allowedIDs := make(map[uuid.UUID]bool)
+		for _, pp := range profProcs {
+			allowedIDs[pp.ProcedureID] = true
+		}
+
+		// Get all procedures (optionally filtered by specialty) then intersect
+		procedures, err := s.procedureRepo.ListByClinicAndSpecialty(ctx, clinic.ID, specialtyID)
+		if err != nil {
+			return nil, err
+		}
+
+		var result []*model.ProcedureBookingInfo
+		for _, p := range procedures {
+			if allowedIDs[p.ID] {
+				result = append(result, &model.ProcedureBookingInfo{
+					ID:              p.ID,
+					Name:            p.Name,
+					SpecialtyID:     p.SpecialtyID,
+					Price:           p.Price,
+					DurationMinutes: p.DurationMinutes,
+				})
+			}
+		}
+		return result, nil
+	}
+
+	// No professional filter — return all procedures
 	procedures, err := s.procedureRepo.ListByClinicAndSpecialty(ctx, clinic.ID, specialtyID)
 	if err != nil {
 		return nil, err

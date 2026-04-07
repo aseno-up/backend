@@ -38,6 +38,10 @@ import (
 	auth_service "github.com/aseno/backend/pkg/auth/service"
 	booking_handler "github.com/aseno/backend/pkg/booking/handler"
 	booking_service "github.com/aseno/backend/pkg/booking/service"
+	commission_handler "github.com/aseno/backend/pkg/commission/handler"
+	commission_model "github.com/aseno/backend/pkg/commission/model"
+	commission_repository "github.com/aseno/backend/pkg/commission/repository"
+	commission_service "github.com/aseno/backend/pkg/commission/service"
 	calendar_google "github.com/aseno/backend/pkg/calendar/client/google"
 	calendar_handler "github.com/aseno/backend/pkg/calendar/handler"
 	calendar_model "github.com/aseno/backend/pkg/calendar/model"
@@ -195,6 +199,8 @@ func main() {
 	clinicRepo := clinic_repository.NewClinicRepository(db.GetDB())
 	userRepo := user_repository.NewUserRepository(db.GetDB())
 	professionalRepo := professional_repository.NewProfessionalRepository(db.GetDB())
+	professionalProcedureRepo := professional_repository.NewProfessionalProcedureRepository(db.GetDB())
+	commissionRepo := commission_repository.NewCommissionRepository(db.GetDB())
 	clinicMemberRepo := clinicmember_repository.NewClinicMemberRepository(db.GetDB())
 	patientRepo := patient_repository.NewPatientRepository(db.GetDB())
 	appointmentRepo := appointment_repository.NewAppointmentRepository(db.GetDB())
@@ -364,6 +370,7 @@ func main() {
 		notificationSvc,
 		specialtyRepo,
 		procedureRepo,
+		professionalProcedureRepo,
 		portalAccountRepo,
 		emailSvc,
 		cfg.GetFrontendURL(),
@@ -380,6 +387,8 @@ func main() {
 		authService = auth_service.NewAuthService(userRepo, clinicRepo, accountRepo, passwordResetRepo, emailVerificationRepo, planRepo, professionalRepo, clinicMemberRepo, jwtService, emailSvc, cfg.GetFrontendURL())
 	}
 	professionalService := professional_service.NewProfessionalService(professionalRepo, clinicRepo, appointmentRepo)
+	professionalProcedureService := professional_service.NewProfessionalProcedureService(professionalProcedureRepo, professionalRepo, procedureRepo)
+	commissionSvc := commission_service.NewCommissionService(commissionRepo, professionalProcedureRepo, appointmentRepo)
 	patientService := patient_service.NewPatientService(patientRepo, clinicRepo)
 	appointmentService := appointment_service.NewAppointmentService(appointmentRepo, professionalRepo)
 	procedureService := procedure_service.NewProcedureService(procedureRepo)
@@ -673,6 +682,10 @@ func main() {
 	appointmentService.SetPatientRiskCalculator(&patientRiskAdapter{patientService: patientService})
 	logger.Println("Patient risk calculator connected to appointment service")
 
+	// Wire commission calculator into appointment service
+	appointmentService.SetCommissionCalculator(commissionSvc)
+	logger.Println("Commission calculator connected to appointment service")
+
 	// Initialize middleware
 	authMiddleware := auth_middleware.NewAuthMiddleware(jwtService)
 	tenantMiddleware := auth_middleware.NewTenantMiddleware(clinicRepo)
@@ -681,6 +694,8 @@ func main() {
 	healthHandler := health_handler.NewHealthHandler(db)
 	authHandler := auth_handler.NewAuthHandler(authService)
 	professionalHandler := professional_handler.NewProfessionalHandler(professionalService, auditSvc)
+	professionalProcedureHandler := professional_handler.NewProfessionalProcedureHandler(professionalProcedureService, auditSvc)
+	commissionHandler := commission_handler.NewCommissionHandler(commissionSvc)
 	patientHandler := patient_handler.NewPatientHandler(patientService)
 	appointmentHandler := appointment_handler.NewAppointmentHandler(appointmentService)
 	procedureHandler := procedure_handler.NewProcedureHandler(procedureService)
@@ -825,6 +840,7 @@ func main() {
 		healthHandler,
 		authHandler,
 		professionalHandler,
+		professionalProcedureHandler,
 		patientHandler,
 		appointmentHandler,
 		procedureHandler,
@@ -855,6 +871,7 @@ func main() {
 		paymentMethodHandler,
 		appointmentPaymentHandler,
 		specialtyHandler,
+		commissionHandler,
 		portalHdlr,
 		marketplaceHdlr,
 		authMiddleware,
@@ -916,6 +933,7 @@ func setupRouter(
 	healthHandler health_handler.HealthHandler,
 	authHandler auth_handler.AuthHandler,
 	professionalHandler professional_handler.ProfessionalHandler,
+	professionalProcedureHandler professional_handler.ProfessionalProcedureHandler,
 	patientHandler patient_handler.PatientHandler,
 	appointmentHandler appointment_handler.AppointmentHandler,
 	procedureHandler *procedure_handler.ProcedureHandler,
@@ -946,6 +964,7 @@ func setupRouter(
 	paymentMethodHandler *paymentmethod_handler.PaymentMethodHandler,
 	appointmentPaymentHandler appointment_handler.AppointmentPaymentHandler,
 	specialtyHandler *specialty_handler.SpecialtyHandler,
+	commissionHandler commission_handler.CommissionHandler,
 	portalHandler *portalaccount_handler.PortalHandler,
 	marketplaceHandler marketplace_handler.MarketplaceHandler,
 	authMiddleware auth_middleware.AuthMiddleware,
@@ -1044,6 +1063,7 @@ func setupRouter(
 		{
 			// Professional routes
 			professionalHandler.RegisterRoutes(protected)
+			professionalProcedureHandler.RegisterRoutes(protected)
 
 			// Patient routes
 			patientHandler.RegisterRoutes(protected)
@@ -1065,6 +1085,9 @@ func setupRouter(
 
 			// Specialty routes (settings)
 			specialtyHandler.RegisterRoutes(protected)
+
+			// Commission routes (financial reports)
+			commissionHandler.RegisterRoutes(protected)
 
 
 			// Plan routes (protected endpoints inside PlanHandler/OfferHandler for admins)
@@ -1283,6 +1306,8 @@ func runMigrations(db *database.Database) error {
 		// Specialties and portal accounts
 		&specialty_model.Specialty{},
 		&professional_model.ProfessionalSpecialty{},
+		&professional_model.ProfessionalProcedure{},
+		&commission_model.Commission{},
 		&portalaccount_model.PortalAccount{},
 		// Marketplace (subcontas)
 		&marketplace_model.Subaccount{},

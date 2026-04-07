@@ -99,7 +99,7 @@ func (h *bookingHandler) GetSpecialties(c *gin.Context) {
 	c.JSON(http.StatusOK, specialties)
 }
 
-// GetProcedures returns procedures for a clinic, optionally filtered by specialty
+// GetProcedures returns procedures for a clinic, optionally filtered by specialty and/or professional
 func (h *bookingHandler) GetProcedures(c *gin.Context) {
 	slug := c.Param("slug")
 	if slug == "" {
@@ -117,7 +117,17 @@ func (h *bookingHandler) GetProcedures(c *gin.Context) {
 		specialtyID = &parsed
 	}
 
-	procedures, err := h.service.GetProcedures(c.Request.Context(), slug, specialtyID)
+	var professionalID *uuid.UUID
+	if profIDStr := c.Query("professional_id"); profIDStr != "" {
+		parsed, err := uuid.Parse(profIDStr)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid professional_id"})
+			return
+		}
+		professionalID = &parsed
+	}
+
+	procedures, err := h.service.GetProcedures(c.Request.Context(), slug, specialtyID, professionalID)
 	if err != nil {
 		handleError(c, err)
 		return

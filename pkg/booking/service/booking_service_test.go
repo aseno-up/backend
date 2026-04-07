@@ -181,7 +181,7 @@ func newTestService() (*bookingService, *mockClinicRepo, *mockProfessionalRepo, 
 	portalRepo.On("Create", mock.Anything, mock.Anything).Return(nil)
 	emailMock := new(mockEmailSvc)
 
-	svc := NewBookingService(clinicRepo, profRepo, aptRepo, patientRepo, notifSvc, specRepo, procRepo, portalRepo, emailMock, "http://localhost:3001").(*bookingService)
+	svc := NewBookingService(clinicRepo, profRepo, aptRepo, patientRepo, notifSvc, specRepo, procRepo, nil, portalRepo, emailMock, "http://localhost:3001").(*bookingService)
 	return svc, clinicRepo, profRepo, aptRepo, patientRepo, notifSvc, specRepo, procRepo, emailMock
 }
 
@@ -442,7 +442,7 @@ func TestGetProcedures_FilteredBySpecialty(t *testing.T) {
 	clinicRepo.On("GetBySlug", ctx, "clinica-teste").Return(clinic, nil)
 	procRepo.On("ListByClinicAndSpecialty", ctx, clinic.ID, &specID).Return(procedures, nil)
 
-	result, err := svc.GetProcedures(ctx, "clinica-teste", &specID)
+	result, err := svc.GetProcedures(ctx, "clinica-teste", &specID, nil)
 
 	assert.NoError(t, err)
 	assert.Len(t, result, 1)

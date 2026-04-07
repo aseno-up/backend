@@ -40,6 +40,7 @@ func MigrateConversations(db *gorm.DB) error {
 
 		// Professional models
 		&professionalModel.Professional{},
+		&professionalModel.ProfessionalProcedure{},
 
 		// Session Plan models
 		&sessionPlanModel.SessionPlan{},

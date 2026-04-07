@@ -55,6 +55,9 @@ type AppointmentService interface {
 	// SetPatientRiskCalculator sets the patient risk calculator
 	SetPatientRiskCalculator(calculator PatientRiskCalculator)
 
+	// SetCommissionCalculator sets the commission calculator
+	SetCommissionCalculator(calculator CommissionCalculator)
+
 	// SetCalendarService sets the calendar service for Google Calendar sync
 	SetCalendarService(service calendar_service.CalendarService)
 
@@ -67,13 +70,20 @@ type ProfessionalInfoProvider interface {
 	GetByID(ctx context.Context, id, clinicID uuid.UUID) (*profModel.Professional, error)
 }
 
+// CommissionCalculator calculates and stores commissions for completed appointments
+type CommissionCalculator interface {
+	CalculateAndStore(ctx context.Context, appointment *model.Appointment, clinicID uuid.UUID) error
+	VoidByAppointment(ctx context.Context, appointmentID, clinicID uuid.UUID) error
+}
+
 // appointmentService implements AppointmentService
 type appointmentService struct {
 	repo            repository.AppointmentRepository
 	profRepo        ProfessionalInfoProvider
 	waitlistService WaitlistService
-	riskCalculator  PatientRiskCalculator
-	calendarService calendar_service.CalendarService
+	riskCalculator      PatientRiskCalculator
+	commissionCalculator CommissionCalculator
+	calendarService     calendar_service.CalendarService
 }
 
 // NewAppointmentService creates a new appointment service
@@ -124,6 +134,11 @@ func (s *appointmentService) SetWaitlistProcessor(service WaitlistService) {
 // SetPatientRiskCalculator sets the patient risk calculator
 func (s *appointmentService) SetPatientRiskCalculator(calculator PatientRiskCalculator) {
 	s.riskCalculator = calculator
+}
+
+// SetCommissionCalculator sets the commission calculator for automatic commission on completion
+func (s *appointmentService) SetCommissionCalculator(calculator CommissionCalculator) {
+	s.commissionCalculator = calculator
 }
 
 // SetCalendarService sets the calendar service for Google Calendar sync
@@ -769,6 +784,11 @@ func (s *appointmentService) Cancel(ctx context.Context, id, clinicID uuid.UUID,
 		}()
 	}
 
+	// Void any commission if appointment was previously completed
+	if s.commissionCalculator != nil {
+		_ = s.commissionCalculator.VoidByAppointment(ctx, id, clinicID)
+	}
+
 	// Delete from Google Calendar (async)
 	s.deleteFromGoogleCalendar(clinicID, id)
 
@@ -785,6 +805,14 @@ func (s *appointmentService) Complete(ctx context.Context, id, clinicID uuid.UUI
 
 	if err := s.repo.UpdateStatus(ctx, id, clinicID, model.AppointmentStatusCompleted); err != nil {
 		return nil, err
+	}
+
+	// Calculate and store commission for completed appointment
+	if s.commissionCalculator != nil {
+		if err := s.commissionCalculator.CalculateAndStore(ctx, appointment, clinicID); err != nil {
+			logger.Printf("[Appointment] Error calculating commission for appointment %s: %v", id, err)
+			// Don't fail the completion — commission can be recalculated later
+		}
 	}
 
 	// Recalculate patient risk score in background
@@ -810,6 +838,11 @@ func (s *appointmentService) MarkNoShow(ctx context.Context, id, clinicID uuid.U
 
 	if err := s.repo.UpdateStatus(ctx, id, clinicID, model.AppointmentStatusNoShow); err != nil {
 		return nil, err
+	}
+
+	// Void any commission if appointment was previously completed
+	if s.commissionCalculator != nil {
+		_ = s.commissionCalculator.VoidByAppointment(ctx, id, clinicID)
 	}
 
 	// Recalculate patient risk score in background
