@@ -39,6 +39,9 @@ type AppointmentRepository interface {
 	// Smart Scheduling
 	GetSlotPerformanceStats(ctx context.Context, clinicID, professionalID uuid.UUID) ([]*model.SlotPerformanceStats, error)
 
+	// GetByDateRangeWithExceptions retrieves appointments including cancelled exceptions (for calendar facade)
+	GetByDateRangeWithExceptions(ctx context.Context, clinicID uuid.UUID, start, end time.Time, professionalID *uuid.UUID) ([]*model.Appointment, error)
+
 	// CountByProfessionalID returns the count of non-deleted appointments for a professional
 	CountByProfessionalID(ctx context.Context, professionalID, clinicID uuid.UUID) (int64, error)
 
@@ -188,6 +191,34 @@ func (r *appointmentRepository) GetByDateRange(ctx context.Context, clinicID uui
 		Where("clinic_id = ? AND deleted_at IS NULL", clinicID).
 		Where("start_time >= ? AND start_time < ?", start, end).
 		Where("status NOT IN (?)", []model.AppointmentStatus{model.AppointmentStatusCanceled})
+
+	if professionalID != nil {
+		query = query.Where("professional_id = ?", *professionalID)
+	}
+
+	result := query.Order("start_time ASC").Find(&appointments)
+	if result.Error != nil {
+		return nil, errors.ErrInternalInstance.WithError(result.Error)
+	}
+
+	return appointments, nil
+}
+
+// GetByDateRangeWithExceptions retrieves appointments in range, including cancelled ones
+// that are exceptions (is_exception=true). Used by CalendarFacade to suppress virtual events.
+func (r *appointmentRepository) GetByDateRangeWithExceptions(ctx context.Context, clinicID uuid.UUID, start, end time.Time, professionalID *uuid.UUID) ([]*model.Appointment, error) {
+	var appointments []*model.Appointment
+
+	query := r.db.WithContext(ctx).
+		Preload("Patient").
+		Preload("Professional").
+		Preload("Procedures.Procedure").
+		Preload("Specialties").
+		Where("clinic_id = ? AND deleted_at IS NULL", clinicID).
+		Where("start_time >= ? AND start_time < ?", start, end).
+		Where("status NOT IN (?) OR (is_exception = true AND status = ?)",
+			[]model.AppointmentStatus{model.AppointmentStatusCanceled},
+			model.AppointmentStatusCanceled)
 
 	if professionalID != nil {
 		query = query.Where("professional_id = ?", *professionalID)

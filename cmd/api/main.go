@@ -106,6 +106,14 @@ import (
 	specialty_repository "github.com/aseno/backend/pkg/specialty/repository"
 	specialty_service "github.com/aseno/backend/pkg/specialty/service"
 	public_handler "github.com/aseno/backend/pkg/public/handler"
+	attendance_handler "github.com/aseno/backend/pkg/attendance/handler"
+	attendance_model "github.com/aseno/backend/pkg/attendance/model"
+	attendance_repository "github.com/aseno/backend/pkg/attendance/repository"
+	attendance_service "github.com/aseno/backend/pkg/attendance/service"
+	enrollment_handler "github.com/aseno/backend/pkg/enrollment/handler"
+	enrollment_model "github.com/aseno/backend/pkg/enrollment/model"
+	enrollment_repository "github.com/aseno/backend/pkg/enrollment/repository"
+	enrollment_service "github.com/aseno/backend/pkg/enrollment/service"
 	sessionplan_handler "github.com/aseno/backend/pkg/sessionplan/handler"
 	sessionplan_model "github.com/aseno/backend/pkg/sessionplan/model"
 	sessionplan_repository "github.com/aseno/backend/pkg/sessionplan/repository"
@@ -584,8 +592,10 @@ func main() {
 	var waitlistSvc waitlist_service.WaitlistService
 	// Note: We'll fully initialize this after the queue is set up
 
-	// Initialize Session Plan worker (runs every hour)
-	sessionPlanWorker := worker.NewSessionPlanWorker(sessionPlanService, 1*time.Hour)
+	// Initialize Session Plan tasks worker (runs every hour)
+	// No longer generates appointments — occurrences are calculated via RRULE on demand.
+	// Tasks can be registered for notifications, billing reminders, etc.
+	sessionPlanWorker := worker.NewSessionPlanTasksWorker(1 * time.Hour)
 	go sessionPlanWorker.Start()
 
 	// Initialize Payment Timeout worker (cancels awaiting_payment appointments)
@@ -686,6 +696,10 @@ func main() {
 	appointmentService.SetCommissionCalculator(commissionSvc)
 	logger.Println("Commission calculator connected to appointment service")
 
+	// Wire session plan handler into appointment service for sessions_done tracking
+	appointmentService.SetSessionPlanHandler(sessionPlanService)
+	logger.Println("Session plan handler connected to appointment service")
+
 	// Initialize middleware
 	authMiddleware := auth_middleware.NewAuthMiddleware(jwtService)
 	tenantMiddleware := auth_middleware.NewTenantMiddleware(clinicRepo)
@@ -697,7 +711,21 @@ func main() {
 	professionalProcedureHandler := professional_handler.NewProfessionalProcedureHandler(professionalProcedureService, auditSvc)
 	commissionHandler := commission_handler.NewCommissionHandler(commissionSvc, auditSvc)
 	patientHandler := patient_handler.NewPatientHandler(patientService)
-	appointmentHandler := appointment_handler.NewAppointmentHandler(appointmentService)
+	// Initialize Enrollment service and handler
+	enrollmentRepo := enrollment_repository.NewEnrollmentRepository(db.GetDB())
+	enrollmentSvc := enrollment_service.NewEnrollmentService(enrollmentRepo, sessionPlanRepo)
+	enrollmentHdlr := enrollment_handler.NewEnrollmentHandler(enrollmentSvc)
+
+	// Initialize Attendance service and handler
+	attendanceRepo := attendance_repository.NewAttendanceRepository(db.GetDB())
+	attendanceSvc := attendance_service.NewAttendanceService(attendanceRepo, appointmentRepo, sessionPlanRepo, enrollmentRepo)
+	attendanceSvc.SetPaymentRepo(appointmentPaymentRepo)
+	attendanceHdlr := attendance_handler.NewAttendanceHandler(attendanceSvc)
+
+	appointmentHandler := appointment_handler.NewAppointmentHandler(
+		appointmentService,
+		appointment_handler.WithAttendanceRecorder(attendanceSvc),
+	)
 	procedureHandler := procedure_handler.NewProcedureHandler(procedureService)
 	paymentMethodHandler := paymentmethod_handler.NewPaymentMethodHandler(paymentMethodService, auditSvc)
 	specialtyHandler := specialty_handler.NewSpecialtyHandler(specialtyService, auditSvc)
@@ -751,8 +779,15 @@ func main() {
 		calendarHandler = calendar_handler.NewCalendarHandler(calendarService, cfg.GetFrontendURL())
 	}
 
-	// Initialize Session Plan handler
-	sessionPlanHandler := sessionplan_handler.NewSessionPlanHandler(sessionPlanService)
+	// Initialize Session Plan handler with calendar facade and materialize service
+	calendarFacade := sessionplan_service.NewCalendarFacade(sessionPlanRepo, appointmentRepo, enrollmentRepo)
+	materializeSvc := sessionplan_service.NewMaterializeService(sessionPlanRepo, appointmentRepo)
+	sessionPlanHandler := sessionplan_handler.NewSessionPlanHandler(sessionPlanService, calendarFacade, materializeSvc)
+
+	// Initialize Plan Payment service and handler
+	planPaymentRepo := sessionplan_repository.NewPlanPaymentRepository(db.GetDB())
+	planPaymentSvc := sessionplan_service.NewPlanPaymentService(planPaymentRepo, sessionPlanRepo)
+	planPaymentHdlr := sessionplan_handler.NewPlanPaymentHandler(planPaymentSvc)
 
 	// Initialize Invite handler
 	inviteHdlr := invite_handler.NewInviteHandler(inviteSvc, auditSvc)
@@ -874,6 +909,9 @@ func main() {
 		commissionHandler,
 		portalHdlr,
 		marketplaceHdlr,
+		attendanceHdlr,
+		enrollmentHdlr,
+		planPaymentHdlr,
 		authMiddleware,
 		tenantMiddleware,
 	)
@@ -967,6 +1005,9 @@ func setupRouter(
 	commissionHandler commission_handler.CommissionHandler,
 	portalHandler *portalaccount_handler.PortalHandler,
 	marketplaceHandler marketplace_handler.MarketplaceHandler,
+	attendanceHandler attendance_handler.AttendanceHandler,
+	enrollmentHandler enrollment_handler.EnrollmentHandler,
+	planPaymentHandler sessionplan_handler.PlanPaymentHandler,
 	authMiddleware auth_middleware.AuthMiddleware,
 	tenantMiddleware auth_middleware.TenantMiddleware,
 ) *gin.Engine {
@@ -1075,6 +1116,8 @@ func setupRouter(
 				appointmentHandler.RegisterRoutes(appointmentsProtected)
 				// Payment sub-routes registered on the same /appointments group to avoid wildcard conflict
 				appointmentPaymentHandler.RegisterRoutes(appointmentsProtected.Group("/appointments"))
+				// Attendance sub-routes
+				attendanceHandler.RegisterRoutes(appointmentsProtected)
 			}
 
 			// Procedure routes
@@ -1106,6 +1149,12 @@ func setupRouter(
 
 			// Session Plan routes
 			sessionPlanHandler.RegisterRoutes(protected)
+
+			// Enrollment routes (group session plan enrollments)
+			enrollmentHandler.RegisterRoutes(protected)
+
+			// Plan payment routes (upfront/monthly payments)
+			planPaymentHandler.RegisterRoutes(protected)
 
 			// Patient Record routes (clinical records and session notes)
 			patientRecordHandler.RegisterRoutes(protected)
@@ -1272,6 +1321,9 @@ func runMigrations(db *database.Database) error {
 		&calendar_model.CalendarIntegration{},
 		&calendar_model.CalendarSync{},
 		&sessionplan_model.SessionPlan{},
+		&attendance_model.AppointmentAttendance{},
+		&enrollment_model.SessionPlanEnrollment{},
+		&sessionplan_model.SessionPlanPayment{},
 		&invite_model.Invite{},
 		&patientrecord_model.PatientRecord{},
 		&patientrecord_model.SessionNote{},

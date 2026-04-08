@@ -9,7 +9,6 @@ import (
 	"github.com/lib/pq"
 
 	"github.com/aseno/backend/internal/errors"
-	appointment_model "github.com/aseno/backend/pkg/appointment/model"
 	appointment_repository "github.com/aseno/backend/pkg/appointment/repository"
 	"github.com/aseno/backend/pkg/pagination"
 	"github.com/aseno/backend/pkg/sessionplan/model"
@@ -28,8 +27,6 @@ type SessionPlanService interface {
 	Cancel(ctx context.Context, clinicID, id uuid.UUID) error
 	Delete(ctx context.Context, clinicID, id uuid.UUID) error
 	BulkCancel(ctx context.Context, clinicID uuid.UUID, ids []uuid.UUID) error
-	GenerateAppointments(ctx context.Context, plan *model.SessionPlan, weeksAhead int) (int, error)
-	GenerateAllPending(ctx context.Context, weeksAhead int) error
 	OnAppointmentCompleted(ctx context.Context, clinicID uuid.UUID, appointmentID uuid.UUID) error
 }
 
@@ -52,8 +49,12 @@ func NewSessionPlanService(
 
 // Create creates a new session plan and generates initial appointments
 func (s *sessionPlanService) Create(ctx context.Context, clinicID uuid.UUID, req *model.CreateSessionPlanRequest) (*model.SessionPlan, error) {
-	// Parse start date
-	startDate, err := time.Parse("2006-01-02", req.StartDate)
+	// Parse start date in clinic timezone so weekday calculation is correct
+	loc, _ := time.LoadLocation("America/Sao_Paulo")
+	if loc == nil {
+		loc = time.UTC
+	}
+	startDate, err := time.ParseInLocation("2006-01-02", req.StartDate, loc)
 	if err != nil {
 		return nil, errors.ErrValidationInstance.WithMessage("Invalid start date format. Use YYYY-MM-DD")
 	}
@@ -63,18 +64,46 @@ func (s *sessionPlanService) Create(ctx context.Context, clinicID uuid.UUID, req
 		return nil, errors.ErrValidationInstance.WithMessage("Week days are required for custom frequency")
 	}
 
-	// Set default week days based on frequency
+	// Set default week days based on frequency and start date
 	var weekDays []int
 	if len(req.WeekDays) > 0 {
 		weekDays = req.WeekDays
 	} else {
-		weekDays = s.getDefaultWeekDays(req.Frequency)
+		weekDays = s.getDefaultWeekDays(req.Frequency, startDate)
 	}
 
 	// Convert to pq.Int64Array
 	var pqWeekDays pq.Int64Array
 	for _, wd := range weekDays {
 		pqWeekDays = append(pqWeekDays, int64(wd))
+	}
+
+	// Build RRULE: use provided rrule or compute from legacy frequency
+	rruleStr := req.RRule
+	if rruleStr == "" {
+		rruleStr = FrequencyToRRule(req.Frequency, pqWeekDays)
+	} else {
+		if err := ValidateRRule(rruleStr); err != nil {
+			return nil, errors.ErrValidationInstance.WithMessage("Invalid RRULE: " + err.Error())
+		}
+	}
+
+	// Build DtStart from start_date + preferred_time
+	dtstart, err := BuildDtStart(req.StartDate, req.PreferredTime)
+	if err != nil {
+		return nil, errors.ErrValidationInstance.WithMessage("Invalid start date/time combination")
+	}
+
+	// Default plan type
+	planType := req.Type
+	if planType == "" {
+		planType = model.PlanTypeIndividual
+	}
+
+	// Default payment mode
+	paymentMode := req.PaymentMode
+	if paymentMode == "" {
+		paymentMode = model.PaymentModePerSession
 	}
 
 	// Calculate generate_until (2 weeks ahead by default)
@@ -87,6 +116,14 @@ func (s *sessionPlanService) Create(ctx context.Context, clinicID uuid.UUID, req
 		Title:          req.Title,
 		Description:    req.Description,
 		Status:         model.PlanStatusActive,
+		Type:           planType,
+		RRule:          rruleStr,
+		DtStart:        &dtstart,
+		DayTimes:       req.DayTimes,
+		ProcedureID:    req.ProcedureID,
+		PriceOverride:  req.PriceOverride,
+		Capacity:       req.Capacity,
+		PaymentMode:    paymentMode,
 		Frequency:      req.Frequency,
 		WeekDays:       pqWeekDays,
 		PreferredTime:  req.PreferredTime,
@@ -103,21 +140,9 @@ func (s *sessionPlanService) Create(ctx context.Context, clinicID uuid.UUID, req
 		return nil, err
 	}
 
-	// Determine how many weeks to generate
-	weeksToGenerate := 2 // Default
-	if req.GenerateAll && req.TotalSessions > 0 {
-		weeksToGenerate = 52 * 5 // Generate enough for years if needed, effectively "all"
-	} else if req.TotalSessions == -1 {
-		// If indeterminate, generate 2 weeks
-		weeksToGenerate = 2
-	}
-
-	// Generate appointments
-	_, err = s.GenerateAppointments(ctx, plan, weeksToGenerate)
-	if err != nil {
-		// Log error but don't fail the creation
-		fmt.Printf("Warning: Failed to generate initial appointments: %v\n", err)
-	}
+	// No appointments are pre-generated. Occurrences are calculated on demand
+	// via RRULE when the calendar is loaded (CalendarFacade).
+	// Appointments are only materialized when the user interacts with them.
 
 	return s.repo.GetByID(ctx, clinicID, plan.ID)
 }
@@ -249,119 +274,6 @@ func (s *sessionPlanService) BulkCancel(ctx context.Context, clinicID uuid.UUID,
 	return s.repo.BulkCancel(ctx, clinicID, ids)
 }
 
-// GenerateAppointments generates appointments for a session plan
-func (s *sessionPlanService) GenerateAppointments(ctx context.Context, plan *model.SessionPlan, weeksAhead int) (int, error) {
-	if !plan.IsActive() {
-		return 0, nil
-	}
-
-	// If no professional assigned to plan, we cannot auto-generate appointments
-	// as Appointment requires a ProfessionalID.
-	if plan.ProfessionalID == nil {
-		return 0, nil
-	}
-
-	// Calculate the date range for generation
-	startDate := time.Now()
-	if plan.LastGeneratedAt != nil && plan.LastGeneratedAt.After(startDate) {
-		startDate = *plan.LastGeneratedAt
-	}
-	if plan.StartDate.After(startDate) {
-		startDate = plan.StartDate
-	}
-
-	endDate := time.Now().AddDate(0, 0, weeksAhead*7)
-
-	// Parse preferred time
-	preferredHour, preferredMin := s.parseTime(plan.PreferredTime)
-
-	// Get dates based on frequency
-	dates := s.getSessionDates(plan, startDate, endDate)
-
-	// Limit dates to remaining sessions (if not indeterminate)
-	if plan.TotalSessions > 0 {
-		remainingSessions := plan.RemainingSessions()
-		if len(dates) > remainingSessions {
-			dates = dates[:remainingSessions]
-		}
-	}
-
-	created := 0
-	for _, date := range dates {
-		// Set the time
-		sessionStart := time.Date(
-			date.Year(), date.Month(), date.Day(),
-			preferredHour, preferredMin, 0, 0,
-			time.Local,
-		)
-		sessionEnd := sessionStart.Add(time.Duration(plan.DurationMins) * time.Minute)
-
-		// Check for conflicts
-		hasConflict, err := s.appointmentRepo.CheckConflict(
-			ctx,
-			plan.ClinicID,
-			*plan.ProfessionalID,
-			sessionStart,
-			sessionEnd,
-			nil,
-		)
-		if err != nil {
-			continue
-		}
-		if hasConflict {
-			// Try to find an alternative time slot (skip for now)
-			continue
-		}
-
-		// Create appointment
-		appointment := &appointment_model.Appointment{
-			ClinicID:       plan.ClinicID,
-			PatientID:      plan.PatientID,
-			ProfessionalID: *plan.ProfessionalID,
-			SessionPlanID:  &plan.ID,
-			StartTime:      sessionStart,
-			EndTime:        sessionEnd,
-			Status:         appointment_model.AppointmentStatusPending,
-			Type:           appointment_model.AppointmentTypeRecurring,
-			Title:          plan.Title,
-			Price:          plan.SessionPrice,
-		}
-
-		if err := s.appointmentRepo.Create(ctx, appointment); err != nil {
-			continue
-		}
-
-		created++
-	}
-
-	// Update last generated timestamp
-	now := time.Now()
-	plan.LastGeneratedAt = &now
-	plan.GenerateUntil = endDate
-	s.repo.UpdateLastGenerated(ctx, plan.ClinicID, plan.ID, now)
-
-	return created, nil
-}
-
-// GenerateAllPending generates appointments for all active plans that need it
-func (s *sessionPlanService) GenerateAllPending(ctx context.Context, weeksAhead int) error {
-	generateBefore := time.Now().AddDate(0, 0, 7) // Plans that need generation within a week
-	plans, err := s.repo.GetActivePlansForGeneration(ctx, generateBefore)
-	if err != nil {
-		return err
-	}
-
-	for _, plan := range plans {
-		_, err := s.GenerateAppointments(ctx, plan, weeksAhead)
-		if err != nil {
-			// Log error but continue with other plans
-			fmt.Printf("Error generating appointments for plan %s: %v\n", plan.ID, err)
-		}
-	}
-
-	return nil
-}
-
 // OnAppointmentCompleted handles when an appointment from a session plan is completed
 func (s *sessionPlanService) OnAppointmentCompleted(ctx context.Context, clinicID uuid.UUID, appointmentID uuid.UUID) error {
 	// Get the appointment to find its session plan
@@ -378,19 +290,25 @@ func (s *sessionPlanService) OnAppointmentCompleted(ctx context.Context, clinicI
 	return s.repo.IncrementSessionsDone(ctx, clinicID, *appointment.SessionPlanID)
 }
 
-// getDefaultWeekDays returns default week days based on frequency
-func (s *sessionPlanService) getDefaultWeekDays(frequency model.Frequency) []int {
+// getDefaultWeekDays returns default week days based on frequency and start date.
+// For weekly, uses the start date's weekday so sessions start on the chosen day.
+func (s *sessionPlanService) getDefaultWeekDays(frequency model.Frequency, startDate time.Time) []int {
+	startDay := int(startDate.Weekday()) // 0=Sun, 1=Mon, ..., 6=Sat
 	switch frequency {
 	case model.FrequencyDaily:
-		return []int{1, 2, 3, 4, 5} // Monday to Friday
+		return []int{1, 2, 3, 4, 5}
 	case model.FrequencyWeekly:
-		return []int{1} // Monday
+		return []int{startDay}
 	case model.FrequencyBiweekly:
-		return []int{1, 4} // Monday and Thursday
+		// Start day + 3 days later (wrapping within weekdays)
+		secondDay := (startDay + 3) % 7
+		return []int{startDay, secondDay}
 	case model.FrequencyTriweekly:
-		return []int{1, 3, 5} // Monday, Wednesday, Friday
+		d2 := (startDay + 2) % 7
+		d3 := (startDay + 4) % 7
+		return []int{startDay, d2, d3}
 	default:
-		return []int{1} // Monday
+		return []int{startDay}
 	}
 }
 
@@ -399,43 +317,4 @@ func (s *sessionPlanService) parseTime(timeStr string) (int, int) {
 	var hour, min int
 	fmt.Sscanf(timeStr, "%d:%d", &hour, &min)
 	return hour, min
-}
-
-// getSessionDates calculates the dates for sessions based on frequency
-func (s *sessionPlanService) getSessionDates(plan *model.SessionPlan, startDate, endDate time.Time) []time.Time {
-	var dates []time.Time
-
-	switch plan.Frequency {
-	case model.FrequencyMonthly:
-		// Once per month on the same day
-		current := startDate
-		for current.Before(endDate) {
-			dates = append(dates, current)
-			current = current.AddDate(0, 1, 0)
-		}
-
-	case model.FrequencyBimonthly:
-		// Every two weeks
-		current := startDate
-		for current.Before(endDate) {
-			dates = append(dates, current)
-			current = current.AddDate(0, 0, 14)
-		}
-
-	default:
-		// Weekly-based frequencies (use week days)
-		current := startDate
-		for current.Before(endDate) {
-			weekday := int(current.Weekday())
-			for _, wd := range plan.WeekDays {
-				if weekday == int(wd) {
-					dates = append(dates, current)
-					break
-				}
-			}
-			current = current.AddDate(0, 0, 1)
-		}
-	}
-
-	return dates
 }

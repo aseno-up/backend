@@ -86,6 +86,9 @@ func (m *mockAppointmentRepo) CountByProfessionalID(_ context.Context, _, _ uuid
 func (m *mockAppointmentRepo) UpdatePaymentStatus(_ context.Context, _ uuid.UUID, _ model.PaymentStatus) error {
 	return nil
 }
+func (m *mockAppointmentRepo) GetByDateRangeWithExceptions(_ context.Context, _ uuid.UUID, _, _ time.Time, _ *uuid.UUID) ([]*model.Appointment, error) {
+	return nil, nil
+}
 
 // --- Helpers ---
 

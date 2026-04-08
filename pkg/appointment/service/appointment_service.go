@@ -61,6 +61,9 @@ type AppointmentService interface {
 	// SetCalendarService sets the calendar service for Google Calendar sync
 	SetCalendarService(service calendar_service.CalendarService)
 
+	// SetSessionPlanHandler sets the handler for session plan updates on appointment completion
+	SetSessionPlanHandler(handler SessionPlanCompletionHandler)
+
 	// SuggestSmartSlots suggests best time slots based on historical data
 	SuggestSmartSlots(ctx context.Context, clinicID, professionalID uuid.UUID, date time.Time, days int, durationMinutes int) ([]*model.SmartSlotSuggestion, error)
 }
@@ -76,6 +79,11 @@ type CommissionCalculator interface {
 	VoidByAppointment(ctx context.Context, appointmentID, clinicID uuid.UUID) error
 }
 
+// SessionPlanCompletionHandler handles session plan updates when an appointment is completed
+type SessionPlanCompletionHandler interface {
+	OnAppointmentCompleted(ctx context.Context, clinicID uuid.UUID, appointmentID uuid.UUID) error
+}
+
 // appointmentService implements AppointmentService
 type appointmentService struct {
 	repo            repository.AppointmentRepository
@@ -84,6 +92,7 @@ type appointmentService struct {
 	riskCalculator      PatientRiskCalculator
 	commissionCalculator CommissionCalculator
 	calendarService     calendar_service.CalendarService
+	sessionPlanHandler  SessionPlanCompletionHandler
 }
 
 // NewAppointmentService creates a new appointment service
@@ -144,6 +153,11 @@ func (s *appointmentService) SetCommissionCalculator(calculator CommissionCalcul
 // SetCalendarService sets the calendar service for Google Calendar sync
 func (s *appointmentService) SetCalendarService(service calendar_service.CalendarService) {
 	s.calendarService = service
+}
+
+// SetSessionPlanHandler sets the handler for session plan updates on appointment completion
+func (s *appointmentService) SetSessionPlanHandler(handler SessionPlanCompletionHandler) {
+	s.sessionPlanHandler = handler
 }
 
 // toCalendarData converts an appointment to calendar sync data
@@ -805,6 +819,14 @@ func (s *appointmentService) Complete(ctx context.Context, id, clinicID uuid.UUI
 
 	if err := s.repo.UpdateStatus(ctx, id, clinicID, model.AppointmentStatusCompleted); err != nil {
 		return nil, err
+	}
+
+	// Increment sessions_done on the session plan (if appointment belongs to one)
+	if s.sessionPlanHandler != nil && appointment.SessionPlanID != nil {
+		if err := s.sessionPlanHandler.OnAppointmentCompleted(ctx, clinicID, id); err != nil {
+			logger.Printf("[Appointment] Error updating session plan for appointment %s: %v", id, err)
+			// Don't fail the completion — session plan can be updated later
+		}
 	}
 
 	// Calculate and store commission for completed appointment

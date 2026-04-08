@@ -2,6 +2,7 @@ package handler
 
 import (
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -25,18 +26,29 @@ type SessionPlanHandler interface {
 	Cancel(c *gin.Context)
 	Delete(c *gin.Context)
 	BulkCancel(c *gin.Context)
-	GenerateAppointments(c *gin.Context)
+	GetCalendarEvents(c *gin.Context)
+	Materialize(c *gin.Context)
+	CancelOccurrence(c *gin.Context)
+	RescheduleOccurrence(c *gin.Context)
 }
 
 // sessionPlanHandler implements SessionPlanHandler
 type sessionPlanHandler struct {
-	service service.SessionPlanService
+	service         service.SessionPlanService
+	calendarFacade  service.CalendarFacade
+	materializeSvc  service.MaterializeService
 }
 
 // NewSessionPlanHandler creates a new session plan handler
-func NewSessionPlanHandler(service service.SessionPlanService) SessionPlanHandler {
+func NewSessionPlanHandler(
+	svc service.SessionPlanService,
+	calendarFacade service.CalendarFacade,
+	materializeSvc service.MaterializeService,
+) SessionPlanHandler {
 	return &sessionPlanHandler{
-		service: service,
+		service:         svc,
+		calendarFacade:  calendarFacade,
+		materializeSvc:  materializeSvc,
 	}
 }
 
@@ -53,8 +65,16 @@ func (h *sessionPlanHandler) RegisterRoutes(router gin.IRouter) {
 		plans.PUT("/:id/resume", h.Resume)
 		plans.PUT("/:id/cancel", h.Cancel)
 		plans.POST("/bulk-cancel", h.BulkCancel)
-		plans.POST("/:id/generate", h.GenerateAppointments)
+		plans.POST("/:id/materialize", h.Materialize)
+		plans.POST("/:id/cancel-occurrence", h.CancelOccurrence)
+		plans.POST("/:id/reschedule-occurrence", h.RescheduleOccurrence)
 		plans.GET("/patient/:patient_id", h.GetByPatient)
+	}
+
+	// Calendar endpoint — returns merged virtual + real events
+	calendar := router.Group("/calendar")
+	{
+		calendar.GET("/events", h.GetCalendarEvents)
 	}
 }
 
@@ -295,48 +315,145 @@ func (h *sessionPlanHandler) Delete(c *gin.Context) {
 	})
 }
 
-// GenerateAppointmentsRequest represents the request to generate appointments
-type GenerateAppointmentsRequest struct {
-	WeeksAhead int `json:"weeks_ahead" binding:"min=1,max=12"`
-}
-
-// GenerateAppointments manually triggers appointment generation for a plan
-func (h *sessionPlanHandler) GenerateAppointments(c *gin.Context) {
+// GetCalendarEvents returns merged virtual + real appointments for the calendar
+func (h *sessionPlanHandler) GetCalendarEvents(c *gin.Context) {
 	clinicID, exists := c.Get("clinic_id")
 	if !exists {
 		c.JSON(http.StatusUnauthorized, errors.ToResponse(errors.ErrUnauthorizedInstance))
 		return
 	}
 
-	id, err := uuid.Parse(c.Param("id"))
+	var req model.CalendarEventsRequest
+	if err := c.ShouldBindQuery(&req); err != nil {
+		c.JSON(http.StatusBadRequest, errors.ToResponse(errors.ErrValidationInstance.WithError(err)))
+		return
+	}
+
+	rangeStart, err := time.Parse("2006-01-02", req.StartDate)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, errors.ToResponse(errors.ErrValidationInstance.WithMessage("Invalid start_date format")))
+		return
+	}
+	rangeEnd, err := time.Parse("2006-01-02", req.EndDate)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, errors.ToResponse(errors.ErrValidationInstance.WithMessage("Invalid end_date format")))
+		return
+	}
+	// Include the full end day
+	rangeEnd = rangeEnd.Add(24*time.Hour - time.Second)
+
+	var professionalID *uuid.UUID
+	if req.ProfessionalID != "" {
+		id, err := uuid.Parse(req.ProfessionalID)
+		if err == nil {
+			professionalID = &id
+		}
+	}
+
+	events, err := h.calendarFacade.GetCalendarEvents(c.Request.Context(), clinicID.(uuid.UUID), professionalID, rangeStart, rangeEnd)
+	if err != nil {
+		statusCode := errors.GetStatusCode(err)
+		c.JSON(statusCode, errors.ToResponse(err))
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"data": events})
+}
+
+// Materialize converts a virtual RRULE occurrence into a real appointment
+func (h *sessionPlanHandler) Materialize(c *gin.Context) {
+	clinicID, exists := c.Get("clinic_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, errors.ToResponse(errors.ErrUnauthorizedInstance))
+		return
+	}
+
+	planID, err := uuid.Parse(c.Param("id"))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, errors.ToResponse(errors.ErrValidationInstance.WithMessage("Invalid plan ID")))
 		return
 	}
 
-	var req GenerateAppointmentsRequest
+	var req model.MaterializeRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		req.WeeksAhead = 2 // Default to 2 weeks
-	}
-	if req.WeeksAhead < 1 {
-		req.WeeksAhead = 2
+		c.JSON(http.StatusBadRequest, errors.ToResponse(errors.ErrValidationInstance.WithError(err)))
+		return
 	}
 
-	plan, err := h.service.GetByID(c.Request.Context(), clinicID.(uuid.UUID), id)
+	appointment, err := h.materializeSvc.Materialize(c.Request.Context(), clinicID.(uuid.UUID), planID, req.Date)
 	if err != nil {
 		statusCode := errors.GetStatusCode(err)
 		c.JSON(statusCode, errors.ToResponse(err))
 		return
 	}
 
-	count, err := h.service.GenerateAppointments(c.Request.Context(), plan, req.WeeksAhead)
+	c.JSON(http.StatusOK, appointment.ToResponse())
+}
+
+// CancelOccurrence cancels a single virtual occurrence of a session plan
+func (h *sessionPlanHandler) CancelOccurrence(c *gin.Context) {
+	clinicID, exists := c.Get("clinic_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, errors.ToResponse(errors.ErrUnauthorizedInstance))
+		return
+	}
+
+	planID, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, errors.ToResponse(errors.ErrValidationInstance.WithMessage("Invalid plan ID")))
+		return
+	}
+
+	var req model.CancelOccurrenceRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, errors.ToResponse(errors.ErrValidationInstance.WithError(err)))
+		return
+	}
+
+	appointment, err := h.materializeSvc.CancelOccurrence(c.Request.Context(), clinicID.(uuid.UUID), planID, req.Date)
 	if err != nil {
 		statusCode := errors.GetStatusCode(err)
 		c.JSON(statusCode, errors.ToResponse(err))
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"message": "Appointments generated successfully", "count": count})
+	c.JSON(http.StatusOK, appointment.ToResponse())
+}
+
+// RescheduleOccurrence reschedules a single virtual occurrence of a session plan
+func (h *sessionPlanHandler) RescheduleOccurrence(c *gin.Context) {
+	clinicID, exists := c.Get("clinic_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, errors.ToResponse(errors.ErrUnauthorizedInstance))
+		return
+	}
+
+	planID, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, errors.ToResponse(errors.ErrValidationInstance.WithMessage("Invalid plan ID")))
+		return
+	}
+
+	var req model.RescheduleOccurrenceRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, errors.ToResponse(errors.ErrValidationInstance.WithError(err)))
+		return
+	}
+
+	newTime, err := time.Parse(time.RFC3339, req.NewStartTime)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, errors.ToResponse(errors.ErrValidationInstance.WithMessage("Invalid new_start_time format. Use RFC3339")))
+		return
+	}
+
+	appointment, err := h.materializeSvc.RescheduleOccurrence(c.Request.Context(), clinicID.(uuid.UUID), planID, req.OriginalDate, newTime)
+	if err != nil {
+		statusCode := errors.GetStatusCode(err)
+		c.JSON(statusCode, errors.ToResponse(err))
+		return
+	}
+
+	c.JSON(http.StatusOK, appointment.ToResponse())
 }
 
 // BulkCancel handles cancelling multiple session plans

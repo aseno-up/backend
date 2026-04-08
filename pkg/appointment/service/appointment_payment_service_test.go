@@ -91,6 +91,9 @@ func (m *mockAptRepoForPayment) UpdatePaymentStatus(_ context.Context, _ uuid.UU
 	m.paymentStatus = status
 	return nil
 }
+func (m *mockAptRepoForPayment) GetByDateRangeWithExceptions(_ context.Context, _ uuid.UUID, _, _ time.Time, _ *uuid.UUID) ([]*model.Appointment, error) {
+	return nil, nil
+}
 
 // Unused interface methods
 func (m *mockAptRepoForPayment) Create(_ context.Context, _ *model.Appointment) error { return nil }

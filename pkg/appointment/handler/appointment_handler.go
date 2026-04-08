@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"net/http"
 	"strconv"
 	"time"
@@ -9,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/aseno/backend/internal/errors"
+	"github.com/aseno/backend/internal/logger"
 	"github.com/aseno/backend/pkg/appointment/model"
 	"github.com/aseno/backend/pkg/appointment/service"
 	"github.com/aseno/backend/pkg/auth/middleware"
@@ -30,14 +32,31 @@ type AppointmentHandler interface {
 	MarkNoShow(c *gin.Context)
 }
 
+// AttendanceAutoRecorder is an optional interface for auto-recording attendance on completion
+type AttendanceAutoRecorder interface {
+	AutoRecordPresent(ctx context.Context, clinicID, appointmentID uuid.UUID) error
+}
+
 // appointmentHandler implements AppointmentHandler
 type appointmentHandler struct {
-	service service.AppointmentService
+	service            service.AppointmentService
+	attendanceRecorder AttendanceAutoRecorder
 }
 
 // NewAppointmentHandler creates a new appointment handler
-func NewAppointmentHandler(service service.AppointmentService) AppointmentHandler {
-	return &appointmentHandler{service: service}
+func NewAppointmentHandler(service service.AppointmentService, opts ...func(*appointmentHandler)) AppointmentHandler {
+	h := &appointmentHandler{service: service}
+	for _, opt := range opts {
+		opt(h)
+	}
+	return h
+}
+
+// WithAttendanceRecorder sets the attendance auto-recorder (called on appointment completion)
+func WithAttendanceRecorder(recorder AttendanceAutoRecorder) func(*appointmentHandler) {
+	return func(h *appointmentHandler) {
+		h.attendanceRecorder = recorder
+	}
 }
 
 // RegisterRoutes registers appointment routes
@@ -328,6 +347,13 @@ func (h *appointmentHandler) Complete(c *gin.Context) {
 		statusCode := errors.GetStatusCode(err)
 		c.JSON(statusCode, errors.ToResponse(err))
 		return
+	}
+
+	// Auto-record attendance for session plan appointments (if not already recorded)
+	if h.attendanceRecorder != nil {
+		if err := h.attendanceRecorder.AutoRecordPresent(c.Request.Context(), clinicID.(uuid.UUID), id); err != nil {
+			logger.Printf("[Appointment] Error auto-recording attendance for %s: %v", id, err)
+		}
 	}
 
 	c.JSON(http.StatusOK, appointment)

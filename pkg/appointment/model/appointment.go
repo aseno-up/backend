@@ -36,6 +36,8 @@ type Appointment struct {
 	PatientID      uuid.UUID              `json:"patient_id" gorm:"type:uuid;not null;index"`
 	ProfessionalID uuid.UUID              `json:"professional_id" gorm:"type:uuid;not null;index"`
 	SessionPlanID  *uuid.UUID             `json:"session_plan_id,omitempty" gorm:"type:uuid;index"` // If part of a session plan
+	IsException    bool                   `json:"is_exception" gorm:"not null;default:false"`      // True if rescheduled/edited individually from recurrence
+	OriginalDate   *time.Time             `json:"original_date,omitempty"`                         // Original scheduled date before rescheduling
 	StartTime      time.Time              `json:"start_time" gorm:"not null;index"`
 	EndTime        time.Time              `json:"end_time" gorm:"not null"`
 	Status         AppointmentStatus      `json:"status" gorm:"not null;default:'pending';index"`

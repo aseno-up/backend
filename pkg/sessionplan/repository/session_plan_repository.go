@@ -20,6 +20,7 @@ type SessionPlanRepository interface {
 	GetByPatient(ctx context.Context, clinicID, patientID uuid.UUID) ([]*model.SessionPlan, error)
 	GetByProfessional(ctx context.Context, clinicID, professionalID uuid.UUID) ([]*model.SessionPlan, error)
 	GetActivePlansForGeneration(ctx context.Context, generateBefore time.Time) ([]*model.SessionPlan, error)
+	GetAllActive(ctx context.Context, clinicID uuid.UUID) ([]*model.SessionPlan, error)
 	Update(ctx context.Context, plan *model.SessionPlan) error
 	UpdateStatus(ctx context.Context, clinicID, id uuid.UUID, status model.PlanStatus) error
 	IncrementSessionsDone(ctx context.Context, clinicID, id uuid.UUID) error
@@ -220,15 +221,15 @@ func (r *sessionPlanRepository) IncrementSessionsDone(ctx context.Context, clini
 		return errors.ErrInternalInstance.WithError(result.Error)
 	}
 
-	// Check if plan is now complete
+	// Check if plan is now complete (only for determinate plans)
 	var plan model.SessionPlan
 	if err := r.db.WithContext(ctx).Where("clinic_id = ? AND id = ?", clinicID, id).First(&plan).Error; err == nil {
-		if plan.SessionsDone >= plan.TotalSessions {
+		if !plan.IsIndeterminate() && plan.SessionsDone >= plan.TotalSessions {
 			now := time.Now()
 			r.db.WithContext(ctx).
 				Model(&model.SessionPlan{}).
 				Where("clinic_id = ? AND id = ?", clinicID, id).
-				Updates(map[string]interface{}{
+				Updates(map[string]any{
 					"status":       model.PlanStatusCompleted,
 					"completed_at": now,
 				})
@@ -282,6 +283,36 @@ func (r *sessionPlanRepository) loadRelations(ctx context.Context, plan *model.S
 		Where("id = ?", plan.ProfessionalID).
 		Scan(&professionalName)
 	plan.ProfessionalName = professionalName
+
+	// Load procedure name
+	if plan.ProcedureID != nil {
+		var procedureName string
+		r.db.WithContext(ctx).
+			Table("procedures").
+			Select("name").
+			Where("id = ?", plan.ProcedureID).
+			Scan(&procedureName)
+		plan.ProcedureName = procedureName
+	}
+}
+
+// GetAllActive retrieves all active session plans for a clinic
+func (r *sessionPlanRepository) GetAllActive(ctx context.Context, clinicID uuid.UUID) ([]*model.SessionPlan, error) {
+	var plans []*model.SessionPlan
+	err := r.db.WithContext(ctx).
+		Where("clinic_id = ? AND status = ?", clinicID, model.PlanStatusActive).
+		Order("created_at DESC").
+		Find(&plans).Error
+
+	if err != nil {
+		return nil, errors.ErrInternalInstance.WithError(err)
+	}
+
+	for _, plan := range plans {
+		r.loadRelations(ctx, plan)
+	}
+
+	return plans, nil
 }
 
 // BulkCancel cancels multiple session plans
