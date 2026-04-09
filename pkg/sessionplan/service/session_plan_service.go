@@ -214,6 +214,33 @@ func (s *sessionPlanService) Update(ctx context.Context, clinicID, id uuid.UUID,
 	if req.Notes != nil {
 		plan.Notes = *req.Notes
 	}
+	if req.ProfessionalID != nil {
+		plan.ProfessionalID = req.ProfessionalID
+	}
+	if req.Capacity != nil {
+		plan.Capacity = req.Capacity
+	}
+	if req.DayTimes != nil {
+		plan.DayTimes = *req.DayTimes
+	}
+
+	// Recalculate RRULE if frequency or week_days changed
+	recalcRRule := false
+	if req.Frequency != nil {
+		plan.Frequency = *req.Frequency
+		recalcRRule = true
+	}
+	if req.WeekDays != nil {
+		weekDays := make(pq.Int64Array, len(*req.WeekDays))
+		for i, d := range *req.WeekDays {
+			weekDays[i] = int64(d)
+		}
+		plan.WeekDays = weekDays
+		recalcRRule = true
+	}
+	if recalcRRule {
+		plan.RRule = FrequencyToRRule(plan.Frequency, plan.WeekDays)
+	}
 
 	if err := s.repo.Update(ctx, plan); err != nil {
 		return nil, err

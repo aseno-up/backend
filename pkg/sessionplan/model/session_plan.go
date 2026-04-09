@@ -245,12 +245,17 @@ type CreateSessionPlanRequest struct {
 
 // UpdateSessionPlanRequest represents the request to update a session plan
 type UpdateSessionPlanRequest struct {
-	Title         *string  `json:"title" binding:"omitempty,max=255"`
-	Description   *string  `json:"description"`
-	PreferredTime *string  `json:"preferred_time"` // HH:MM
-	DurationMins  *int     `json:"duration_mins" binding:"omitempty,min=15,max=480"`
-	SessionPrice  *float64 `json:"session_price" binding:"omitempty,min=0"`
-	Notes         *string  `json:"notes"`
+	Title          *string     `json:"title" binding:"omitempty,max=255"`
+	Description    *string     `json:"description"`
+	PreferredTime  *string     `json:"preferred_time"` // HH:MM
+	DurationMins   *int        `json:"duration_mins" binding:"omitempty,min=15,max=480"`
+	SessionPrice   *float64    `json:"session_price" binding:"omitempty,min=0"`
+	Notes          *string     `json:"notes"`
+	Frequency      *Frequency  `json:"frequency"`
+	WeekDays       *[]int      `json:"week_days"`
+	DayTimes       *DayTimesMap `json:"day_times"`
+	ProfessionalID *uuid.UUID  `json:"professional_id"`
+	Capacity       *int        `json:"capacity" binding:"omitempty,min=1,max=50"`
 }
 
 // SessionPlanResponse represents the response for a session plan
