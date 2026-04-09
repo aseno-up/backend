@@ -53,7 +53,7 @@ func TestAppointmentRepository_List(t *testing.T) {
 
 	t.Run("Successfully list appointments with all preloads", func(t *testing.T) {
 		appointments, total, err := repo.List(ctx, clinicID, &model.AppointmentFilter{Page: 1, PerPage: 10})
-		
+
 		require.NoError(t, err)
 		assert.Equal(t, int64(1), total)
 		assert.Len(t, appointments, 1)

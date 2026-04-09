@@ -92,7 +92,7 @@ type SessionPlan struct {
 	Type        PlanType   `json:"type" gorm:"size:20;not null;default:'individual'"`
 
 	// RRULE-based recurrence (new)
-	RRule   string     `json:"rrule" gorm:"type:text"`      // RFC 5545 RRULE string, e.g. "FREQ=WEEKLY;BYDAY=MO,WE"
+	RRule   string     `json:"rrule" gorm:"type:text"`        // RFC 5545 RRULE string, e.g. "FREQ=WEEKLY;BYDAY=MO,WE"
 	DtStart *time.Time `json:"dtstart" gorm:"type:timestamp"` // Start datetime (replaces start_date + preferred_time)
 
 	// Per-day times (new) — different time per weekday, e.g. {"MO":"08:00","WE":"14:00"}
@@ -220,42 +220,42 @@ func (s *SessionPlan) GetSessionsPerWeek() int {
 
 // CreateSessionPlanRequest represents the request to create a session plan
 type CreateSessionPlanRequest struct {
-	PatientID            uuid.UUID  `json:"patient_id"`        // Required for individual, null for group
-	ProfessionalID       *uuid.UUID `json:"professional_id"`   // Optional
-	Title                string     `json:"title" binding:"required,max=255"`
-	Description          string     `json:"description"`
-	Type                 PlanType   `json:"type"`              // "individual" (default) or "group"
-	Frequency            Frequency  `json:"frequency" binding:"required"`
-	WeekDays             []int      `json:"week_days"`                         // Required for custom frequency
-	PreferredTime        string     `json:"preferred_time" binding:"required"` // HH:MM
-	DurationMins         int        `json:"duration_mins" binding:"required,min=15,max=480"`
-	TotalSessions        int        `json:"total_sessions" binding:"required,min=-1,max=200"` // -1 = indeterminate
-	StartDate            string     `json:"start_date" binding:"required"`                    // YYYY-MM-DD
-	SessionPrice         float64    `json:"session_price" binding:"min=0"`
-	ProcedureID          *uuid.UUID `json:"procedure_id"`      // FK to procedures (new)
-	PriceOverride        *float64   `json:"price_override"`    // Optional override of procedure price (new)
-	Capacity             *int       `json:"capacity"`          // Max patients for group (new)
-	PaymentMode          PaymentMode `json:"payment_mode"`     // per_session, upfront, monthly (new)
-	RRule                string      `json:"rrule"`              // RFC 5545 RRULE string (new, optional — computed from frequency if empty)
-	DayTimes             DayTimesMap `json:"day_times"`          // Per-day times (new, optional — e.g. {"MO":"08:00","WE":"14:00"})
+	PatientID            uuid.UUID   `json:"patient_id"`      // Required for individual, null for group
+	ProfessionalID       *uuid.UUID  `json:"professional_id"` // Optional
+	Title                string      `json:"title" binding:"required,max=255"`
+	Description          string      `json:"description"`
+	Type                 PlanType    `json:"type"` // "individual" (default) or "group"
+	Frequency            Frequency   `json:"frequency" binding:"required"`
+	WeekDays             []int       `json:"week_days"`                         // Required for custom frequency
+	PreferredTime        string      `json:"preferred_time" binding:"required"` // HH:MM
+	DurationMins         int         `json:"duration_mins" binding:"required,min=15,max=480"`
+	TotalSessions        int         `json:"total_sessions" binding:"required,min=-1,max=200"` // -1 = indeterminate
+	StartDate            string      `json:"start_date" binding:"required"`                    // YYYY-MM-DD
+	SessionPrice         float64     `json:"session_price" binding:"min=0"`
+	ProcedureID          *uuid.UUID  `json:"procedure_id"`   // FK to procedures (new)
+	PriceOverride        *float64    `json:"price_override"` // Optional override of procedure price (new)
+	Capacity             *int        `json:"capacity"`       // Max patients for group (new)
+	PaymentMode          PaymentMode `json:"payment_mode"`   // per_session, upfront, monthly (new)
+	RRule                string      `json:"rrule"`          // RFC 5545 RRULE string (new, optional — computed from frequency if empty)
+	DayTimes             DayTimesMap `json:"day_times"`      // Per-day times (new, optional — e.g. {"MO":"08:00","WE":"14:00"})
 	Notes                string      `json:"notes"`
-	GenerateAll          bool       `json:"generate_all"` // If true, generate all sessions immediately
-	WhatsappConfirmation bool       `json:"whatsapp_confirmation"`
+	GenerateAll          bool        `json:"generate_all"` // If true, generate all sessions immediately
+	WhatsappConfirmation bool        `json:"whatsapp_confirmation"`
 }
 
 // UpdateSessionPlanRequest represents the request to update a session plan
 type UpdateSessionPlanRequest struct {
-	Title          *string     `json:"title" binding:"omitempty,max=255"`
-	Description    *string     `json:"description"`
-	PreferredTime  *string     `json:"preferred_time"` // HH:MM
-	DurationMins   *int        `json:"duration_mins" binding:"omitempty,min=15,max=480"`
-	SessionPrice   *float64    `json:"session_price" binding:"omitempty,min=0"`
-	Notes          *string     `json:"notes"`
-	Frequency      *Frequency  `json:"frequency"`
-	WeekDays       *[]int      `json:"week_days"`
+	Title          *string      `json:"title" binding:"omitempty,max=255"`
+	Description    *string      `json:"description"`
+	PreferredTime  *string      `json:"preferred_time"` // HH:MM
+	DurationMins   *int         `json:"duration_mins" binding:"omitempty,min=15,max=480"`
+	SessionPrice   *float64     `json:"session_price" binding:"omitempty,min=0"`
+	Notes          *string      `json:"notes"`
+	Frequency      *Frequency   `json:"frequency"`
+	WeekDays       *[]int       `json:"week_days"`
 	DayTimes       *DayTimesMap `json:"day_times"`
-	ProfessionalID *uuid.UUID  `json:"professional_id"`
-	Capacity       *int        `json:"capacity" binding:"omitempty,min=1,max=50"`
+	ProfessionalID *uuid.UUID   `json:"professional_id"`
+	Capacity       *int         `json:"capacity" binding:"omitempty,min=1,max=50"`
 }
 
 // SessionPlanResponse represents the response for a session plan

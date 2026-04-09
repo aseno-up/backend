@@ -93,11 +93,11 @@ func CalculateOccurrences(rruleStr string, dtstart time.Time, rangeStart, rangeE
 		return nil, fmt.Errorf("failed to create rrule: %w", err)
 	}
 
-	// Get all occurrences from dtstart
-	// We need to account for sessionsDone by skipping the first N occurrences
+	// Get all occurrences from dtstart to rangeEnd, then cap at totalSessions.
+	// The caller (CalendarFacade) handles suppression of already-materialized dates,
+	// so sessionsDone is not used here — the totalSessions cap is sufficient.
 	var allDates []time.Time
 	if totalSessions > 0 {
-		// Get up to totalSessions occurrences total
 		allDates = rule.Between(dtstart.Add(-time.Second), rangeEnd.Add(time.Second), true)
 		if len(allDates) > totalSessions {
 			allDates = allDates[:totalSessions]
@@ -166,10 +166,12 @@ func CalculateOccurrencesWithDayTimes(rruleStr string, dtstart time.Time, dayTim
 	_ = opt // parsed only for validation
 
 	// Use day-level boundaries so time overrides don't get excluded by the hour-level range
-	dayRangeStart := time.Date(rangeStart.Year(), rangeStart.Month(), rangeStart.Day(), 0, 0, 0, 0, rangeStart.Location())
 	dayRangeEnd := time.Date(rangeEnd.Year(), rangeEnd.Month(), rangeEnd.Day(), 23, 59, 59, 0, rangeEnd.Location())
 
-	// Calculate occurrences per day with individual dtstart times
+	// Calculate occurrences per day with individual dtstart times.
+	// We generate from dayDtstart (plan start) to dayRangeEnd so that the
+	// totalSessions cap counts ALL occurrences from the beginning of the plan,
+	// not just those in the visible calendar range.
 	var allDates []time.Time
 	for _, dayOvr := range dayOverrides {
 		// Build a single-day RRULE
@@ -180,7 +182,10 @@ func CalculateOccurrencesWithDayTimes(rruleStr string, dtstart time.Time, dayTim
 		fmt.Sscanf(dayOvr.time, "%d:%d", &hour, &min)
 		dayDtstart := time.Date(dtstartLocal.Year(), dtstartLocal.Month(), dtstartLocal.Day(), hour, min, 0, 0, loc)
 
-		dates, err := CalculateOccurrences(singleDayRRule, dayDtstart, dayRangeStart, dayRangeEnd, -1, 0)
+		// Use dayDtstart as rangeStart (not the calendar rangeStart) so we get
+		// ALL occurrences from plan start. This is needed to correctly count
+		// occurrences against the totalSessions limit.
+		dates, err := CalculateOccurrences(singleDayRRule, dayDtstart, dayDtstart, dayRangeEnd, -1, 0)
 		if err != nil {
 			continue
 		}
@@ -192,18 +197,26 @@ func CalculateOccurrencesWithDayTimes(rruleStr string, dtstart time.Time, dayTim
 		return allDates[i].Before(allDates[j])
 	})
 
-	// Apply total_sessions limit
+	// Apply total_sessions limit: cap at the first N sessions from plan start.
+	// The caller (CalendarFacade) handles suppression of already-materialized dates.
 	if totalSessions > 0 {
-		remaining := totalSessions - sessionsDone
-		if remaining < 0 {
-			remaining = 0
-		}
-		if len(allDates) > remaining {
-			allDates = allDates[:remaining]
+		if len(allDates) > totalSessions {
+			allDates = allDates[:totalSessions]
 		}
 	}
 
-	return allDates, nil
+	// Filter to only dates within the requested range using day-level boundaries
+	// so that time overrides don't get excluded by hour-level comparisons.
+	dayRangeStart := time.Date(rangeStart.Year(), rangeStart.Month(), rangeStart.Day(), 0, 0, 0, 0, rangeStart.Location())
+	dayFilterEnd := time.Date(rangeEnd.Year(), rangeEnd.Month(), rangeEnd.Day(), 23, 59, 59, 0, rangeEnd.Location())
+	var result []time.Time
+	for _, d := range allDates {
+		if !d.Before(dayRangeStart) && !d.After(dayFilterEnd) {
+			result = append(result, d)
+		}
+	}
+
+	return result, nil
 }
 
 // extractBYDAY extracts the BYDAY value from an RRULE string.

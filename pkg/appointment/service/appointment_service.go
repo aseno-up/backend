@@ -86,13 +86,13 @@ type SessionPlanCompletionHandler interface {
 
 // appointmentService implements AppointmentService
 type appointmentService struct {
-	repo            repository.AppointmentRepository
-	profRepo        ProfessionalInfoProvider
-	waitlistService WaitlistService
-	riskCalculator      PatientRiskCalculator
+	repo                 repository.AppointmentRepository
+	profRepo             ProfessionalInfoProvider
+	waitlistService      WaitlistService
+	riskCalculator       PatientRiskCalculator
 	commissionCalculator CommissionCalculator
-	calendarService     calendar_service.CalendarService
-	sessionPlanHandler  SessionPlanCompletionHandler
+	calendarService      calendar_service.CalendarService
+	sessionPlanHandler   SessionPlanCompletionHandler
 }
 
 // NewAppointmentService creates a new appointment service

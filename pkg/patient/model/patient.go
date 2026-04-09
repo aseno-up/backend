@@ -52,7 +52,7 @@ type Patient struct {
 	IsActive  bool          `json:"is_active" gorm:"default:true"`
 	Source    PatientSource `json:"source" gorm:"type:varchar(20);not null;default:'INTERNAL'"`
 	// Merge tracking
-	MergedIntoPatientID  *uuid.UUID `json:"merged_into_patient_id,omitempty" gorm:"type:uuid;index"`
+	MergedIntoPatientID *uuid.UUID `json:"merged_into_patient_id,omitempty" gorm:"type:uuid;index"`
 	// Risk assessment fields
 	NoShowRisk        NoShowRisk `json:"no_show_risk" gorm:"default:'unknown'"`
 	TotalAppointments int        `json:"total_appointments" gorm:"default:0"`
@@ -213,12 +213,12 @@ type UnlinkedPatientResponse struct {
 
 // PatientSearchResult represents a search result for merge target selection
 type PatientSearchResult struct {
-	ID       uuid.UUID     `json:"id"`
-	Name     string        `json:"name"`
-	CPF      string        `json:"cpf"`
-	Email    string        `json:"email"`
-	Phone    string        `json:"phone"`
-	Source   PatientSource `json:"source"`
+	ID     uuid.UUID     `json:"id"`
+	Name   string        `json:"name"`
+	CPF    string        `json:"cpf"`
+	Email  string        `json:"email"`
+	Phone  string        `json:"phone"`
+	Source PatientSource `json:"source"`
 }
 
 // PatientAppointmentStats holds appointment statistics for risk calculation

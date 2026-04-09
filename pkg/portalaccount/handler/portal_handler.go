@@ -13,7 +13,7 @@ import (
 )
 
 type PortalHandler struct {
-	service        service.PortalService
+	service          service.PortalService
 	portalMiddleware middleware.PortalMiddleware
 }
 

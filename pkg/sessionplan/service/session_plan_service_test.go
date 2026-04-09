@@ -52,7 +52,7 @@ func (m *mockPlanRepo) IncrementSessionsDone(_ context.Context, _, _ uuid.UUID) 
 func (m *mockPlanRepo) UpdateLastGenerated(_ context.Context, _, _ uuid.UUID, _ time.Time) error {
 	return nil
 }
-func (m *mockPlanRepo) Delete(_ context.Context, _, _ uuid.UUID) error { return nil }
+func (m *mockPlanRepo) Delete(_ context.Context, _, _ uuid.UUID) error                 { return nil }
 func (m *mockPlanRepo) BulkCancel(_ context.Context, _ uuid.UUID, _ []uuid.UUID) error { return nil }
 
 type mockAptRepo struct{}
@@ -115,21 +115,21 @@ func (m *mockAptRepo) UpdatePaymentStatus(_ context.Context, _ uuid.UUID, _ appo
 func basePlan() *model.SessionPlan {
 	profID := uuid.New()
 	return &model.SessionPlan{
-		ID:            uuid.New(),
-		ClinicID:      uuid.New(),
-		PatientID:     uuid.New(),
+		ID:             uuid.New(),
+		ClinicID:       uuid.New(),
+		PatientID:      uuid.New(),
 		ProfessionalID: &profID,
-		Title:         "Fisioterapia",
-		Status:        model.PlanStatusActive,
-		Type:          model.PlanTypeIndividual,
-		Frequency:     model.FrequencyWeekly,
-		WeekDays:      pq.Int64Array{1, 3}, // Mon, Wed
-		RRule:         "FREQ=WEEKLY;BYDAY=MO,WE",
-		PreferredTime: "09:00",
-		DurationMins:  50,
-		TotalSessions: 10,
-		SessionsDone:  0,
-		SessionPrice:  150.0,
+		Title:          "Fisioterapia",
+		Status:         model.PlanStatusActive,
+		Type:           model.PlanTypeIndividual,
+		Frequency:      model.FrequencyWeekly,
+		WeekDays:       pq.Int64Array{1, 3}, // Mon, Wed
+		RRule:          "FREQ=WEEKLY;BYDAY=MO,WE",
+		PreferredTime:  "09:00",
+		DurationMins:   50,
+		TotalSessions:  10,
+		SessionsDone:   0,
+		SessionPrice:   150.0,
 	}
 }
 

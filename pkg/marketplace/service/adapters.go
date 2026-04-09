@@ -34,9 +34,11 @@ type clinicInfoImpl struct {
 	clinic *clinic_model.Clinic
 }
 
-func (c *clinicInfoImpl) GetID() uuid.UUID                    { return c.clinic.ID }
-func (c *clinicInfoImpl) GetAccountID() uuid.UUID              { return c.clinic.AccountID }
-func (c *clinicInfoImpl) GetRequirePaymentBeforeBooking() bool { return c.clinic.Settings.RequirePaymentBeforeBooking }
+func (c *clinicInfoImpl) GetID() uuid.UUID        { return c.clinic.ID }
+func (c *clinicInfoImpl) GetAccountID() uuid.UUID { return c.clinic.AccountID }
+func (c *clinicInfoImpl) GetRequirePaymentBeforeBooking() bool {
+	return c.clinic.Settings.RequirePaymentBeforeBooking
+}
 func (c *clinicInfoImpl) GetPlanSlug() string {
 	if c.clinic.Account != nil && c.clinic.Account.Plan != nil {
 		return c.clinic.Account.Plan.Slug
@@ -91,12 +93,12 @@ type appointmentInfoImpl struct {
 	apt *appointment_model.Appointment
 }
 
-func (a *appointmentInfoImpl) GetID() uuid.UUID              { return a.apt.ID }
-func (a *appointmentInfoImpl) GetClinicID() uuid.UUID        { return a.apt.ClinicID }
-func (a *appointmentInfoImpl) GetPatientID() uuid.UUID { return a.apt.PatientID }
-func (a *appointmentInfoImpl) GetPrice() float64              { return a.apt.Price }
-func (a *appointmentInfoImpl) GetStatus() string              { return string(a.apt.Status) }
-func (a *appointmentInfoImpl) GetPaymentToken() string        { return a.apt.PaymentToken }
+func (a *appointmentInfoImpl) GetID() uuid.UUID                { return a.apt.ID }
+func (a *appointmentInfoImpl) GetClinicID() uuid.UUID          { return a.apt.ClinicID }
+func (a *appointmentInfoImpl) GetPatientID() uuid.UUID         { return a.apt.PatientID }
+func (a *appointmentInfoImpl) GetPrice() float64               { return a.apt.Price }
+func (a *appointmentInfoImpl) GetStatus() string               { return string(a.apt.Status) }
+func (a *appointmentInfoImpl) GetPaymentToken() string         { return a.apt.PaymentToken }
 func (a *appointmentInfoImpl) GetPaymentExpiresAt() *time.Time { return a.apt.PaymentExpiresAt }
 
 // appointmentPaymentRepoAdapter adapts AppointmentPayment operations

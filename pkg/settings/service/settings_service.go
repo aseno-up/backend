@@ -238,4 +238,3 @@ func (s *settingsService) IsExcessBillingEnabled(ctx context.Context) bool {
 
 	return val == "true"
 }
-

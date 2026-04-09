@@ -38,16 +38,16 @@ const (
 type LeadStatus string
 
 const (
-	LeadStatusIdentificado  LeadStatus = "identificado"
-	LeadStatusContactado    LeadStatus = "contactado"
-	LeadStatusRespondeu     LeadStatus = "respondeu"
-	LeadStatusDemoAgendada  LeadStatus = "demo_agendada"
-	LeadStatusTrialAtivo    LeadStatus = "trial_ativo"
-	LeadStatusNegociando    LeadStatus = "negociando"
-	LeadStatusConvertido    LeadStatus = "convertido"
-	LeadStatusSemResposta   LeadStatus = "sem_resposta"
-	LeadStatusDescartado    LeadStatus = "descartado"
-	LeadStatusIsca          LeadStatus = "isca"
+	LeadStatusIdentificado LeadStatus = "identificado"
+	LeadStatusContactado   LeadStatus = "contactado"
+	LeadStatusRespondeu    LeadStatus = "respondeu"
+	LeadStatusDemoAgendada LeadStatus = "demo_agendada"
+	LeadStatusTrialAtivo   LeadStatus = "trial_ativo"
+	LeadStatusNegociando   LeadStatus = "negociando"
+	LeadStatusConvertido   LeadStatus = "convertido"
+	LeadStatusSemResposta  LeadStatus = "sem_resposta"
+	LeadStatusDescartado   LeadStatus = "descartado"
+	LeadStatusIsca         LeadStatus = "isca"
 )
 
 // PainScore represents the pain level of the lead
@@ -229,16 +229,16 @@ type UpdateLeadRequest struct {
 
 // LeadFilter represents filter parameters for listing leads
 type LeadFilter struct {
-	Page     int        `form:"page"`
-	Limit    int        `form:"limit"`
-	Search   string     `form:"search"`
-	Status   LeadStatus `form:"status"`
-	Channel  LeadChannel `form:"channel"`
-	Source   LeadSource  `form:"source"`
-	PainScore PainScore  `form:"pain_score"`
-	DateFrom string     `form:"date_from"`
-	DateTo   string     `form:"date_to"`
-	SortBy   string     `form:"sort_by"`
+	Page      int         `form:"page"`
+	Limit     int         `form:"limit"`
+	Search    string      `form:"search"`
+	Status    LeadStatus  `form:"status"`
+	Channel   LeadChannel `form:"channel"`
+	Source    LeadSource  `form:"source"`
+	PainScore PainScore   `form:"pain_score"`
+	DateFrom  string      `form:"date_from"`
+	DateTo    string      `form:"date_to"`
+	SortBy    string      `form:"sort_by"`
 }
 
 func (f *LeadFilter) GetLimit() int {

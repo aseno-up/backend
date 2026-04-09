@@ -294,9 +294,9 @@ func TestPatientRecordService_GetFullRecord_NotFound_ResolvesTemplate(t *testing
 	patientID := uuid.New()
 
 	template := &model.AnamneseTemplate{
-		ID:       uuid.New(),
-		ClinicID: clinicID,
-		Name:     "Global Default",
+		ID:        uuid.New(),
+		ClinicID:  clinicID,
+		Name:      "Global Default",
 		IsDefault: true,
 	}
 

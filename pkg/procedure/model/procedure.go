@@ -13,7 +13,7 @@ type Procedure struct {
 	Name            string     `json:"name" gorm:"not null"`
 	SpecialtyID     *uuid.UUID `json:"specialty_id,omitempty" gorm:"type:uuid;index"` // FK to specialties table
 	Price           float64    `json:"price" gorm:"type:decimal(10,2)"`               // Default price
-	DurationMinutes int        `json:"duration_minutes"`                               // Optional estimated duration
+	DurationMinutes int        `json:"duration_minutes"`                              // Optional estimated duration
 	CreatedAt       time.Time  `json:"created_at"`
 	UpdatedAt       time.Time  `json:"updated_at"`
 	DeletedAt       *time.Time `json:"deleted_at,omitempty" gorm:"index"`

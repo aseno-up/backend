@@ -50,17 +50,17 @@ type CreatePlanPaymentRequest struct {
 
 // PlanPaymentResponse represents the API response
 type PlanPaymentResponse struct {
-	ID              uuid.UUID  `json:"id"`
-	SessionPlanID   uuid.UUID  `json:"session_plan_id"`
-	EnrollmentID    *uuid.UUID `json:"enrollment_id,omitempty"`
-	PaymentMethodID uuid.UUID  `json:"payment_method_id"`
-	Amount          float64    `json:"amount"`
-	Discount        float64    `json:"discount"`
-	Installments    int        `json:"installments"`
-	ReferenceMonth  string     `json:"reference_month,omitempty"`
-	Notes           string     `json:"notes,omitempty"`
-	PaidAt          time.Time  `json:"paid_at"`
-	PaymentMethodName string   `json:"payment_method_name,omitempty"`
+	ID                uuid.UUID  `json:"id"`
+	SessionPlanID     uuid.UUID  `json:"session_plan_id"`
+	EnrollmentID      *uuid.UUID `json:"enrollment_id,omitempty"`
+	PaymentMethodID   uuid.UUID  `json:"payment_method_id"`
+	Amount            float64    `json:"amount"`
+	Discount          float64    `json:"discount"`
+	Installments      int        `json:"installments"`
+	ReferenceMonth    string     `json:"reference_month,omitempty"`
+	Notes             string     `json:"notes,omitempty"`
+	PaidAt            time.Time  `json:"paid_at"`
+	PaymentMethodName string     `json:"payment_method_name,omitempty"`
 
 	// Per-session fields (populated from appointment data)
 	AppointmentID        *uuid.UUID `json:"appointment_id,omitempty"`

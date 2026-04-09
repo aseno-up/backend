@@ -168,8 +168,8 @@ var (
 	ErrSessionNoteNotFoundInstance   = NewError(ErrSessionNoteNotFound, "Session note not found", http.StatusNotFound)
 	ErrUpgradeRequiredInstance       = NewError(ErrUpgradeRequired, "Upgrade required to access this feature", http.StatusForbidden)
 	ErrSubscriptionExpiredInstance   = NewError(ErrSubscriptionExpired, "Subscription has expired. Please renew to continue.", http.StatusPaymentRequired)
-	ErrLeadNotFoundInstance         = NewError(ErrLeadNotFound, "Lead not found", http.StatusNotFound)
-	ErrLeadAlreadyConvertedInstance = NewError(ErrLeadAlreadyConverted, "Lead has already been converted", http.StatusConflict)
+	ErrLeadNotFoundInstance          = NewError(ErrLeadNotFound, "Lead not found", http.StatusNotFound)
+	ErrLeadAlreadyConvertedInstance  = NewError(ErrLeadAlreadyConverted, "Lead has already been converted", http.StatusConflict)
 )
 
 // IsNotFound checks if error is a not found error

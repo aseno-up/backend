@@ -4,10 +4,10 @@ import (
 	"errors"
 	"net/http"
 
-	audit_model "github.com/aseno/backend/pkg/audit/model"
-	audit_service "github.com/aseno/backend/pkg/audit/service"
 	"github.com/aseno/backend/pkg/appointment/model"
 	"github.com/aseno/backend/pkg/appointment/service"
+	audit_model "github.com/aseno/backend/pkg/audit/model"
+	audit_service "github.com/aseno/backend/pkg/audit/service"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 )

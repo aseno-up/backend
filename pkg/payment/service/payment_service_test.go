@@ -1085,9 +1085,9 @@ func TestSwitchPlan_AccountUpdate_DoesNotSetPlanAssociation(t *testing.T) {
 	subscriptionRepo.On("GetByAccountID", ctx, accountID).Return(nil, assert.AnError)
 
 	plan := plan_model.Plan{
-		ID:   planID,
-		Slug: "professional",
-		Name: "Profissional",
+		ID:       planID,
+		Slug:     "professional",
+		Name:     "Profissional",
 		Features: plan_model.StringArray{"feature1", "feature2"},
 	}
 	planServiceMock.On("ListPlans", ctx).Return([]plan_model.Plan{plan}, nil)

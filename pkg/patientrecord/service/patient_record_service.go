@@ -8,9 +8,9 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/aseno/backend/internal/errors"
+	appointment_model "github.com/aseno/backend/pkg/appointment/model"
 	"github.com/aseno/backend/pkg/patientrecord/model"
 	"github.com/aseno/backend/pkg/patientrecord/repository"
-	appointment_model "github.com/aseno/backend/pkg/appointment/model"
 )
 
 // PatientRecordService defines the interface for patient record business logic
@@ -110,7 +110,7 @@ func (s *patientRecordService) GetRecordByPatientID(ctx context.Context, patient
 
 	// Load template if exists
 	if record.TemplateID != nil {
-		template, err := s.repo.GetTemplateByID(ctx,*record.TemplateID, clinicID)
+		template, err := s.repo.GetTemplateByID(ctx, *record.TemplateID, clinicID)
 		if err == nil {
 			resp.Template = template
 		}
@@ -149,7 +149,7 @@ func (s *patientRecordService) CreateTemplate(ctx context.Context, clinicID uuid
 
 // GetTemplate retrieves a template by ID
 func (s *patientRecordService) GetTemplate(ctx context.Context, id, clinicID uuid.UUID) (*model.AnamneseTemplate, error) {
-	return s.repo.GetTemplateByID(ctx,id, clinicID)
+	return s.repo.GetTemplateByID(ctx, id, clinicID)
 }
 
 // ListTemplates lists templates for a clinic
@@ -199,7 +199,7 @@ func (s *patientRecordService) ResolveTemplate(ctx context.Context, clinicID uui
 // CreateField adds a field to a template
 func (s *patientRecordService) CreateField(ctx context.Context, templateID, clinicID uuid.UUID, field *model.AnamneseTemplateField) (*model.AnamneseTemplateField, error) {
 	// Verify template belongs to clinic
-	_, err := s.repo.GetTemplateByID(ctx,templateID, clinicID)
+	_, err := s.repo.GetTemplateByID(ctx, templateID, clinicID)
 	if err != nil {
 		return nil, err
 	}
@@ -213,7 +213,7 @@ func (s *patientRecordService) CreateField(ctx context.Context, templateID, clin
 
 // UpdateField updates a template field
 func (s *patientRecordService) UpdateField(ctx context.Context, id, templateID, clinicID uuid.UUID, field *model.AnamneseTemplateField) (*model.AnamneseTemplateField, error) {
-	_, err := s.repo.GetTemplateByID(ctx,templateID, clinicID)
+	_, err := s.repo.GetTemplateByID(ctx, templateID, clinicID)
 	if err != nil {
 		return nil, err
 	}
@@ -228,7 +228,7 @@ func (s *patientRecordService) UpdateField(ctx context.Context, id, templateID, 
 
 // DeleteField deletes a template field
 func (s *patientRecordService) DeleteField(ctx context.Context, id, templateID, clinicID uuid.UUID) error {
-	_, err := s.repo.GetTemplateByID(ctx,templateID, clinicID)
+	_, err := s.repo.GetTemplateByID(ctx, templateID, clinicID)
 	if err != nil {
 		return err
 	}
@@ -237,7 +237,7 @@ func (s *patientRecordService) DeleteField(ctx context.Context, id, templateID, 
 
 // ReorderFields updates display order
 func (s *patientRecordService) ReorderFields(ctx context.Context, templateID, clinicID uuid.UUID, fieldIDs []uuid.UUID) error {
-	_, err := s.repo.GetTemplateByID(ctx,templateID, clinicID)
+	_, err := s.repo.GetTemplateByID(ctx, templateID, clinicID)
 	if err != nil {
 		return err
 	}
@@ -246,7 +246,7 @@ func (s *patientRecordService) ReorderFields(ctx context.Context, templateID, cl
 
 // SetTemplateSpecialties manages specialty mapping
 func (s *patientRecordService) SetTemplateSpecialties(ctx context.Context, templateID, clinicID uuid.UUID, specialtyIDs []uuid.UUID) error {
-	_, err := s.repo.GetTemplateByID(ctx,templateID, clinicID)
+	_, err := s.repo.GetTemplateByID(ctx, templateID, clinicID)
 	if err != nil {
 		return err
 	}
@@ -436,7 +436,7 @@ func (s *patientRecordService) GetFullRecord(ctx context.Context, patientID, cli
 		recordResp = record.ToResponse()
 		// Load template if exists
 		if record.TemplateID != nil {
-			template, err := s.repo.GetTemplateByID(ctx,*record.TemplateID, clinicID)
+			template, err := s.repo.GetTemplateByID(ctx, *record.TemplateID, clinicID)
 			if err == nil {
 				recordResp.Template = template
 			}

@@ -163,13 +163,13 @@ type CreateChargeInput struct {
 // Implementation
 
 type marketplaceService struct {
-	asaasClient        AsaasClient
-	subaccountRepo     SubaccountRepository
-	splitConfigRepo    SplitConfigRepository
-	clinicPaymentRepo  ClinicPaymentRepository
-	clinicRepo         ClinicRepository
-	appointmentRepo    AppointmentRepository
-	aptPaymentRepo     AppointmentPaymentRepository
+	asaasClient           AsaasClient
+	subaccountRepo        SubaccountRepository
+	splitConfigRepo       SplitConfigRepository
+	clinicPaymentRepo     ClinicPaymentRepository
+	clinicRepo            ClinicRepository
+	appointmentRepo       AppointmentRepository
+	aptPaymentRepo        AppointmentPaymentRepository
 	encryptionKey         string
 	asenoWalletID         string
 	defaultFeePercent     float64
@@ -178,11 +178,11 @@ type marketplaceService struct {
 }
 
 type MarketplaceServiceConfig struct {
-	EncryptionKey          string
-	AsenoWalletID          string
-	DefaultFeePercent      float64
-	WebhookBaseURL         string
-	PaymentTimeoutMinutes  int
+	EncryptionKey         string
+	AsenoWalletID         string
+	DefaultFeePercent     float64
+	WebhookBaseURL        string
+	PaymentTimeoutMinutes int
 }
 
 func NewMarketplaceService(
@@ -196,18 +196,18 @@ func NewMarketplaceService(
 	cfg MarketplaceServiceConfig,
 ) MarketplaceService {
 	return &marketplaceService{
-		asaasClient:       asaasClient,
-		subaccountRepo:    subaccountRepo,
-		splitConfigRepo:   splitConfigRepo,
-		clinicPaymentRepo: clinicPaymentRepo,
-		clinicRepo:        clinicRepo,
-		appointmentRepo:   appointmentRepo,
-		aptPaymentRepo:    aptPaymentRepo,
+		asaasClient:           asaasClient,
+		subaccountRepo:        subaccountRepo,
+		splitConfigRepo:       splitConfigRepo,
+		clinicPaymentRepo:     clinicPaymentRepo,
+		clinicRepo:            clinicRepo,
+		appointmentRepo:       appointmentRepo,
+		aptPaymentRepo:        aptPaymentRepo,
 		encryptionKey:         cfg.EncryptionKey,
 		asenoWalletID:         cfg.AsenoWalletID,
 		defaultFeePercent:     cfg.DefaultFeePercent,
 		paymentTimeoutMinutes: cfg.PaymentTimeoutMinutes,
-		webhookBaseURL:    cfg.WebhookBaseURL,
+		webhookBaseURL:        cfg.WebhookBaseURL,
 	}
 }
 

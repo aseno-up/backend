@@ -132,11 +132,11 @@ func (r *sessionPlanRepository) GetByPatient(ctx context.Context, clinicID, pati
 	return plans, nil
 }
 
-// GetByProfessional retrieves all session plans for a professional
+// GetByProfessional retrieves active session plans for a professional
 func (r *sessionPlanRepository) GetByProfessional(ctx context.Context, clinicID, professionalID uuid.UUID) ([]*model.SessionPlan, error) {
 	var plans []*model.SessionPlan
 	err := r.db.WithContext(ctx).
-		Where("clinic_id = ? AND professional_id = ?", clinicID, professionalID).
+		Where("clinic_id = ? AND professional_id = ? AND status = ?", clinicID, professionalID, model.PlanStatusActive).
 		Order("created_at DESC").
 		Find(&plans).Error
 

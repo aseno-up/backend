@@ -36,19 +36,19 @@ type Appointment struct {
 	PatientID      uuid.UUID              `json:"patient_id" gorm:"type:uuid;not null;index"`
 	ProfessionalID uuid.UUID              `json:"professional_id" gorm:"type:uuid;not null;index"`
 	SessionPlanID  *uuid.UUID             `json:"session_plan_id,omitempty" gorm:"type:uuid;index"` // If part of a session plan
-	IsException    bool                   `json:"is_exception" gorm:"not null;default:false"`      // True if rescheduled/edited individually from recurrence
-	OriginalDate   *time.Time             `json:"original_date,omitempty"`                         // Original scheduled date before rescheduling
+	IsException    bool                   `json:"is_exception" gorm:"not null;default:false"`       // True if rescheduled/edited individually from recurrence
+	OriginalDate   *time.Time             `json:"original_date,omitempty"`                          // Original scheduled date before rescheduling
 	StartTime      time.Time              `json:"start_time" gorm:"not null;index"`
 	EndTime        time.Time              `json:"end_time" gorm:"not null"`
 	Status         AppointmentStatus      `json:"status" gorm:"not null;default:'pending';index"`
 	Type           AppointmentType        `json:"type" gorm:"not null;default:'regular'"`
-	Title          string                 `json:"title"`                                                              // Optional custom title
-	Notes          string                 `json:"notes"`                                                              // Internal notes
-	PatientNotes   string                 `json:"patient_notes"`                                                      // Notes from patient
-	Procedures     []AppointmentProcedure `json:"procedures,omitempty" gorm:"foreignKey:AppointmentID;references:ID"` // N:N relationship with procedures
+	Title          string                 `json:"title"`                                                               // Optional custom title
+	Notes          string                 `json:"notes"`                                                               // Internal notes
+	PatientNotes   string                 `json:"patient_notes"`                                                       // Notes from patient
+	Procedures     []AppointmentProcedure `json:"procedures,omitempty" gorm:"foreignKey:AppointmentID;references:ID"`  // N:N relationship with procedures
 	Specialties    []AppointmentSpecialty `json:"specialties,omitempty" gorm:"foreignKey:AppointmentID;references:ID"` // N:N relationship with specialties
-	Price          float64                `json:"price" gorm:"type:decimal(10,2)"`                                    // Total price for this appointment
-	PaymentStatus  PaymentStatus          `json:"payment_status" gorm:"not null;default:'pending';index"`             // Denormalized: pending, partial, paid
+	Price          float64                `json:"price" gorm:"type:decimal(10,2)"`                                     // Total price for this appointment
+	PaymentStatus  PaymentStatus          `json:"payment_status" gorm:"not null;default:'pending';index"`              // Denormalized: pending, partial, paid
 	ConfirmedAt    *time.Time             `json:"confirmed_at,omitempty"`
 	CanceledAt     *time.Time             `json:"canceled_at,omitempty"`
 	CancelReason   string                 `json:"cancel_reason"`

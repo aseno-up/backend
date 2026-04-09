@@ -86,7 +86,7 @@ func (h *PlanHandler) ValidateOffer(c *gin.Context) {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to list plans"})
 			return
 		}
-		
+
 		for _, p := range plans {
 			if p.Slug == req.PlanID {
 				plan = &p

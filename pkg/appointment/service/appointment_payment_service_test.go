@@ -152,15 +152,15 @@ type mockPaymentMethodRepo struct {
 	method *pm_model.PaymentMethod
 }
 
-func (m *mockPaymentMethodRepo) Create(_ *pm_model.PaymentMethod) error          { return nil }
+func (m *mockPaymentMethodRepo) Create(_ *pm_model.PaymentMethod) error { return nil }
 func (m *mockPaymentMethodRepo) GetByID(_, _ uuid.UUID) (*pm_model.PaymentMethod, error) {
 	if m.method != nil {
 		return m.method, nil
 	}
 	return nil, assert.AnError
 }
-func (m *mockPaymentMethodRepo) Update(_ *pm_model.PaymentMethod) error          { return nil }
-func (m *mockPaymentMethodRepo) Delete(_, _ uuid.UUID) error                     { return nil }
+func (m *mockPaymentMethodRepo) Update(_ *pm_model.PaymentMethod) error { return nil }
+func (m *mockPaymentMethodRepo) Delete(_, _ uuid.UUID) error            { return nil }
 func (m *mockPaymentMethodRepo) ListByClinic(_ uuid.UUID) ([]*pm_model.PaymentMethod, error) {
 	return nil, nil
 }

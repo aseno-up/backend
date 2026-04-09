@@ -3,10 +3,10 @@ package model
 import (
 	"time"
 
-	"github.com/google/uuid"
 	"database/sql/driver"
 	"encoding/json"
 	"errors"
+	"github.com/google/uuid"
 )
 
 // JSON is a custom type for JSONB columns (objects only)
@@ -104,14 +104,14 @@ type PatientRecord struct {
 
 // AnamneseTemplate represents a template for clinical records
 type AnamneseTemplate struct {
-	ID        uuid.UUID                `json:"id" gorm:"type:uuid;primary_key;default:gen_random_uuid()"`
-	ClinicID  uuid.UUID                `json:"clinic_id" gorm:"type:uuid;not null;index"`
-	Name      string                   `json:"name" gorm:"not null"`
-	IsDefault bool                     `json:"is_default" gorm:"not null;default:false"`
-	Fields    []AnamneseTemplateField  `json:"fields,omitempty" gorm:"foreignKey:TemplateID"`
-	CreatedAt time.Time                `json:"created_at"`
-	UpdatedAt time.Time                `json:"updated_at"`
-	DeletedAt *time.Time               `json:"deleted_at,omitempty" gorm:"index"`
+	ID        uuid.UUID               `json:"id" gorm:"type:uuid;primary_key;default:gen_random_uuid()"`
+	ClinicID  uuid.UUID               `json:"clinic_id" gorm:"type:uuid;not null;index"`
+	Name      string                  `json:"name" gorm:"not null"`
+	IsDefault bool                    `json:"is_default" gorm:"not null;default:false"`
+	Fields    []AnamneseTemplateField `json:"fields,omitempty" gorm:"foreignKey:TemplateID"`
+	CreatedAt time.Time               `json:"created_at"`
+	UpdatedAt time.Time               `json:"updated_at"`
+	DeletedAt *time.Time              `json:"deleted_at,omitempty" gorm:"index"`
 }
 
 // AnamneseTemplateField represents a single field in a template
@@ -142,17 +142,17 @@ func (AnamneseTemplateSpecialty) TableName() string { return "anamnese_template_
 
 // PatientRecordResponse represents the API response for a patient record
 type PatientRecordResponse struct {
-	ID           uuid.UUID             `json:"id"`
-	ClinicID     uuid.UUID             `json:"clinic_id"`
-	PatientID    uuid.UUID             `json:"patient_id"`
-	TemplateID   *uuid.UUID            `json:"template_id,omitempty"`
-	Template     *AnamneseTemplate     `json:"template,omitempty"`
-	CustomFields JSON                  `json:"custom_fields,omitempty"`
-	RecordedAt   time.Time             `json:"recorded_at"`
-	RecordedBy   uuid.UUID             `json:"recorded_by"`
-	Professional *PatientBasicInfo     `json:"professional,omitempty"` // Basic info of the person who recorded it
-	CreatedAt    time.Time             `json:"created_at"`
-	UpdatedAt    time.Time             `json:"updated_at"`
+	ID           uuid.UUID         `json:"id"`
+	ClinicID     uuid.UUID         `json:"clinic_id"`
+	PatientID    uuid.UUID         `json:"patient_id"`
+	TemplateID   *uuid.UUID        `json:"template_id,omitempty"`
+	Template     *AnamneseTemplate `json:"template,omitempty"`
+	CustomFields JSON              `json:"custom_fields,omitempty"`
+	RecordedAt   time.Time         `json:"recorded_at"`
+	RecordedBy   uuid.UUID         `json:"recorded_by"`
+	Professional *PatientBasicInfo `json:"professional,omitempty"` // Basic info of the person who recorded it
+	CreatedAt    time.Time         `json:"created_at"`
+	UpdatedAt    time.Time         `json:"updated_at"`
 }
 
 // ToResponse converts PatientRecord to PatientRecordResponse

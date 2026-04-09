@@ -137,15 +137,15 @@ func TestMaterialize_RejectsWhenSessionLimitReached(t *testing.T) {
 	now := time.Now()
 
 	plan := &model.SessionPlan{
-		ID:            uuid.New(),
-		ClinicID:      clinicID,
-		Status:        model.PlanStatusActive,
-		TotalSessions: 10,
-		SessionsDone:  10, // Already at limit
+		ID:             uuid.New(),
+		ClinicID:       clinicID,
+		Status:         model.PlanStatusActive,
+		TotalSessions:  10,
+		SessionsDone:   10, // Already at limit
 		ProfessionalID: &profID,
-		RRule:         "FREQ=WEEKLY;BYDAY=MO",
-		DtStart:       &now,
-		DurationMins:  50,
+		RRule:          "FREQ=WEEKLY;BYDAY=MO",
+		DtStart:        &now,
+		DurationMins:   50,
 	}
 
 	planRepo := &mockMaterializePlanRepo{plan: plan}
@@ -164,15 +164,15 @@ func TestMaterialize_RejectsWhenPlanCancelled(t *testing.T) {
 	now := time.Now()
 
 	plan := &model.SessionPlan{
-		ID:            uuid.New(),
-		ClinicID:      clinicID,
-		Status:        model.PlanStatusCancelled,
-		TotalSessions: 10,
-		SessionsDone:  3,
+		ID:             uuid.New(),
+		ClinicID:       clinicID,
+		Status:         model.PlanStatusCancelled,
+		TotalSessions:  10,
+		SessionsDone:   3,
 		ProfessionalID: &profID,
-		RRule:         "FREQ=WEEKLY;BYDAY=MO",
-		DtStart:       &now,
-		DurationMins:  50,
+		RRule:          "FREQ=WEEKLY;BYDAY=MO",
+		DtStart:        &now,
+		DurationMins:   50,
 	}
 
 	planRepo := &mockMaterializePlanRepo{plan: plan}
@@ -194,15 +194,15 @@ func TestMaterialize_AllowsWhenUnderLimit(t *testing.T) {
 	dtstart := monday
 
 	plan := &model.SessionPlan{
-		ID:            uuid.New(),
-		ClinicID:      clinicID,
-		Status:        model.PlanStatusActive,
-		TotalSessions: 10,
-		SessionsDone:  3,
+		ID:             uuid.New(),
+		ClinicID:       clinicID,
+		Status:         model.PlanStatusActive,
+		TotalSessions:  10,
+		SessionsDone:   3,
 		ProfessionalID: &profID,
-		RRule:         "FREQ=WEEKLY;BYDAY=MO",
-		DtStart:       &dtstart,
-		DurationMins:  50,
+		RRule:          "FREQ=WEEKLY;BYDAY=MO",
+		DtStart:        &dtstart,
+		DurationMins:   50,
 	}
 
 	planRepo := &mockMaterializePlanRepo{plan: plan}
@@ -223,15 +223,15 @@ func TestMaterialize_AllowsIndeterminatePlan(t *testing.T) {
 	dtstart := monday
 
 	plan := &model.SessionPlan{
-		ID:            uuid.New(),
-		ClinicID:      clinicID,
-		Status:        model.PlanStatusActive,
-		TotalSessions: -1, // Indeterminate
-		SessionsDone:  100,
+		ID:             uuid.New(),
+		ClinicID:       clinicID,
+		Status:         model.PlanStatusActive,
+		TotalSessions:  -1, // Indeterminate
+		SessionsDone:   100,
 		ProfessionalID: &profID,
-		RRule:         "FREQ=WEEKLY;BYDAY=MO",
-		DtStart:       &dtstart,
-		DurationMins:  50,
+		RRule:          "FREQ=WEEKLY;BYDAY=MO",
+		DtStart:        &dtstart,
+		DurationMins:   50,
 	}
 
 	planRepo := &mockMaterializePlanRepo{plan: plan}

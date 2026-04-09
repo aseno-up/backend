@@ -72,9 +72,9 @@ func (f *UsageMetricFilter) GetOffset() int {
 
 // UsageMetricSummary represents aggregated metrics for a clinic
 type UsageMetricSummary struct {
-	ClinicID uuid.UUID              `json:"clinic_id"`
-	Period   string                 `json:"period"`
-	Metrics  map[string]float64     `json:"metrics"`
+	ClinicID uuid.UUID          `json:"clinic_id"`
+	Period   string             `json:"period"`
+	Metrics  map[string]float64 `json:"metrics"`
 }
 
 // UsageMetricResponse represents the response

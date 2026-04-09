@@ -34,9 +34,9 @@ type SessionPlanHandler interface {
 
 // sessionPlanHandler implements SessionPlanHandler
 type sessionPlanHandler struct {
-	service         service.SessionPlanService
-	calendarFacade  service.CalendarFacade
-	materializeSvc  service.MaterializeService
+	service        service.SessionPlanService
+	calendarFacade service.CalendarFacade
+	materializeSvc service.MaterializeService
 }
 
 // NewSessionPlanHandler creates a new session plan handler
@@ -46,9 +46,9 @@ func NewSessionPlanHandler(
 	materializeSvc service.MaterializeService,
 ) SessionPlanHandler {
 	return &sessionPlanHandler{
-		service:         svc,
-		calendarFacade:  calendarFacade,
-		materializeSvc:  materializeSvc,
+		service:        svc,
+		calendarFacade: calendarFacade,
+		materializeSvc: materializeSvc,
 	}
 }
 

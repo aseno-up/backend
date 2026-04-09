@@ -182,15 +182,15 @@ func TestCalendarFacade_ExcludesVirtualForCancelledExceptionAppointment(t *testi
 
 	// A cancelled exception appointment exists for this Monday
 	cancelledApt := &appointment_model.Appointment{
-		ID:            uuid.New(),
-		ClinicID:      clinicID,
-		SessionPlanID: &planID,
+		ID:             uuid.New(),
+		ClinicID:       clinicID,
+		SessionPlanID:  &planID,
 		ProfessionalID: profID,
-		StartTime:     monday,
-		EndTime:       monday.Add(50 * time.Minute),
-		Status:        appointment_model.AppointmentStatusCanceled,
-		IsException:   true,
-		OriginalDate:  &monday,
+		StartTime:      monday,
+		EndTime:        monday.Add(50 * time.Minute),
+		Status:         appointment_model.AppointmentStatusCanceled,
+		IsException:    true,
+		OriginalDate:   &monday,
 	}
 
 	planRepo := &mockCalendarPlanRepo{plans: []*model.SessionPlan{plan}}

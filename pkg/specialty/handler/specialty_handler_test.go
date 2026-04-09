@@ -109,7 +109,7 @@ func TestListActive_ResponseFormat(t *testing.T) {
 	data, ok := response["data"].([]interface{})
 	assert.True(t, ok, "response['data'] should be an array")
 	assert.Len(t, data, 1)
-	
+
 	first := data[0].(map[string]interface{})
 	assert.Equal(t, "Cardiologia", first["name"])
 

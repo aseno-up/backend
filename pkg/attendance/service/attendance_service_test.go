@@ -111,9 +111,9 @@ func (m *mockAppointmentRepo) GetByDateRangeWithExceptions(_ context.Context, _ 
 }
 
 type mockPlanRepo struct {
-	plan              *sessionplan_model.SessionPlan
-	incrementCalled   bool
-	updateStatusArgs  *updateStatusCall
+	plan             *sessionplan_model.SessionPlan
+	incrementCalled  bool
+	updateStatusArgs *updateStatusCall
 }
 
 type updateStatusCall struct {

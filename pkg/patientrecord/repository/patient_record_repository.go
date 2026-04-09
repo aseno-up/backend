@@ -287,7 +287,6 @@ func (r *patientRecordRepository) GetDefaultTemplate(ctx context.Context, clinic
 	return &template, result.Error
 }
 
-
 // CreateNote creates a new session note
 func (r *patientRecordRepository) CreateNote(ctx context.Context, note *model.SessionNote) error {
 	result := r.db.WithContext(ctx).Create(note)

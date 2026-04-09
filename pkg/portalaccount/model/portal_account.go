@@ -10,17 +10,17 @@ import (
 
 // PortalAccount represents a patient's login credentials for the public portal
 type PortalAccount struct {
-	ID                        uuid.UUID  `json:"id" gorm:"type:uuid;primary_key;default:gen_random_uuid()"`
-	PatientID                 uuid.UUID  `json:"patient_id" gorm:"type:uuid;not null;index"`
-	ClinicID                  uuid.UUID  `json:"clinic_id" gorm:"type:uuid;not null;index"`
-	Email                     string     `json:"email" gorm:"type:varchar(255);not null;index"`
-	PasswordHash              *string    `json:"-" gorm:"type:text"`
-	EmailVerifiedAt           *time.Time `json:"email_verified_at"`
-	RegistrationToken         string     `json:"-" gorm:"type:varchar(128);uniqueIndex"`
+	ID                         uuid.UUID  `json:"id" gorm:"type:uuid;primary_key;default:gen_random_uuid()"`
+	PatientID                  uuid.UUID  `json:"patient_id" gorm:"type:uuid;not null;index"`
+	ClinicID                   uuid.UUID  `json:"clinic_id" gorm:"type:uuid;not null;index"`
+	Email                      string     `json:"email" gorm:"type:varchar(255);not null;index"`
+	PasswordHash               *string    `json:"-" gorm:"type:text"`
+	EmailVerifiedAt            *time.Time `json:"email_verified_at"`
+	RegistrationToken          string     `json:"-" gorm:"type:varchar(128);uniqueIndex"`
 	RegistrationTokenExpiresAt *time.Time `json:"-"`
-	EmailVerificationToken    *string    `json:"-" gorm:"type:varchar(128);index"`
-	CreatedAt                 time.Time  `json:"created_at"`
-	LastLoginAt               *time.Time `json:"last_login_at,omitempty"`
+	EmailVerificationToken     *string    `json:"-" gorm:"type:varchar(128);index"`
+	CreatedAt                  time.Time  `json:"created_at"`
+	LastLoginAt                *time.Time `json:"last_login_at,omitempty"`
 }
 
 func (PortalAccount) TableName() string {
@@ -90,11 +90,11 @@ type PortalMeResponse struct {
 
 // PortalStatsResponse contains appointment statistics for the patient
 type PortalStatsResponse struct {
-	TotalAppointments    int        `json:"total_appointments"`
-	NoShowCount          int        `json:"no_show_count"`
-	AppointmentsLastMonth int       `json:"appointments_last_month"`
-	NextAppointment      *time.Time `json:"next_appointment,omitempty"`
-	NextProfessionalName string     `json:"next_professional_name,omitempty"`
+	TotalAppointments     int        `json:"total_appointments"`
+	NoShowCount           int        `json:"no_show_count"`
+	AppointmentsLastMonth int        `json:"appointments_last_month"`
+	NextAppointment       *time.Time `json:"next_appointment,omitempty"`
+	NextProfessionalName  string     `json:"next_professional_name,omitempty"`
 }
 
 // PortalCreateAppointmentRequest is the request to create an appointment from the portal
@@ -116,7 +116,7 @@ type PortalAppointmentResponse struct {
 
 // ValidateTokenResponse is returned when validating a registration token
 type ValidateTokenResponse struct {
-	Email      string `json:"email"`
+	Email       string `json:"email"`
 	PatientName string `json:"patient_name"`
 	ClinicName  string `json:"clinic_name"`
 }

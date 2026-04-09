@@ -13,9 +13,9 @@ import (
 	clinicModel "github.com/aseno/backend/pkg/clinic/model"
 	emailService "github.com/aseno/backend/pkg/email/service"
 	notificationModel "github.com/aseno/backend/pkg/notification/model"
-	portalModel "github.com/aseno/backend/pkg/portalaccount/model"
 	"github.com/aseno/backend/pkg/pagination"
 	patientModel "github.com/aseno/backend/pkg/patient/model"
+	portalModel "github.com/aseno/backend/pkg/portalaccount/model"
 	procedureModel "github.com/aseno/backend/pkg/procedure/model"
 	professionalModel "github.com/aseno/backend/pkg/professional/model"
 	specialtyModel "github.com/aseno/backend/pkg/specialty/model"
@@ -170,16 +170,16 @@ func (s *bookingService) GetClinicInfo(ctx context.Context, slug string) (*model
 	specCount, _ := s.specialtyRepo.CountByClinic(clinic.ID)
 
 	return &model.ClinicBookingInfo{
-		Name:                      clinic.Name,
-		Slug:                      clinic.Slug,
-		LogoURL:                   clinic.LogoURL,
-		PrimaryColor:              clinic.PrimaryColor,
-		Phone:                     clinic.Phone,
-		Address:                   clinic.Address,
-		City:                      clinic.City,
-		State:                     clinic.State,
-		DefaultAppointmentMinutes: defaultMinutes,
-		AboutUs:                   clinic.Settings.AboutUs,
+		Name:                        clinic.Name,
+		Slug:                        clinic.Slug,
+		LogoURL:                     clinic.LogoURL,
+		PrimaryColor:                clinic.PrimaryColor,
+		Phone:                       clinic.Phone,
+		Address:                     clinic.Address,
+		City:                        clinic.City,
+		State:                       clinic.State,
+		DefaultAppointmentMinutes:   defaultMinutes,
+		AboutUs:                     clinic.Settings.AboutUs,
 		ProfessionalCount:           profCount,
 		SpecialtyCount:              int(specCount),
 		RequirePaymentBeforeBooking: clinic.Settings.RequirePaymentBeforeBooking,

@@ -16,10 +16,10 @@ import (
 	emailService "github.com/aseno/backend/pkg/email/service"
 	notificationModel "github.com/aseno/backend/pkg/notification/model"
 	patientModel "github.com/aseno/backend/pkg/patient/model"
-	procedureModel "github.com/aseno/backend/pkg/procedure/model"
-	professionalModel "github.com/aseno/backend/pkg/professional/model"
 	"github.com/aseno/backend/pkg/portalaccount/model"
 	"github.com/aseno/backend/pkg/portalaccount/repository"
+	procedureModel "github.com/aseno/backend/pkg/procedure/model"
+	professionalModel "github.com/aseno/backend/pkg/professional/model"
 )
 
 var (

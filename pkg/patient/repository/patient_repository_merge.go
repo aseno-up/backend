@@ -144,9 +144,9 @@ func (r *patientRepository) MergePatientsBulk(ctx context.Context, clinicID, tar
 
 		// 6. Audit log
 		newData, _ := json.Marshal(map[string]interface{}{
-			"provisional_ids":    provisionalIDs,
-			"target_patient_id":  targetID,
-			"rows_reassigned":    totalReassigned,
+			"provisional_ids":   provisionalIDs,
+			"target_patient_id": targetID,
+			"rows_reassigned":   totalReassigned,
 		})
 
 		if err := tx.Exec(

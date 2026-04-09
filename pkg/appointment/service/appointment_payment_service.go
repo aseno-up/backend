@@ -12,10 +12,10 @@ import (
 )
 
 var (
-	ErrPaymentNotFound      = errors.New("pagamento não encontrado")
-	ErrAppointmentNotFound  = errors.New("agendamento não encontrado")
-	ErrPaymentExceedsPrice  = errors.New("valor do pagamento excede o saldo restante da sessão")
-	ErrInvalidInstallments  = errors.New("parcelas só são permitidas para cartão de crédito")
+	ErrPaymentNotFound     = errors.New("pagamento não encontrado")
+	ErrAppointmentNotFound = errors.New("agendamento não encontrado")
+	ErrPaymentExceedsPrice = errors.New("valor do pagamento excede o saldo restante da sessão")
+	ErrInvalidInstallments = errors.New("parcelas só são permitidas para cartão de crédito")
 )
 
 type AppointmentPaymentService interface {

@@ -152,12 +152,12 @@ func TestGetPlanPayments_Upfront_ReturnsOnlyPlanPayments(t *testing.T) {
 	planRepo := &mockPlanRepo{plan: plan}
 
 	planPayment := &model.SessionPlanPayment{
-		ID:              uuid.New(),
-		ClinicID:        clinicID,
-		SessionPlanID:   planID,
-		PaymentMethodID: methodID,
-		Amount:          500.0,
-		PaidAt:          time.Now(),
+		ID:                uuid.New(),
+		ClinicID:          clinicID,
+		SessionPlanID:     planID,
+		PaymentMethodID:   methodID,
+		Amount:            500.0,
+		PaidAt:            time.Now(),
 		PaymentMethodName: "Pix",
 	}
 	planPaymentRepo := &mockPlanPaymentRepo{payments: []*model.SessionPlanPayment{planPayment}}

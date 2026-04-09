@@ -84,9 +84,11 @@ func (m *mockClinicRepo) Delete(_ context.Context, _ uuid.UUID) error           
 func (m *mockClinicRepo) List(_ context.Context, _, _ int) ([]*clinic_model.Clinic, int64, error) {
 	return nil, 0, nil
 }
-func (m *mockClinicRepo) ExistsBySlug(_ context.Context, _ string) (bool, error)     { return false, nil }
-func (m *mockClinicRepo) ExistsByEmail(_ context.Context, _ string) (bool, error)    { return false, nil }
-func (m *mockClinicRepo) CountByAccountID(_ context.Context, _ uuid.UUID) (int64, error) { return 0, nil }
+func (m *mockClinicRepo) ExistsBySlug(_ context.Context, _ string) (bool, error)  { return false, nil }
+func (m *mockClinicRepo) ExistsByEmail(_ context.Context, _ string) (bool, error) { return false, nil }
+func (m *mockClinicRepo) CountByAccountID(_ context.Context, _ uuid.UUID) (int64, error) {
+	return 0, nil
+}
 
 // --- Tests ---
 

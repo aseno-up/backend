@@ -47,9 +47,9 @@ type CommissionService interface {
 }
 
 type commissionService struct {
-	repo        repository.CommissionRepository
-	ppLookup    ProfessionalProcedureLookup
-	aptLookup   AppointmentLookup
+	repo      repository.CommissionRepository
+	ppLookup  ProfessionalProcedureLookup
+	aptLookup AppointmentLookup
 }
 
 func NewCommissionService(

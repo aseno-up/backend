@@ -83,10 +83,10 @@ type InviteWithClinic struct {
 
 // CreateInviteRequest represents the request to create an invite
 type CreateInviteRequest struct {
-	Email          string              `json:"email" binding:"required,email"`
-	Role           user_model.UserRole `json:"role" binding:"required,oneof=admin professional receptionist"`
-	ProfessionalID *uuid.UUID          `json:"professional_id"`              // Required when role=professional
-	NewProfessionalName string         `json:"new_professional_name"`        // Create new professional inline if set
+	Email               string              `json:"email" binding:"required,email"`
+	Role                user_model.UserRole `json:"role" binding:"required,oneof=admin professional receptionist"`
+	ProfessionalID      *uuid.UUID          `json:"professional_id"`       // Required when role=professional
+	NewProfessionalName string              `json:"new_professional_name"` // Create new professional inline if set
 }
 
 // AcceptInviteRequest represents the request to accept an invite
@@ -95,7 +95,7 @@ type CreateInviteRequest struct {
 type AcceptInviteRequest struct {
 	Token            string `json:"token" binding:"required"`
 	Name             string `json:"name"`              // Required for new users (email/password flow)
-	Password         string `json:"password"`           // New password for new users, current password for existing
+	Password         string `json:"password"`          // New password for new users, current password for existing
 	GoogleCredential string `json:"google_credential"` // Google ID token (alternative to password)
 }
 
@@ -111,7 +111,7 @@ type InviteDetailsResponse struct {
 	ExpiresAt        time.Time           `json:"expires_at"`
 	IsValid          bool                `json:"is_valid"`
 	IsExpired        bool                `json:"is_expired"`
-	UserExists       bool                `json:"user_exists"`       // True if email already has an account
+	UserExists       bool                `json:"user_exists"`         // True if email already has an account
 	UserName         string              `json:"user_name,omitempty"` // Existing user's name
 }
 

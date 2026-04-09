@@ -9,8 +9,8 @@ import (
 	"github.com/stretchr/testify/mock"
 
 	"github.com/aseno/backend/internal/errors"
-	procedure_model "github.com/aseno/backend/pkg/procedure/model"
 	"github.com/aseno/backend/pkg/pagination"
+	procedure_model "github.com/aseno/backend/pkg/procedure/model"
 	"github.com/aseno/backend/pkg/professional/model"
 )
 

@@ -231,7 +231,7 @@ type mockClinicInfo struct {
 	accountID uuid.UUID
 }
 
-func (c *mockClinicInfo) GetID() uuid.UUID                    { return c.id }
+func (c *mockClinicInfo) GetID() uuid.UUID                     { return c.id }
 func (c *mockClinicInfo) GetAccountID() uuid.UUID              { return c.accountID }
 func (c *mockClinicInfo) GetRequirePaymentBeforeBooking() bool { return false }
 func (c *mockClinicInfo) GetPlanSlug() string                  { return "professional" }
@@ -264,12 +264,12 @@ type mockAptInfo struct {
 	price     float64
 }
 
-func (a *mockAptInfo) GetID() uuid.UUID              { return a.id }
-func (a *mockAptInfo) GetClinicID() uuid.UUID        { return a.clinicID }
-func (a *mockAptInfo) GetPatientID() uuid.UUID       { return a.patientID }
-func (a *mockAptInfo) GetPrice() float64              { return a.price }
-func (a *mockAptInfo) GetStatus() string              { return "awaiting_payment" }
-func (a *mockAptInfo) GetPaymentToken() string        { return "test-token" }
+func (a *mockAptInfo) GetID() uuid.UUID        { return a.id }
+func (a *mockAptInfo) GetClinicID() uuid.UUID  { return a.clinicID }
+func (a *mockAptInfo) GetPatientID() uuid.UUID { return a.patientID }
+func (a *mockAptInfo) GetPrice() float64       { return a.price }
+func (a *mockAptInfo) GetStatus() string       { return "awaiting_payment" }
+func (a *mockAptInfo) GetPaymentToken() string { return "test-token" }
 func (a *mockAptInfo) GetPaymentExpiresAt() *time.Time {
 	t := time.Now().Add(15 * time.Minute)
 	return &t
@@ -677,10 +677,10 @@ type mockAptInfoWithExpiry struct {
 	expiresAt *time.Time
 }
 
-func (a *mockAptInfoWithExpiry) GetID() uuid.UUID              { return a.id }
-func (a *mockAptInfoWithExpiry) GetClinicID() uuid.UUID        { return a.clinicID }
-func (a *mockAptInfoWithExpiry) GetPatientID() uuid.UUID       { return a.patientID }
-func (a *mockAptInfoWithExpiry) GetPrice() float64              { return a.price }
-func (a *mockAptInfoWithExpiry) GetStatus() string              { return a.status }
-func (a *mockAptInfoWithExpiry) GetPaymentToken() string        { return a.token }
+func (a *mockAptInfoWithExpiry) GetID() uuid.UUID                { return a.id }
+func (a *mockAptInfoWithExpiry) GetClinicID() uuid.UUID          { return a.clinicID }
+func (a *mockAptInfoWithExpiry) GetPatientID() uuid.UUID         { return a.patientID }
+func (a *mockAptInfoWithExpiry) GetPrice() float64               { return a.price }
+func (a *mockAptInfoWithExpiry) GetStatus() string               { return a.status }
+func (a *mockAptInfoWithExpiry) GetPaymentToken() string         { return a.token }
 func (a *mockAptInfoWithExpiry) GetPaymentExpiresAt() *time.Time { return a.expiresAt }

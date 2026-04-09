@@ -47,12 +47,12 @@ func (m *MockPlanService) CalculateBestPrice(ctx context.Context, plan *model.Pl
 	return args.Get(0).(float64), args.Error(1)
 }
 
-func (m *MockPlanService) UseOffer(ctx context.Context, offerID uuid.UUID) error       { return nil }
-func (m *MockPlanService) CreatePlan(ctx context.Context, plan *model.Plan) error      { return nil }
-func (m *MockPlanService) UpdatePlan(ctx context.Context, plan *model.Plan) error      { return nil }
-func (m *MockPlanService) CreateOffer(ctx context.Context, offer *model.Offer) error   { return nil }
-func (m *MockPlanService) ListOffers(ctx context.Context) ([]model.Offer, error)       { return nil, nil }
-func (m *MockPlanService) UpdateOffer(ctx context.Context, offer *model.Offer) error   { return nil }
+func (m *MockPlanService) UseOffer(ctx context.Context, offerID uuid.UUID) error     { return nil }
+func (m *MockPlanService) CreatePlan(ctx context.Context, plan *model.Plan) error    { return nil }
+func (m *MockPlanService) UpdatePlan(ctx context.Context, plan *model.Plan) error    { return nil }
+func (m *MockPlanService) CreateOffer(ctx context.Context, offer *model.Offer) error { return nil }
+func (m *MockPlanService) ListOffers(ctx context.Context) ([]model.Offer, error)     { return nil, nil }
+func (m *MockPlanService) UpdateOffer(ctx context.Context, offer *model.Offer) error { return nil }
 func (m *MockPlanService) GetBySlug(ctx context.Context, slug string) (*model.Plan, error) {
 	return nil, nil
 }
@@ -70,7 +70,7 @@ func TestValidateOffer_WithSlug(t *testing.T) {
 		ID:   planID,
 		Slug: "advanced",
 	}
-	
+
 	mockOffer := &model.Offer{
 		ID:     uuid.New(),
 		Token:  "MARCO50",

@@ -72,10 +72,10 @@ func (m *mockAptLookup) GetByID(ctx context.Context, id, clinicID uuid.UUID) (*a
 // --- Helpers ---
 
 var (
-	testClinicID  = uuid.New()
-	testProfID    = uuid.New()
-	testProcID    = uuid.New()
-	testAptID     = uuid.New()
+	testClinicID = uuid.New()
+	testProfID   = uuid.New()
+	testProcID   = uuid.New()
+	testAptID    = uuid.New()
 )
 
 func newTestService() (CommissionService, *mockCommissionRepo, *mockPPLookup, *mockAptLookup) {

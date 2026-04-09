@@ -466,6 +466,64 @@ func TestCalculateOccurrences_StartDateMatchesUserChoice(t *testing.T) {
 	})
 }
 
+func TestCalculateOccurrencesWithDayTimes_RespectsSessionLimit(t *testing.T) {
+	// Bug: plans with DayTimes were generating infinite sessions because
+	// CalculateOccurrencesWithDayTimes only looked at the visible calendar range
+	// instead of counting all sessions from dtstart.
+	loc, _ := time.LoadLocation("America/Sao_Paulo")
+	if loc == nil {
+		t.Skip("America/Sao_Paulo timezone not available")
+	}
+	dtstartLocal := time.Date(2026, 1, 5, 9, 0, 0, 0, loc) // Monday
+	dtstart := dtstartLocal.UTC()
+
+	dayTimes := map[string]string{
+		"MO": "09:00",
+		"WE": "14:00",
+	}
+
+	t.Run("plan with 6 sessions does not show sessions in far future", func(t *testing.T) {
+		// Plan: MO+WE, 6 total sessions, starting Jan 5.
+		// Sessions: Jan 5(MO), Jan 7(WE), Jan 12(MO), Jan 14(WE), Jan 19(MO), Jan 21(WE)
+		// Looking at February calendar should show ZERO sessions.
+		rangeStart := time.Date(2026, 2, 1, 0, 0, 0, 0, loc).UTC()
+		rangeEnd := time.Date(2026, 2, 28, 23, 59, 59, 0, loc).UTC()
+
+		dates, err := CalculateOccurrencesWithDayTimes(
+			"FREQ=WEEKLY;BYDAY=MO,WE", dtstart, dayTimes,
+			rangeStart, rangeEnd, 6, 0,
+		)
+		require.NoError(t, err)
+		assert.Len(t, dates, 0, "plan with 6 sessions ending in January should show 0 in February")
+	})
+
+	t.Run("plan with 10 sessions shows correct count in first weeks", func(t *testing.T) {
+		// Plan: MO+WE, 10 total sessions, starting Jan 5
+		// First 2 weeks have 4 sessions. Looking at first 2 weeks:
+		rangeStart := dtstart
+		rangeEnd := dtstart.AddDate(0, 0, 13) // ~2 weeks
+
+		dates, err := CalculateOccurrencesWithDayTimes(
+			"FREQ=WEEKLY;BYDAY=MO,WE", dtstart, dayTimes,
+			rangeStart, rangeEnd, 10, 0,
+		)
+		require.NoError(t, err)
+		assert.Equal(t, 4, len(dates), "first 2 weeks should have 4 sessions (2 MO + 2 WE)")
+	})
+
+	t.Run("indeterminate plan generates sessions in any range", func(t *testing.T) {
+		rangeStart := time.Date(2026, 6, 1, 0, 0, 0, 0, loc).UTC()
+		rangeEnd := time.Date(2026, 6, 30, 23, 59, 59, 0, loc).UTC()
+
+		dates, err := CalculateOccurrencesWithDayTimes(
+			"FREQ=WEEKLY;BYDAY=MO,WE", dtstart, dayTimes,
+			rangeStart, rangeEnd, -1, 0,
+		)
+		require.NoError(t, err)
+		assert.True(t, len(dates) > 0, "indeterminate plan should generate sessions in any range")
+	})
+}
+
 func TestIndeterminatePlanNeverCompletes(t *testing.T) {
 	// Bug: indeterminate plans (total_sessions <= 0) were being marked as completed.
 	// This test verifies the model correctly identifies indeterminate plans.

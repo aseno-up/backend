@@ -10,7 +10,7 @@ type CreateSubaccountRequest struct {
 	Email         string  `json:"email" binding:"required,email"`
 	CpfCnpj       string  `json:"cpfCnpj" binding:"required"`
 	CompanyType   string  `json:"companyType,omitempty"` // MEI, LIMITED, INDIVIDUAL, ASSOCIATION
-	BirthDate     string  `json:"birthDate,omitempty"`    // YYYY-MM-DD, required for PF
+	BirthDate     string  `json:"birthDate,omitempty"`   // YYYY-MM-DD, required for PF
 	IncomeValue   float64 `json:"incomeValue"`           // Required by Asaas
 	Phone         string  `json:"phone,omitempty"`
 	MobilePhone   string  `json:"mobilePhone,omitempty"`
@@ -26,20 +26,20 @@ type CreateSubaccountRequest struct {
 
 // AsaasSubaccountResponse represents the response from Asaas when creating/getting a subaccount
 type AsaasSubaccountResponse struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Email       string `json:"email"`
-	CpfCnpj     string `json:"cpfCnpj"`
-	CompanyType string `json:"companyType"`
-	Phone       string `json:"phone"`
-	MobilePhone string `json:"mobilePhone"`
-	PostalCode  string `json:"postalCode"`
-	Address     string `json:"address"`
-	Province    string `json:"province"`
-	City        string `json:"city"`
-	State       string `json:"state"`
-	WalletID    string `json:"walletId"`
-	APIKey      string `json:"apiKey"`
+	ID            string         `json:"id"`
+	Name          string         `json:"name"`
+	Email         string         `json:"email"`
+	CpfCnpj       string         `json:"cpfCnpj"`
+	CompanyType   string         `json:"companyType"`
+	Phone         string         `json:"phone"`
+	MobilePhone   string         `json:"mobilePhone"`
+	PostalCode    string         `json:"postalCode"`
+	Address       string         `json:"address"`
+	Province      string         `json:"province"`
+	City          string         `json:"city"`
+	State         string         `json:"state"`
+	WalletID      string         `json:"walletId"`
+	APIKey        string         `json:"apiKey"`
 	AccountNumber *AccountNumber `json:"accountNumber,omitempty"`
 }
 
@@ -57,18 +57,18 @@ type SplitItem struct {
 
 // CreatePaymentWithSplitRequest extends CreatePaymentRequest with split and credit card support
 type CreatePaymentWithSplitRequest struct {
-	CustomerID           string                          `json:"customer" binding:"required"`
-	BillingType          string                          `json:"billingType" binding:"required"`
-	Value                float64                         `json:"value" binding:"required"`
-	DueDate              string                          `json:"dueDate" binding:"required"`
-	PixExpirationDate    string                          `json:"pixExpirationDate,omitempty"` // ISO datetime for PIX expiration
-	Description          string                          `json:"description,omitempty"`
-	ExternalRef          string                          `json:"externalReference,omitempty"`
-	Split                []SplitItem                     `json:"split,omitempty"`
+	CustomerID           string                              `json:"customer" binding:"required"`
+	BillingType          string                              `json:"billingType" binding:"required"`
+	Value                float64                             `json:"value" binding:"required"`
+	DueDate              string                              `json:"dueDate" binding:"required"`
+	PixExpirationDate    string                              `json:"pixExpirationDate,omitempty"` // ISO datetime for PIX expiration
+	Description          string                              `json:"description,omitempty"`
+	ExternalRef          string                              `json:"externalReference,omitempty"`
+	Split                []SplitItem                         `json:"split,omitempty"`
 	CreditCard           *payment_model.CreditCardInfo       `json:"creditCard,omitempty"`
 	CreditCardHolderInfo *payment_model.CreditCardHolderInfo `json:"creditCardHolderInfo,omitempty"`
-	InstallmentCount     *int                            `json:"installmentCount,omitempty"`
-	PostalService        bool                            `json:"postalService,omitempty"`
+	InstallmentCount     *int                                `json:"installmentCount,omitempty"`
+	PostalService        bool                                `json:"postalService,omitempty"`
 }
 
 // BalanceResponse represents the response from Asaas finance/balance endpoint
@@ -100,17 +100,17 @@ type PaymentFilters struct {
 
 // PaymentPageData is returned by the public /pagar/:token endpoint
 type PaymentPageData struct {
-	AppointmentID    string  `json:"appointment_id"`
-	ClinicID         string  `json:"clinic_id"`
-	ClinicName       string  `json:"clinic_name,omitempty"`
-	Professional     string  `json:"professional,omitempty"`
-	StartTime        string  `json:"start_time"`
-	EndTime          string  `json:"end_time"`
-	Price            float64 `json:"price"`
-	PaymentStatus    string  `json:"payment_status"`
-	Status           string  `json:"status"`
-	RemainingSeconds int     `json:"remaining_seconds"`
-	HasSubaccount    bool    `json:"has_subaccount"`
+	AppointmentID    string                 `json:"appointment_id"`
+	ClinicID         string                 `json:"clinic_id"`
+	ClinicName       string                 `json:"clinic_name,omitempty"`
+	Professional     string                 `json:"professional,omitempty"`
+	StartTime        string                 `json:"start_time"`
+	EndTime          string                 `json:"end_time"`
+	Price            float64                `json:"price"`
+	PaymentStatus    string                 `json:"payment_status"`
+	Status           string                 `json:"status"`
+	RemainingSeconds int                    `json:"remaining_seconds"`
+	HasSubaccount    bool                   `json:"has_subaccount"`
 	ExistingPayment  *ClinicPaymentResponse `json:"existing_payment,omitempty"`
 }
 

@@ -65,6 +65,6 @@ type CancelOccurrenceRequest struct {
 
 // RescheduleOccurrenceRequest represents the request to reschedule a single virtual occurrence
 type RescheduleOccurrenceRequest struct {
-	OriginalDate string `json:"original_date" binding:"required"` // YYYY-MM-DD of the original occurrence
+	OriginalDate string `json:"original_date" binding:"required"`  // YYYY-MM-DD of the original occurrence
 	NewStartTime string `json:"new_start_time" binding:"required"` // RFC3339 datetime for the new time
 }

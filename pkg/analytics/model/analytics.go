@@ -201,14 +201,14 @@ type UnconciliatedAppointment struct {
 
 // FinancialReport represents the complete financial report response
 type FinancialReport struct {
-	Summary                   FinancialSummary         `json:"summary"`
-	DailyBreakdown            []DailyReceivable        `json:"daily_breakdown"`
-	PaymentMethodBreakdown    []PaymentMethodBreakdown  `json:"payment_method_breakdown"`
+	Summary                   FinancialSummary           `json:"summary"`
+	DailyBreakdown            []DailyReceivable          `json:"daily_breakdown"`
+	PaymentMethodBreakdown    []PaymentMethodBreakdown   `json:"payment_method_breakdown"`
 	UnconciliatedAppointments []UnconciliatedAppointment `json:"unconciliated_appointments"`
 }
 
 // FinancialFilter represents filter parameters for financial report queries
 type FinancialFilter struct {
-	Month          string     `form:"month"`           // YYYY-MM format
+	Month          string     `form:"month"` // YYYY-MM format
 	ProfessionalID *uuid.UUID `form:"professional_id"`
 }

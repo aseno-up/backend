@@ -20,9 +20,9 @@ type ProfessionalProcedureService interface {
 }
 
 type professionalProcedureService struct {
-	ppRepo          repository.ProfessionalProcedureRepository
+	ppRepo           repository.ProfessionalProcedureRepository
 	professionalRepo repository.ProfessionalRepository
-	procedureRepo   procedure_repository.ProcedureRepository
+	procedureRepo    procedure_repository.ProcedureRepository
 }
 
 func NewProfessionalProcedureService(
