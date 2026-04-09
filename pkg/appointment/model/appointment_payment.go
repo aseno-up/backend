@@ -32,6 +32,10 @@ type AppointmentPayment struct {
 
 	// Relationships
 	PaymentMethod *PaymentMethodInfo `json:"payment_method,omitempty" gorm:"foreignKey:PaymentMethodID;references:ID"`
+
+	// Transient fields populated by ListBySessionPlan (read-only, not persisted)
+	AppointmentStartTime *time.Time `json:"appointment_start_time,omitempty" gorm:"->"`
+	AppointmentPrice     float64    `json:"appointment_price,omitempty" gorm:"->"`
 }
 
 func (AppointmentPayment) TableName() string {

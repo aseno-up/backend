@@ -26,6 +26,11 @@ type SessionPlanPayment struct {
 
 	// Relations (for response)
 	PaymentMethodName string `json:"payment_method_name,omitempty" gorm:"-"`
+
+	// Transient fields for per-session aggregation
+	AppointmentID        *uuid.UUID `json:"-" gorm:"-"`
+	AppointmentStartTime *time.Time `json:"-" gorm:"-"`
+	AppointmentPrice     float64    `json:"-" gorm:"-"`
 }
 
 // TableName returns the table name
@@ -56,21 +61,29 @@ type PlanPaymentResponse struct {
 	Notes           string     `json:"notes,omitempty"`
 	PaidAt          time.Time  `json:"paid_at"`
 	PaymentMethodName string   `json:"payment_method_name,omitempty"`
+
+	// Per-session fields (populated from appointment data)
+	AppointmentID        *uuid.UUID `json:"appointment_id,omitempty"`
+	AppointmentStartTime *time.Time `json:"appointment_start_time,omitempty"`
+	AppointmentPrice     float64    `json:"appointment_price,omitempty"`
 }
 
 // ToResponse converts to API response
 func (p *SessionPlanPayment) ToResponse() *PlanPaymentResponse {
 	return &PlanPaymentResponse{
-		ID:                p.ID,
-		SessionPlanID:     p.SessionPlanID,
-		EnrollmentID:      p.EnrollmentID,
-		PaymentMethodID:   p.PaymentMethodID,
-		Amount:            p.Amount,
-		Discount:          p.Discount,
-		Installments:      p.Installments,
-		ReferenceMonth:    p.ReferenceMonth,
-		Notes:             p.Notes,
-		PaidAt:            p.PaidAt,
-		PaymentMethodName: p.PaymentMethodName,
+		ID:                   p.ID,
+		SessionPlanID:        p.SessionPlanID,
+		EnrollmentID:         p.EnrollmentID,
+		PaymentMethodID:      p.PaymentMethodID,
+		Amount:               p.Amount,
+		Discount:             p.Discount,
+		Installments:         p.Installments,
+		ReferenceMonth:       p.ReferenceMonth,
+		Notes:                p.Notes,
+		PaidAt:               p.PaidAt,
+		PaymentMethodName:    p.PaymentMethodName,
+		AppointmentID:        p.AppointmentID,
+		AppointmentStartTime: p.AppointmentStartTime,
+		AppointmentPrice:     p.AppointmentPrice,
 	}
 }

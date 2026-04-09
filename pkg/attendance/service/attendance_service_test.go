@@ -238,6 +238,9 @@ func (m *mockPaymentRepo) ListByAppointment(_, _ uuid.UUID) ([]*appointment_mode
 	return nil, nil
 }
 func (m *mockPaymentRepo) SumByAppointment(_ uuid.UUID) (float64, error) { return 0, nil }
+func (m *mockPaymentRepo) ListBySessionPlan(_ context.Context, _, _ uuid.UUID) ([]*appointment_model.AppointmentPayment, error) {
+	return nil, nil
+}
 
 // --- Helpers ---
 

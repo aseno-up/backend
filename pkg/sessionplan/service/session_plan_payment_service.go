@@ -6,6 +6,8 @@ import (
 
 	"github.com/google/uuid"
 
+	appointment_model "github.com/aseno/backend/pkg/appointment/model"
+	appointment_repository "github.com/aseno/backend/pkg/appointment/repository"
 	"github.com/aseno/backend/internal/errors"
 	"github.com/aseno/backend/pkg/sessionplan/model"
 	"github.com/aseno/backend/pkg/sessionplan/repository"
@@ -28,18 +30,21 @@ type PlanPaymentService interface {
 }
 
 type planPaymentService struct {
-	paymentRepo repository.PlanPaymentRepository
-	planRepo    repository.SessionPlanRepository
+	paymentRepo    repository.PlanPaymentRepository
+	planRepo       repository.SessionPlanRepository
+	aptPaymentRepo appointment_repository.AppointmentPaymentRepository
 }
 
 // NewPlanPaymentService creates a new plan payment service
 func NewPlanPaymentService(
 	paymentRepo repository.PlanPaymentRepository,
 	planRepo repository.SessionPlanRepository,
+	aptPaymentRepo appointment_repository.AppointmentPaymentRepository,
 ) PlanPaymentService {
 	return &planPaymentService{
-		paymentRepo: paymentRepo,
-		planRepo:    planRepo,
+		paymentRepo:    paymentRepo,
+		planRepo:       planRepo,
+		aptPaymentRepo: aptPaymentRepo,
 	}
 }
 
@@ -77,9 +82,58 @@ func (s *planPaymentService) CreatePlanPayment(ctx context.Context, clinicID, se
 	return payment, nil
 }
 
-// GetPlanPayments retrieves all payments for a plan
+// GetPlanPayments retrieves all payments for a plan.
+// For per_session plans, it aggregates appointment payments from linked appointments.
 func (s *planPaymentService) GetPlanPayments(ctx context.Context, clinicID, sessionPlanID uuid.UUID) ([]*model.SessionPlanPayment, error) {
+	plan, err := s.planRepo.GetByID(ctx, clinicID, sessionPlanID)
+	if err != nil {
+		return nil, err
+	}
+
+	if plan.PaymentMode == model.PaymentModePerSession {
+		return s.getAppointmentPaymentsAsPlanPayments(ctx, clinicID, sessionPlanID)
+	}
+
 	return s.paymentRepo.GetByPlan(ctx, clinicID, sessionPlanID)
+}
+
+// getAppointmentPaymentsAsPlanPayments converts appointment payments into
+// SessionPlanPayment format so the frontend can display them uniformly.
+func (s *planPaymentService) getAppointmentPaymentsAsPlanPayments(ctx context.Context, clinicID, sessionPlanID uuid.UUID) ([]*model.SessionPlanPayment, error) {
+	aptPayments, err := s.aptPaymentRepo.ListBySessionPlan(ctx, clinicID, sessionPlanID)
+	if err != nil {
+		return nil, err
+	}
+
+	result := make([]*model.SessionPlanPayment, len(aptPayments))
+	for i, ap := range aptPayments {
+		result[i] = appointmentPaymentToPlanPayment(ap, sessionPlanID, clinicID)
+	}
+	return result, nil
+}
+
+func appointmentPaymentToPlanPayment(ap *appointment_model.AppointmentPayment, sessionPlanID, clinicID uuid.UUID) *model.SessionPlanPayment {
+	methodName := ""
+	if ap.PaymentMethod != nil {
+		methodName = ap.PaymentMethod.Name
+	}
+	return &model.SessionPlanPayment{
+		ID:                   ap.ID,
+		ClinicID:             clinicID,
+		SessionPlanID:        sessionPlanID,
+		PaymentMethodID:      ap.PaymentMethodID,
+		Amount:               ap.Amount,
+		Discount:             ap.Discount,
+		Installments:         ap.Installments,
+		Notes:                ap.Notes,
+		PaidAt:               ap.PaidAt,
+		CreatedAt:            ap.CreatedAt,
+		UpdatedAt:            ap.UpdatedAt,
+		PaymentMethodName:    methodName,
+		AppointmentID:        &ap.AppointmentID,
+		AppointmentStartTime: ap.AppointmentStartTime,
+		AppointmentPrice:     ap.AppointmentPrice,
+	}
 }
 
 // CreateEnrollmentPayment creates a payment for a group enrollment (upfront/monthly)

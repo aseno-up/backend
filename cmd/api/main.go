@@ -786,7 +786,7 @@ func main() {
 
 	// Initialize Plan Payment service and handler
 	planPaymentRepo := sessionplan_repository.NewPlanPaymentRepository(db.GetDB())
-	planPaymentSvc := sessionplan_service.NewPlanPaymentService(planPaymentRepo, sessionPlanRepo)
+	planPaymentSvc := sessionplan_service.NewPlanPaymentService(planPaymentRepo, sessionPlanRepo, appointmentPaymentRepo)
 	planPaymentHdlr := sessionplan_handler.NewPlanPaymentHandler(planPaymentSvc)
 
 	// Initialize Invite handler

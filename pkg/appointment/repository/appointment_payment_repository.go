@@ -1,6 +1,8 @@
 package repository
 
 import (
+	"context"
+
 	"github.com/aseno/backend/pkg/appointment/model"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -13,6 +15,7 @@ type AppointmentPaymentRepository interface {
 	Delete(id, clinicID uuid.UUID) error
 	ListByAppointment(appointmentID, clinicID uuid.UUID) ([]*model.AppointmentPayment, error)
 	SumByAppointment(appointmentID uuid.UUID) (float64, error)
+	ListBySessionPlan(ctx context.Context, clinicID, sessionPlanID uuid.UUID) ([]*model.AppointmentPayment, error)
 }
 
 type appointmentPaymentRepository struct {
@@ -60,4 +63,16 @@ func (r *appointmentPaymentRepository) SumByAppointment(appointmentID uuid.UUID)
 		Select("COALESCE(SUM(amount + discount), 0)").
 		Scan(&sum).Error
 	return sum, err
+}
+
+func (r *appointmentPaymentRepository) ListBySessionPlan(ctx context.Context, clinicID, sessionPlanID uuid.UUID) ([]*model.AppointmentPayment, error) {
+	var payments []*model.AppointmentPayment
+	err := r.db.WithContext(ctx).
+		Select("appointment_payments.*, a.start_time AS appointment_start_time, a.price AS appointment_price").
+		Joins("JOIN appointments a ON a.id = appointment_payments.appointment_id AND a.deleted_at IS NULL").
+		Where("a.session_plan_id = ? AND appointment_payments.clinic_id = ? AND appointment_payments.deleted_at IS NULL", sessionPlanID, clinicID).
+		Preload("PaymentMethod").
+		Order("a.start_time ASC, appointment_payments.paid_at ASC").
+		Find(&payments).Error
+	return payments, err
 }

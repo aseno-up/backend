@@ -73,6 +73,10 @@ func (m *mockPaymentRepo) SumByAppointment(appointmentID uuid.UUID) (float64, er
 	return m.sum, nil
 }
 
+func (m *mockPaymentRepo) ListBySessionPlan(_ context.Context, _, _ uuid.UUID) ([]*model.AppointmentPayment, error) {
+	return nil, nil
+}
+
 // --- Mock appointment repo (reusing from existing test but simplified) ---
 
 type mockAptRepoForPayment struct {
