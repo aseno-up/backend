@@ -135,6 +135,16 @@ func (s *materializeService) Materialize(ctx context.Context, clinicID uuid.UUID
 		Price:          price,
 	}
 
+	// Transfer procedure from session plan to appointment
+	if plan.ProcedureID != nil {
+		appointment.Procedures = []appointment_model.AppointmentProcedure{
+			{
+				ProcedureID: *plan.ProcedureID,
+				Price:       price,
+			},
+		}
+	}
+
 	if err := s.appointmentRepo.Create(ctx, appointment); err != nil {
 		return nil, fmt.Errorf("failed to create appointment: %w", err)
 	}
@@ -337,6 +347,16 @@ func (s *materializeService) RescheduleOccurrence(ctx context.Context, clinicID 
 		Price:          price,
 		IsException:    true,
 		OriginalDate:   &originalStart,
+	}
+
+	// Transfer procedure from session plan to appointment
+	if plan.ProcedureID != nil {
+		appointment.Procedures = []appointment_model.AppointmentProcedure{
+			{
+				ProcedureID: *plan.ProcedureID,
+				Price:       price,
+			},
+		}
 	}
 
 	if err := s.appointmentRepo.Create(ctx, appointment); err != nil {

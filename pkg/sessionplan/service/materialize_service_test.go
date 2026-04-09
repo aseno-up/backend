@@ -309,6 +309,111 @@ func TestMaterialize_UsesDayTimesForAppointmentTime(t *testing.T) {
 	assert.Equal(t, 0, apt.StartTime.Minute())
 }
 
+func TestMaterialize_IncludesProcedureFromSessionPlan(t *testing.T) {
+	clinicID := uuid.New()
+	profID := uuid.New()
+	procedureID := uuid.New()
+
+	monday := time.Date(2026, 4, 6, 9, 0, 0, 0, time.UTC)
+	dtstart := monday
+
+	plan := &model.SessionPlan{
+		ID:             uuid.New(),
+		ClinicID:       clinicID,
+		Status:         model.PlanStatusActive,
+		TotalSessions:  10,
+		SessionsDone:   0,
+		ProfessionalID: &profID,
+		ProcedureID:    &procedureID,
+		SessionPrice:   150.0,
+		RRule:          "FREQ=WEEKLY;BYDAY=MO",
+		DtStart:        &dtstart,
+		DurationMins:   50,
+	}
+
+	planRepo := &mockMaterializePlanRepo{plan: plan}
+	aptRepo := &mockMaterializeAppointmentRepo{}
+
+	svc := NewMaterializeService(planRepo, aptRepo)
+
+	_, err := svc.Materialize(context.Background(), clinicID, plan.ID, monday.Format("2006-01-02"))
+	require.NoError(t, err)
+	require.NotNil(t, aptRepo.created)
+
+	// The materialized appointment must include the procedure from the session plan
+	require.Len(t, aptRepo.created.Procedures, 1, "Materialized appointment must include the session plan procedure")
+	assert.Equal(t, procedureID, aptRepo.created.Procedures[0].ProcedureID)
+	assert.Equal(t, 150.0, aptRepo.created.Procedures[0].Price)
+}
+
+func TestMaterialize_NoProcedureWhenPlanHasNone(t *testing.T) {
+	clinicID := uuid.New()
+	profID := uuid.New()
+
+	monday := time.Date(2026, 4, 6, 9, 0, 0, 0, time.UTC)
+	dtstart := monday
+
+	plan := &model.SessionPlan{
+		ID:             uuid.New(),
+		ClinicID:       clinicID,
+		Status:         model.PlanStatusActive,
+		TotalSessions:  10,
+		SessionsDone:   0,
+		ProfessionalID: &profID,
+		ProcedureID:    nil, // No procedure
+		RRule:          "FREQ=WEEKLY;BYDAY=MO",
+		DtStart:        &dtstart,
+		DurationMins:   50,
+	}
+
+	planRepo := &mockMaterializePlanRepo{plan: plan}
+	aptRepo := &mockMaterializeAppointmentRepo{}
+
+	svc := NewMaterializeService(planRepo, aptRepo)
+
+	_, err := svc.Materialize(context.Background(), clinicID, plan.ID, monday.Format("2006-01-02"))
+	require.NoError(t, err)
+	require.NotNil(t, aptRepo.created)
+	assert.Empty(t, aptRepo.created.Procedures, "Appointment without procedure should have empty procedures")
+}
+
+func TestRescheduleOccurrence_IncludesProcedureFromSessionPlan(t *testing.T) {
+	clinicID := uuid.New()
+	profID := uuid.New()
+	procedureID := uuid.New()
+
+	monday := time.Date(2026, 4, 6, 9, 0, 0, 0, time.UTC)
+	wednesday := time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC)
+	dtstart := monday
+
+	plan := &model.SessionPlan{
+		ID:             uuid.New(),
+		ClinicID:       clinicID,
+		Status:         model.PlanStatusActive,
+		TotalSessions:  10,
+		SessionsDone:   0,
+		ProfessionalID: &profID,
+		ProcedureID:    &procedureID,
+		SessionPrice:   200.0,
+		RRule:          "FREQ=WEEKLY;BYDAY=MO",
+		DtStart:        &dtstart,
+		DurationMins:   50,
+	}
+
+	planRepo := &mockMaterializePlanRepo{plan: plan}
+	aptRepo := &mockMaterializeAppointmentRepo{}
+
+	svc := NewMaterializeService(planRepo, aptRepo)
+
+	_, err := svc.RescheduleOccurrence(context.Background(), clinicID, plan.ID, monday.Format("2006-01-02"), wednesday)
+	require.NoError(t, err)
+	require.NotNil(t, aptRepo.created)
+
+	require.Len(t, aptRepo.created.Procedures, 1, "Rescheduled appointment must include the session plan procedure")
+	assert.Equal(t, procedureID, aptRepo.created.Procedures[0].ProcedureID)
+	assert.Equal(t, 200.0, aptRepo.created.Procedures[0].Price)
+}
+
 // --- Tests: Exception flow (cancel/reschedule single occurrence) ---
 
 func TestCancelOccurrence_SetsIsExceptionAndCanceledStatus(t *testing.T) {
