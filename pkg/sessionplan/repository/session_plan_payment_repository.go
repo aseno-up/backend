@@ -17,6 +17,7 @@ type PlanPaymentRepository interface {
 	GetByEnrollment(ctx context.Context, clinicID, enrollmentID uuid.UUID) ([]*model.SessionPlanPayment, error)
 	GetTotalPaidByPlan(ctx context.Context, clinicID, sessionPlanID uuid.UUID) (float64, error)
 	GetTotalPaidByEnrollment(ctx context.Context, clinicID, enrollmentID uuid.UUID) (float64, error)
+	GetTotalPaidByEnrollmentAndDate(ctx context.Context, clinicID, enrollmentID uuid.UUID, sessionDate string) (float64, error)
 	Delete(ctx context.Context, clinicID, id uuid.UUID) error
 }
 
@@ -90,6 +91,20 @@ func (r *planPaymentRepository) GetTotalPaidByEnrollment(ctx context.Context, cl
 		Model(&model.SessionPlanPayment{}).
 		Where("clinic_id = ? AND enrollment_id = ? AND deleted_at IS NULL", clinicID, enrollmentID).
 		Select("COALESCE(SUM(amount + discount), 0)").
+		Scan(&total).Error
+
+	if err != nil {
+		return 0, errors.ErrInternalInstance.WithError(err)
+	}
+	return total, nil
+}
+
+func (r *planPaymentRepository) GetTotalPaidByEnrollmentAndDate(ctx context.Context, clinicID, enrollmentID uuid.UUID, sessionDate string) (float64, error) {
+	var total float64
+	err := r.db.WithContext(ctx).
+		Model(&model.SessionPlanPayment{}).
+		Where("clinic_id = ? AND enrollment_id = ? AND session_date = ? AND deleted_at IS NULL", clinicID, enrollmentID, sessionDate).
+		Select("COALESCE(SUM(amount), 0)").
 		Scan(&total).Error
 
 	if err != nil {

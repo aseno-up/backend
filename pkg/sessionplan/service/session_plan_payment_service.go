@@ -143,6 +143,23 @@ func (s *planPaymentService) CreateEnrollmentPayment(ctx context.Context, clinic
 		installments = 1
 	}
 
+	// Validate per_session: payment cannot exceed session price for that date
+	if req.SessionDate != "" {
+		plan, err := s.planRepo.GetByID(ctx, clinicID, sessionPlanID)
+		if err == nil && plan != nil {
+			sessionPrice := plan.GetEffectivePrice()
+			if sessionPrice > 0 {
+				alreadyPaid, err := s.paymentRepo.GetTotalPaidByEnrollmentAndDate(ctx, clinicID, enrollmentID, req.SessionDate)
+				if err == nil {
+					remaining := sessionPrice - alreadyPaid
+					if req.Amount > remaining+0.01 {
+						return nil, errors.ErrValidationInstance.WithMessage("Valor excede o preço da sessão")
+					}
+				}
+			}
+		}
+	}
+
 	payment := &model.SessionPlanPayment{
 		ClinicID:        clinicID,
 		SessionPlanID:   sessionPlanID,
@@ -152,6 +169,7 @@ func (s *planPaymentService) CreateEnrollmentPayment(ctx context.Context, clinic
 		Discount:        req.Discount,
 		Installments:    installments,
 		ReferenceMonth:  req.ReferenceMonth,
+		SessionDate:     req.SessionDate,
 		Notes:           req.Notes,
 		PaidAt:          time.Now(),
 	}

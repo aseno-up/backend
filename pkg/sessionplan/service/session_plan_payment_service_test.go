@@ -46,6 +46,10 @@ func (m *mockPlanPaymentRepo) GetTotalPaidByEnrollment(_ context.Context, _, _ u
 	return 0, nil
 }
 
+func (m *mockPlanPaymentRepo) GetTotalPaidByEnrollmentAndDate(_ context.Context, _, _ uuid.UUID, _ string) (float64, error) {
+	return 0, nil
+}
+
 func (m *mockPlanPaymentRepo) Delete(_ context.Context, _, _ uuid.UUID) error {
 	return nil
 }

@@ -722,6 +722,11 @@ func main() {
 	attendanceSvc.SetPaymentRepo(appointmentPaymentRepo)
 	attendanceHdlr := attendance_handler.NewAttendanceHandler(attendanceSvc)
 
+	// Initialize Group Attendance service and handler
+	groupAttendanceRepo := attendance_repository.NewGroupAttendanceRepository(db.GetDB())
+	groupAttendanceSvc := attendance_service.NewGroupAttendanceService(groupAttendanceRepo, sessionPlanRepo, enrollmentRepo)
+	groupAttendanceHdlr := attendance_handler.NewGroupAttendanceHandler(groupAttendanceSvc)
+
 	appointmentHandler := appointment_handler.NewAppointmentHandler(
 		appointmentService,
 		appointment_handler.WithAttendanceRecorder(attendanceSvc),
@@ -910,6 +915,7 @@ func main() {
 		portalHdlr,
 		marketplaceHdlr,
 		attendanceHdlr,
+		groupAttendanceHdlr,
 		enrollmentHdlr,
 		planPaymentHdlr,
 		authMiddleware,
@@ -1006,6 +1012,7 @@ func setupRouter(
 	portalHandler *portalaccount_handler.PortalHandler,
 	marketplaceHandler marketplace_handler.MarketplaceHandler,
 	attendanceHandler attendance_handler.AttendanceHandler,
+	groupAttendanceHandler attendance_handler.GroupAttendanceHandler,
 	enrollmentHandler enrollment_handler.EnrollmentHandler,
 	planPaymentHandler sessionplan_handler.PlanPaymentHandler,
 	authMiddleware auth_middleware.AuthMiddleware,
@@ -1151,6 +1158,9 @@ func setupRouter(
 
 			// Enrollment routes (group session plan enrollments)
 			enrollmentHandler.RegisterRoutes(protected)
+
+			// Group attendance routes (group session plan attendance by date)
+			groupAttendanceHandler.RegisterRoutes(protected)
 
 			// Plan payment routes (upfront/monthly payments)
 			planPaymentHandler.RegisterRoutes(protected)
@@ -1321,6 +1331,7 @@ func runMigrations(db *database.Database) error {
 		&calendar_model.CalendarSync{},
 		&sessionplan_model.SessionPlan{},
 		&attendance_model.AppointmentAttendance{},
+		&attendance_model.GroupSessionAttendance{},
 		&enrollment_model.SessionPlanEnrollment{},
 		&sessionplan_model.SessionPlanPayment{},
 		&invite_model.Invite{},

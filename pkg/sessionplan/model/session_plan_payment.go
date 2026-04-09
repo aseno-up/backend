@@ -17,7 +17,8 @@ type SessionPlanPayment struct {
 	Amount          float64        `json:"amount" gorm:"type:decimal(10,2);not null"`
 	Discount        float64        `json:"discount" gorm:"type:decimal(10,2);default:0"`
 	Installments    int            `json:"installments" gorm:"default:1"`
-	ReferenceMonth  string         `json:"reference_month,omitempty" gorm:"size:7"` // YYYY-MM for monthly
+	ReferenceMonth  string         `json:"reference_month,omitempty" gorm:"size:7"`  // YYYY-MM for monthly
+	SessionDate     string         `json:"session_date,omitempty" gorm:"size:10"`   // YYYY-MM-DD for per_session group
 	Notes           string         `json:"notes" gorm:"type:text"`
 	PaidAt          time.Time      `json:"paid_at" gorm:"not null"`
 	CreatedAt       time.Time      `json:"created_at" gorm:"autoCreateTime"`
@@ -44,7 +45,8 @@ type CreatePlanPaymentRequest struct {
 	Amount          float64   `json:"amount" binding:"required,min=0.01"`
 	Discount        float64   `json:"discount"`
 	Installments    int       `json:"installments"`
-	ReferenceMonth  string    `json:"reference_month"` // YYYY-MM for monthly
+	ReferenceMonth  string    `json:"reference_month"`  // YYYY-MM for monthly
+	SessionDate     string    `json:"session_date"`     // YYYY-MM-DD for per_session group
 	Notes           string    `json:"notes"`
 }
 
@@ -58,6 +60,7 @@ type PlanPaymentResponse struct {
 	Discount          float64    `json:"discount"`
 	Installments      int        `json:"installments"`
 	ReferenceMonth    string     `json:"reference_month,omitempty"`
+	SessionDate       string     `json:"session_date,omitempty"`
 	Notes             string     `json:"notes,omitempty"`
 	PaidAt            time.Time  `json:"paid_at"`
 	PaymentMethodName string     `json:"payment_method_name,omitempty"`
@@ -79,6 +82,7 @@ func (p *SessionPlanPayment) ToResponse() *PlanPaymentResponse {
 		Discount:             p.Discount,
 		Installments:         p.Installments,
 		ReferenceMonth:       p.ReferenceMonth,
+		SessionDate:          p.SessionDate,
 		Notes:                p.Notes,
 		PaidAt:               p.PaidAt,
 		PaymentMethodName:    p.PaymentMethodName,
