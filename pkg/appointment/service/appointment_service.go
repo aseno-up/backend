@@ -821,13 +821,9 @@ func (s *appointmentService) Complete(ctx context.Context, id, clinicID uuid.UUI
 		return nil, err
 	}
 
-	// Increment sessions_done on the session plan (if appointment belongs to one)
-	if s.sessionPlanHandler != nil && appointment.SessionPlanID != nil {
-		if err := s.sessionPlanHandler.OnAppointmentCompleted(ctx, clinicID, id); err != nil {
-			logger.Printf("[Appointment] Error updating session plan for appointment %s: %v", id, err)
-			// Don't fail the completion — session plan can be updated later
-		}
-	}
+	// NOTE: sessions_done increment is NOT done here — it's handled by the
+	// attendance flow (AutoRecordPresent in the handler). Doing it here too
+	// would cause double-counting.
 
 	// Calculate and store commission for completed appointment
 	if s.commissionCalculator != nil {

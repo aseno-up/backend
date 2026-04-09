@@ -161,3 +161,36 @@ func TestConfirm_AlreadyConfirmed_ShouldBeIdempotent(t *testing.T) {
 
 	require.NoError(t, err, "Confirming an already-confirmed appointment should be idempotent")
 }
+
+// --- Mock SessionPlanCompletionHandler ---
+
+type mockSessionPlanHandler struct {
+	called bool
+}
+
+func (m *mockSessionPlanHandler) OnAppointmentCompleted(_ context.Context, _, _ uuid.UUID) error {
+	m.called = true
+	return nil
+}
+
+// Cenário 5: Complete NÃO deve incrementar sessions_done diretamente —
+// o handler do endpoint já chama AutoRecordPresent que faz o incremento via attendance.
+// Se Complete também incrementar, sessions_done é contado duas vezes (bug de contagem dupla).
+func TestComplete_ShouldNotIncrementSessionsDone(t *testing.T) {
+	planID := uuid.New()
+	apt := newAppointment(model.AppointmentStatusConfirmed)
+	apt.SessionPlanID = &planID
+
+	repo := &mockAppointmentRepo{appointment: apt}
+	handler := &mockSessionPlanHandler{}
+
+	svc := buildService(repo)
+	svc.SetSessionPlanHandler(handler)
+
+	_, err := svc.Complete(context.Background(), apt.ID, apt.ClinicID)
+
+	require.NoError(t, err)
+	assert.False(t, handler.called,
+		"Complete() must NOT call OnAppointmentCompleted — attendance flow handles sessions_done increment. "+
+			"If this fails, sessions_done will be double-counted for plan appointments.")
+}
