@@ -17,6 +17,8 @@ type WhatsAppConnectionRepository interface {
 	GetByInstance(ctx context.Context, instance string) (*model.WhatsAppConnection, error)
 	Update(ctx context.Context, conn *model.WhatsAppConnection) error
 	UpdateConnected(ctx context.Context, clinicID uuid.UUID, connected bool) error
+	Deactivate(ctx context.Context, clinicID uuid.UUID) error
+	HasAnyByClinicID(ctx context.Context, clinicID uuid.UUID) bool
 	UpsertInstance(ctx context.Context, clinicID uuid.UUID, instance string) error
 	CountActiveByAccountID(ctx context.Context, accountID uuid.UUID) (int64, error)
 }
@@ -85,6 +87,28 @@ func (r *whatsAppConnectionRepository) UpdateConnected(ctx context.Context, clin
 		Model(&model.WhatsAppConnection{}).
 		Where("clinic_id = ? AND is_active = true AND deleted_at IS NULL", clinicID).
 		Update("connected", connected)
+	if result.Error != nil {
+		return errors.ErrInternalInstance.WithError(result.Error)
+	}
+	return nil
+}
+
+// HasAnyByClinicID returns true if the clinic has ever had a WhatsApp connection (active or not).
+func (r *whatsAppConnectionRepository) HasAnyByClinicID(ctx context.Context, clinicID uuid.UUID) bool {
+	var count int64
+	r.db.WithContext(ctx).
+		Model(&model.WhatsAppConnection{}).
+		Where("clinic_id = ?", clinicID).
+		Count(&count)
+	return count > 0
+}
+
+// Deactivate sets is_active=false and connected=false for the active connection of a clinic.
+func (r *whatsAppConnectionRepository) Deactivate(ctx context.Context, clinicID uuid.UUID) error {
+	result := r.db.WithContext(ctx).
+		Model(&model.WhatsAppConnection{}).
+		Where("clinic_id = ? AND is_active = true AND deleted_at IS NULL", clinicID).
+		Updates(map[string]interface{}{"is_active": false, "connected": false})
 	if result.Error != nil {
 		return errors.ErrInternalInstance.WithError(result.Error)
 	}

@@ -69,6 +69,12 @@ func (m *mockConnRepo) Update(ctx context.Context, conn *whatsapp_model.WhatsApp
 func (m *mockConnRepo) UpsertInstance(ctx context.Context, clinicID uuid.UUID, instance string) error {
 	return nil
 }
+func (m *mockConnRepo) HasAnyByClinicID(ctx context.Context, clinicID uuid.UUID) bool {
+	return false
+}
+func (m *mockConnRepo) Deactivate(ctx context.Context, clinicID uuid.UUID) error {
+	return nil
+}
 func (m *mockConnRepo) CountActiveByAccountID(ctx context.Context, accountID uuid.UUID) (int64, error) {
 	return 0, nil
 }

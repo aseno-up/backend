@@ -79,6 +79,30 @@ func (r *inMemoryConnRepo) UpdateConnected(_ context.Context, clinicID uuid.UUID
 	return errors.ErrNotFoundInstance.WithMessage("WhatsApp connection not found")
 }
 
+func (r *inMemoryConnRepo) HasAnyByClinicID(_ context.Context, clinicID uuid.UUID) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, c := range r.store {
+		if c.ClinicID == clinicID {
+			return true
+		}
+	}
+	return false
+}
+
+func (r *inMemoryConnRepo) Deactivate(_ context.Context, clinicID uuid.UUID) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, c := range r.store {
+		if c.ClinicID == clinicID && c.IsActive {
+			c.IsActive = false
+			c.Connected = false
+			return nil
+		}
+	}
+	return nil
+}
+
 func (r *inMemoryConnRepo) UpsertInstance(ctx context.Context, clinicID uuid.UUID, instance string) error {
 	existing, err := r.GetActiveByClinicID(ctx, clinicID)
 	if err != nil {
@@ -312,4 +336,53 @@ func TestConnRepo_MultiTenantIsolation(t *testing.T) {
 	connB, err := repo.GetActiveByClinicID(ctx, clinicB)
 	require.NoError(t, err)
 	assert.False(t, connB.Connected, "clínica B não deve ser afetada pela atualização de A")
+}
+
+// TestConnRepo_Deactivate desativa a conexão (is_active=false, connected=false).
+// Após Deactivate, GetActiveByClinicID não deve mais encontrar a conexão.
+func TestConnRepo_Deactivate(t *testing.T) {
+	repo := newInMemoryConnRepo()
+	ctx := context.Background()
+	clinicID := uuid.New()
+
+	require.NoError(t, repo.Create(ctx, &model.WhatsAppConnection{
+		ClinicID:  clinicID,
+		Instance:  ptr("gupshup-instance"),
+		Provider:  "GUPSHUP_OFFICIAL",
+		Connected: true,
+		IsActive:  true,
+	}))
+
+	err := repo.Deactivate(ctx, clinicID)
+	require.NoError(t, err)
+
+	_, err = repo.GetActiveByClinicID(ctx, clinicID)
+	assert.Error(t, err, "conexão desativada não deve ser encontrada como ativa")
+}
+
+// TestConnRepo_Deactivate_MultiTenant garante que Deactivate de uma clínica
+// não afeta conexões de outra clínica.
+func TestConnRepo_Deactivate_MultiTenant(t *testing.T) {
+	repo := newInMemoryConnRepo()
+	ctx := context.Background()
+
+	clinicA := uuid.New()
+	clinicB := uuid.New()
+
+	require.NoError(t, repo.Create(ctx, &model.WhatsAppConnection{
+		ClinicID: clinicA, Instance: ptr("instance-a"), Connected: true, IsActive: true,
+	}))
+	require.NoError(t, repo.Create(ctx, &model.WhatsAppConnection{
+		ClinicID: clinicB, Instance: ptr("instance-b"), Connected: true, IsActive: true,
+	}))
+
+	require.NoError(t, repo.Deactivate(ctx, clinicA))
+
+	_, err := repo.GetActiveByClinicID(ctx, clinicA)
+	assert.Error(t, err, "clínica A deve estar desativada")
+
+	connB, err := repo.GetActiveByClinicID(ctx, clinicB)
+	require.NoError(t, err)
+	assert.True(t, connB.Connected, "clínica B não deve ser afetada")
+	assert.True(t, connB.IsActive, "clínica B deve continuar ativa")
 }

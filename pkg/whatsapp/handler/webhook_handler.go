@@ -213,9 +213,9 @@ func (h *whatsAppHandler) Connect(c *gin.Context) {
 				c.JSON(statusCode, errors.ToResponse(err))
 				return
 			}
-			// Allow if this clinic already has a connection (reconnecting), block only new ones
-			_, existingErr := h.connRepo.GetActiveByClinicID(c.Request.Context(), clinic.ID)
-			if existingErr != nil && int(count) >= limit {
+			// Allow if this clinic already had a connection (reconnecting after disconnect), block only truly new ones
+			hasExisting := h.connRepo.HasAnyByClinicID(c.Request.Context(), clinic.ID)
+			if !hasExisting && int(count) >= limit {
 				c.JSON(http.StatusForbidden, errors.ToResponse(
 					errors.ErrValidationInstance.WithMessage(
 						fmt.Sprintf("Limite de %d conexões WhatsApp atingido. Faça upgrade para adicionar mais.", limit))))
@@ -275,6 +275,16 @@ func (h *whatsAppHandler) Connect(c *gin.Context) {
 			qrCode, err = h.service.GetQRCode(c.Request.Context(), instance)
 			if err != nil {
 				logger.Printf("[Connect Handler] GetQRCode attempt %d/%d failed: %v", i+1, maxRetries, err)
+
+				// If instance doesn't exist on provider (404), recreate it
+				if strings.Contains(err.Error(), "does not exist") || strings.Contains(err.Error(), "404") {
+					logger.Printf("[Connect Handler] Instance %s not found on provider, recreating...", instance)
+					if newQR, createErr := h.service.CreateInstance(c.Request.Context(), instance); createErr == nil && newQR != nil && newQR.Base64 != "" {
+						qrCode = newQR
+						break
+					}
+				}
+
 				if i == maxRetries-1 {
 					statusCode := errors.GetStatusCode(err)
 					c.JSON(statusCode, errors.ToResponse(err))
@@ -388,7 +398,13 @@ func (h *whatsAppHandler) Configure(c *gin.Context) {
 	conn, connErr := h.connRepo.GetActiveByClinicID(c.Request.Context(), clinic.ID)
 
 	if connErr != nil {
-		// Create new
+		if req.Provider == "EVOLUTION" {
+			// Evolution connections are created by the Connect handler (which generates the instance name).
+			// Just acknowledge the provider switch here.
+			c.JSON(http.StatusOK, gin.H{"status": "success"})
+			return
+		}
+		// Create new (official API — instance is provided)
 		conn = &model.WhatsAppConnection{
 			ClinicID:      clinic.ID,
 			Provider:      req.Provider,
@@ -396,7 +412,8 @@ func (h *whatsAppHandler) Configure(c *gin.Context) {
 			PhoneNumberID: req.PhoneNumberID,
 			Token:         req.Token,
 			Instance:      req.Instance,
-			Connected:     req.Provider != "EVOLUTION", // Evolution requer ler o QR Code
+			Connected:     true,
+			IsActive:      true,
 		}
 		if err := h.connRepo.Create(c.Request.Context(), conn); err != nil {
 			c.JSON(errors.GetStatusCode(err), errors.ToResponse(err))
@@ -442,17 +459,17 @@ func (h *whatsAppHandler) Disconnect(c *gin.Context) {
 		return
 	}
 
-	// Logout from Evolution API
+	// Logout from provider
 	var instance string
 	if conn.Instance != nil {
 		instance = *conn.Instance
 	}
 	if err := h.service.Logout(c.Request.Context(), instance); err != nil {
-		logger.Printf("Error logging out from Evolution: %v", err)
+		logger.Printf("Error logging out from provider: %v", err)
 	}
 
-	// Update connection status
-	if err := h.connRepo.UpdateConnected(c.Request.Context(), clinic.ID, false); err != nil {
+	// Deactivate connection so it won't be found by GetStatus
+	if err := h.connRepo.Deactivate(c.Request.Context(), clinic.ID); err != nil {
 		statusCode := errors.GetStatusCode(err)
 		c.JSON(statusCode, errors.ToResponse(err))
 		return
@@ -496,12 +513,6 @@ func (h *whatsAppHandler) GetStatus(c *gin.Context) {
 	}
 
 	status.Provider = conn.Provider
-
-	// Update connection status if changed
-	isConnected := status.State == "open"
-	if conn.Connected != isConnected {
-		_ = h.connRepo.UpdateConnected(c.Request.Context(), clinic.ID, isConnected)
-	}
 
 	c.JSON(http.StatusOK, status)
 }

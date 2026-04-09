@@ -87,6 +87,9 @@ func (r *stubConnRepo) GetActiveByClinicID(_ context.Context, _ uuid.UUID) (*wha
 	if r.connErr != nil {
 		return nil, r.connErr
 	}
+	if r.activeConn == nil {
+		return nil, errors.ErrNotFoundInstance.WithMessage("WhatsApp connection not found")
+	}
 	return r.activeConn, nil
 }
 
@@ -123,6 +126,15 @@ func (r *stubConnRepo) UpsertInstance(_ context.Context, clinicID uuid.UUID, ins
 	}
 	r.activeConn = conn
 	r.byInstance[instance] = conn
+	return nil
+}
+
+func (r *stubConnRepo) HasAnyByClinicID(_ context.Context, _ uuid.UUID) bool {
+	return r.activeConn != nil
+}
+
+func (r *stubConnRepo) Deactivate(_ context.Context, _ uuid.UUID) error {
+	r.activeConn = nil
 	return nil
 }
 
@@ -349,6 +361,75 @@ func TestDisconnect_SemConexaoAtiva(t *testing.T) {
 	router.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+// TestDisconnect_DesativaConexao verifica que Disconnect desativa a conexão
+// (is_active=false), impedindo que GetStatus a encontre e reverta o estado.
+func TestDisconnect_DesativaConexao(t *testing.T) {
+	clinicID := uuid.New()
+	clinic := &clinic_model.Clinic{ID: clinicID, Name: "Test Clinic"}
+
+	connRepo := newStubConnRepo()
+	connRepo.activeConn = &whatsapp_model.WhatsAppConnection{
+		ID:        uuid.New(),
+		ClinicID:  clinicID,
+		Instance:  ptr("gupshup-instance"),
+		Provider:  "GUPSHUP_OFFICIAL",
+		Connected: true,
+		IsActive:  true,
+	}
+
+	h := NewWhatsAppHandler(&stubWhatsAppSvc{}, &stubClinicRepo{clinic: clinic}, connRepo, "", "evolution")
+	router := newTestRouter(h, clinicID)
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest(http.MethodPost, "/whatsapp/disconnect", nil)
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	var resp map[string]interface{}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, "disconnected", resp["status"])
+
+	// Conexão deve estar desativada — GetActiveByClinicID não deve encontrar
+	assert.Nil(t, connRepo.activeConn, "conexão deve ter sido desativada")
+}
+
+// TestDisconnect_GetStatus_RetornaDesconectado verifica que após disconnect,
+// GetStatus retorna "disconnected" (não reverte para "open").
+func TestDisconnect_GetStatus_RetornaDesconectado(t *testing.T) {
+	clinicID := uuid.New()
+	clinic := &clinic_model.Clinic{ID: clinicID, Name: "Test Clinic"}
+
+	connRepo := newStubConnRepo()
+	connRepo.activeConn = &whatsapp_model.WhatsAppConnection{
+		ID:        uuid.New(),
+		ClinicID:  clinicID,
+		Instance:  ptr("gupshup-instance"),
+		Provider:  "GUPSHUP_OFFICIAL",
+		Connected: true,
+		IsActive:  true,
+	}
+
+	svc := &stubWhatsAppSvc{statusState: "open"}
+	h := NewWhatsAppHandler(svc, &stubClinicRepo{clinic: clinic}, connRepo, "", "evolution")
+	router := newTestRouter(h, clinicID)
+
+	// Disconnect
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest(http.MethodPost, "/whatsapp/disconnect", nil)
+	router.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	// GetStatus após disconnect deve retornar "disconnected"
+	w = httptest.NewRecorder()
+	req, _ = http.NewRequest(http.MethodGet, "/whatsapp/status", nil)
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	var resp map[string]interface{}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, "disconnected", resp["state"], "após disconnect, status deve ser disconnected")
 }
 
 // ---------------------------------------------------------------------------
