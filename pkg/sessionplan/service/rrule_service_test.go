@@ -194,43 +194,22 @@ func TestCalculateOccurrences(t *testing.T) {
 }
 
 func TestCalculateOccurrencesWithDayTimes(t *testing.T) {
-	// Monday, 2026-01-05 at 09:00
-	dtstart := time.Date(2026, 1, 5, 9, 0, 0, 0, time.UTC)
+	// Monday, 2026-01-05 at 09:00 BRT (12:00 UTC) — simulates DB storage
+	loc, _ := time.LoadLocation("America/Sao_Paulo")
+	if loc == nil {
+		t.Skip("America/Sao_Paulo timezone not available")
+	}
+	dtstartLocal := time.Date(2026, 1, 5, 9, 0, 0, 0, loc)
+	dtstart := dtstartLocal.UTC() // DB stores UTC
 
 	t.Run("different times per weekday", func(t *testing.T) {
-		// MO at 08:00, WE at 14:00
+		// MO at 08:00, WE at 14:00 (local times)
 		dayTimes := map[string]string{
 			"MO": "08:00",
 			"WE": "14:00",
 		}
 		rangeStart := dtstart
-		rangeEnd := dtstart.AddDate(0, 0, 6) // 6 days (Mon-Sun, avoids next Monday)
-
-		dates, err := CalculateOccurrencesWithDayTimes(
-			"FREQ=WEEKLY;BYDAY=MO,WE", dtstart, dayTimes,
-			rangeStart, rangeEnd, -1, 0,
-		)
-		require.NoError(t, err)
-		require.Len(t, dates, 2) // MO + WE
-
-		// Monday should be at 08:00
-		assert.Equal(t, time.Monday, dates[0].Weekday())
-		assert.Equal(t, 8, dates[0].Hour())
-		assert.Equal(t, 0, dates[0].Minute())
-
-		// Wednesday should be at 14:00
-		assert.Equal(t, time.Wednesday, dates[1].Weekday())
-		assert.Equal(t, 14, dates[1].Hour())
-		assert.Equal(t, 0, dates[1].Minute())
-	})
-
-	t.Run("falls back to dtstart time when day not in map", func(t *testing.T) {
-		// Only MO has override, WE uses dtstart time (09:00)
-		dayTimes := map[string]string{
-			"MO": "07:30",
-		}
-		rangeStart := dtstart
-		rangeEnd := dtstart.AddDate(0, 0, 6) // 6 days to avoid next Monday
+		rangeEnd := dtstart.AddDate(0, 0, 6)
 
 		dates, err := CalculateOccurrencesWithDayTimes(
 			"FREQ=WEEKLY;BYDAY=MO,WE", dtstart, dayTimes,
@@ -239,15 +218,45 @@ func TestCalculateOccurrencesWithDayTimes(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, dates, 2)
 
-		// MO at 07:30 (override)
-		assert.Equal(t, time.Monday, dates[0].Weekday())
-		assert.Equal(t, 7, dates[0].Hour())
-		assert.Equal(t, 30, dates[0].Minute())
+		// Monday should be at 08:00 BRT
+		mon := dates[0].In(loc)
+		assert.Equal(t, time.Monday, mon.Weekday())
+		assert.Equal(t, 8, mon.Hour())
+		assert.Equal(t, 0, mon.Minute())
 
-		// WE at 09:00 (fallback to dtstart)
-		assert.Equal(t, time.Wednesday, dates[1].Weekday())
-		assert.Equal(t, 9, dates[1].Hour())
-		assert.Equal(t, 0, dates[1].Minute())
+		// Wednesday should be at 14:00 BRT
+		wed := dates[1].In(loc)
+		assert.Equal(t, time.Wednesday, wed.Weekday())
+		assert.Equal(t, 14, wed.Hour())
+		assert.Equal(t, 0, wed.Minute())
+	})
+
+	t.Run("falls back to dtstart time when day not in map", func(t *testing.T) {
+		// Only MO has override, WE uses dtstart time (09:00 BRT)
+		dayTimes := map[string]string{
+			"MO": "07:30",
+		}
+		rangeStart := dtstart
+		rangeEnd := dtstart.AddDate(0, 0, 6)
+
+		dates, err := CalculateOccurrencesWithDayTimes(
+			"FREQ=WEEKLY;BYDAY=MO,WE", dtstart, dayTimes,
+			rangeStart, rangeEnd, -1, 0,
+		)
+		require.NoError(t, err)
+		require.Len(t, dates, 2)
+
+		// MO at 07:30 BRT (override)
+		mon := dates[0].In(loc)
+		assert.Equal(t, time.Monday, mon.Weekday())
+		assert.Equal(t, 7, mon.Hour())
+		assert.Equal(t, 30, mon.Minute())
+
+		// WE at 09:00 BRT (fallback to dtstart)
+		wed := dates[1].In(loc)
+		assert.Equal(t, time.Wednesday, wed.Weekday())
+		assert.Equal(t, 9, wed.Hour())
+		assert.Equal(t, 0, wed.Minute())
 	})
 
 	t.Run("empty day_times uses dtstart for all", func(t *testing.T) {
@@ -258,9 +267,12 @@ func TestCalculateOccurrencesWithDayTimes(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, dates, 2)
 
+		// With empty dayTimes, falls back to CalculateOccurrences which uses dtstart as-is.
+		// dtstart is 09:00 BRT = 12:00 UTC, so occurrences are at 12:00 UTC.
 		for _, d := range dates {
-			assert.Equal(t, 9, d.Hour())
-			assert.Equal(t, 0, d.Minute())
+			localD := d.In(loc)
+			assert.Equal(t, 9, localD.Hour())
+			assert.Equal(t, 0, localD.Minute())
 		}
 	})
 
@@ -323,6 +335,50 @@ func TestCalculateOccurrencesWithDayTimes(t *testing.T) {
 				"dates[%d]=%s should be after dates[%d]=%s", i, dates[i], i-1, dates[i-1])
 		}
 	})
+}
+
+func TestCalculateOccurrencesWithDayTimes_UTCDtstart(t *testing.T) {
+	// Simulates what happens when dtstart comes from the database (UTC)
+	// but day_times contain local times (e.g. "19:30" means 19:30 in Sao Paulo).
+	// The occurrences must reflect the local time, not UTC.
+	loc, _ := time.LoadLocation("America/Sao_Paulo")
+	if loc == nil {
+		t.Skip("America/Sao_Paulo timezone not available")
+	}
+
+	// dtstart was originally 09:00 BRT = 12:00 UTC (stored in DB as UTC)
+	dtstartUTC := time.Date(2026, 1, 5, 12, 0, 0, 0, time.UTC)
+
+	dayTimes := map[string]string{
+		"MO": "08:00",
+		"WE": "19:30",
+	}
+
+	rangeStart := dtstartUTC
+	rangeEnd := dtstartUTC.AddDate(0, 0, 7)
+
+	dates, err := CalculateOccurrencesWithDayTimes(
+		"FREQ=WEEKLY;BYDAY=MO,WE", dtstartUTC, dayTimes,
+		rangeStart, rangeEnd, -1, 0,
+	)
+	require.NoError(t, err)
+	require.True(t, len(dates) >= 2, "should have at least MO and WE occurrences")
+
+	// Find the Wednesday occurrence
+	var wedDate time.Time
+	for _, d := range dates {
+		if d.In(loc).Weekday() == time.Wednesday {
+			wedDate = d
+			break
+		}
+	}
+	require.False(t, wedDate.IsZero(), "should have a Wednesday occurrence")
+
+	// The Wednesday occurrence should be 19:30 in Sao Paulo (22:30 UTC)
+	wedLocal := wedDate.In(loc)
+	assert.Equal(t, 19, wedLocal.Hour(),
+		"Wednesday should be 19:30 BRT, got %s", wedLocal.Format("15:04"))
+	assert.Equal(t, 30, wedLocal.Minute())
 }
 
 func TestBuildDtStart(t *testing.T) {

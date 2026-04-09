@@ -144,7 +144,15 @@ func CalculateOccurrencesWithDayTimes(rruleStr string, dtstart time.Time, dayTim
 		time string // HH:MM
 	}
 
-	defaultTime := dtstart.Format("15:04")
+	// day_times are always in clinic local time (America/Sao_Paulo).
+	// dtstart from the DB may be in UTC, so we must build overrides in local tz.
+	loc, _ := time.LoadLocation("America/Sao_Paulo")
+	if loc == nil {
+		loc = time.UTC
+	}
+	dtstartLocal := dtstart.In(loc)
+
+	defaultTime := dtstartLocal.Format("15:04")
 	var dayOverrides []dayOccurrence
 	for _, abbr := range strings.Split(byday, ",") {
 		abbr = strings.TrimSpace(abbr)
@@ -167,10 +175,10 @@ func CalculateOccurrencesWithDayTimes(rruleStr string, dtstart time.Time, dayTim
 		// Build a single-day RRULE
 		singleDayRRule := strings.Replace(rruleStr, "BYDAY="+extractBYDAY(rruleStr), "BYDAY="+dayOvr.abbr, 1)
 
-		// Build dtstart with this day's time
+		// Build dtstart with this day's time in local timezone
 		hour, min := 0, 0
 		fmt.Sscanf(dayOvr.time, "%d:%d", &hour, &min)
-		dayDtstart := time.Date(dtstart.Year(), dtstart.Month(), dtstart.Day(), hour, min, 0, 0, dtstart.Location())
+		dayDtstart := time.Date(dtstartLocal.Year(), dtstartLocal.Month(), dtstartLocal.Day(), hour, min, 0, 0, loc)
 
 		dates, err := CalculateOccurrences(singleDayRRule, dayDtstart, dayRangeStart, dayRangeEnd, -1, 0)
 		if err != nil {

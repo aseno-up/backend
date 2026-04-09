@@ -10,6 +10,7 @@ import (
 	"github.com/aseno/backend/internal/errors"
 	appointment_model "github.com/aseno/backend/pkg/appointment/model"
 	appointment_repository "github.com/aseno/backend/pkg/appointment/repository"
+	"github.com/aseno/backend/pkg/sessionplan/model"
 	"github.com/aseno/backend/pkg/sessionplan/repository"
 )
 
@@ -37,6 +38,7 @@ func NewMaterializeService(
 }
 
 // Materialize creates a real appointment from a virtual occurrence of a session plan.
+// Group plans cannot be materialized — they are managed via the attendance flow.
 func (s *materializeService) Materialize(ctx context.Context, clinicID uuid.UUID, sessionPlanID uuid.UUID, dateStr string) (*appointment_model.Appointment, error) {
 	plan, err := s.planRepo.GetByID(ctx, clinicID, sessionPlanID)
 	if err != nil {
@@ -45,6 +47,12 @@ func (s *materializeService) Materialize(ctx context.Context, clinicID uuid.UUID
 
 	if !plan.IsActive() {
 		return nil, errors.ErrValidationInstance.WithMessage("Session plan is not active")
+	}
+
+	// Group plans should not be materialized into individual appointments.
+	// Group sessions are managed via the attendance flow directly.
+	if plan.Type == model.PlanTypeGroup {
+		return nil, errors.ErrValidationInstance.WithMessage("Cannot materialize a group plan. Use the group attendance flow instead.")
 	}
 
 	// Prevent materialization when session limit has been reached
@@ -72,7 +80,12 @@ func (s *materializeService) Materialize(ctx context.Context, clinicID uuid.UUID
 	// Calculate occurrences for just this day
 	dayStart := targetDate
 	dayEnd := targetDate.AddDate(0, 0, 1)
-	occurrences, err := CalculateOccurrences(rruleStr, dtstart, dayStart, dayEnd, plan.TotalSessions, plan.SessionsDone)
+	var occurrences []time.Time
+	if len(plan.DayTimes) > 0 {
+		occurrences, err = CalculateOccurrencesWithDayTimes(rruleStr, dtstart, plan.DayTimes, dayStart, dayEnd, plan.TotalSessions, plan.SessionsDone)
+	} else {
+		occurrences, err = CalculateOccurrences(rruleStr, dtstart, dayStart, dayEnd, plan.TotalSessions, plan.SessionsDone)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to calculate occurrences: %w", err)
 	}
@@ -160,7 +173,12 @@ func (s *materializeService) CancelOccurrence(ctx context.Context, clinicID uuid
 
 	dayStart := targetDate
 	dayEnd := targetDate.AddDate(0, 0, 1)
-	occurrences, err := CalculateOccurrences(rruleStr, dtstart, dayStart, dayEnd, plan.TotalSessions, plan.SessionsDone)
+	var occurrences []time.Time
+	if len(plan.DayTimes) > 0 {
+		occurrences, err = CalculateOccurrencesWithDayTimes(rruleStr, dtstart, plan.DayTimes, dayStart, dayEnd, plan.TotalSessions, plan.SessionsDone)
+	} else {
+		occurrences, err = CalculateOccurrences(rruleStr, dtstart, dayStart, dayEnd, plan.TotalSessions, plan.SessionsDone)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to calculate occurrences: %w", err)
 	}
@@ -259,7 +277,12 @@ func (s *materializeService) RescheduleOccurrence(ctx context.Context, clinicID 
 
 	dayStart := originalDate
 	dayEnd := originalDate.AddDate(0, 0, 1)
-	occurrences, err := CalculateOccurrences(rruleStr, dtstart, dayStart, dayEnd, plan.TotalSessions, plan.SessionsDone)
+	var occurrences []time.Time
+	if len(plan.DayTimes) > 0 {
+		occurrences, err = CalculateOccurrencesWithDayTimes(rruleStr, dtstart, plan.DayTimes, dayStart, dayEnd, plan.TotalSessions, plan.SessionsDone)
+	} else {
+		occurrences, err = CalculateOccurrences(rruleStr, dtstart, dayStart, dayEnd, plan.TotalSessions, plan.SessionsDone)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to calculate occurrences: %w", err)
 	}

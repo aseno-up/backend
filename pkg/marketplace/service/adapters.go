@@ -93,7 +93,7 @@ type appointmentInfoImpl struct {
 
 func (a *appointmentInfoImpl) GetID() uuid.UUID              { return a.apt.ID }
 func (a *appointmentInfoImpl) GetClinicID() uuid.UUID        { return a.apt.ClinicID }
-func (a *appointmentInfoImpl) GetPatientID() uuid.UUID       { return a.apt.PatientID }
+func (a *appointmentInfoImpl) GetPatientID() uuid.UUID { return a.apt.PatientID }
 func (a *appointmentInfoImpl) GetPrice() float64              { return a.apt.Price }
 func (a *appointmentInfoImpl) GetStatus() string              { return string(a.apt.Status) }
 func (a *appointmentInfoImpl) GetPaymentToken() string        { return a.apt.PaymentToken }

@@ -244,6 +244,71 @@ func TestMaterialize_AllowsIndeterminatePlan(t *testing.T) {
 	require.NotNil(t, apt)
 }
 
+func TestMaterialize_RejectsGroupPlan(t *testing.T) {
+	clinicID := uuid.New()
+	profID := uuid.New()
+
+	monday := time.Date(2026, 4, 6, 9, 0, 0, 0, time.UTC)
+	dtstart := monday
+
+	plan := &model.SessionPlan{
+		ID:             uuid.New(),
+		ClinicID:       clinicID,
+		Status:         model.PlanStatusActive,
+		Type:           model.PlanTypeGroup,
+		TotalSessions:  -1,
+		SessionsDone:   0,
+		ProfessionalID: &profID,
+		RRule:          "FREQ=WEEKLY;BYDAY=MO",
+		DtStart:        &dtstart,
+		DurationMins:   50,
+		Title:          "Grupo Pilates",
+	}
+
+	planRepo := &mockMaterializePlanRepo{plan: plan}
+	aptRepo := &mockMaterializeAppointmentRepo{}
+
+	svc := NewMaterializeService(planRepo, aptRepo)
+
+	_, err := svc.Materialize(context.Background(), clinicID, plan.ID, monday.Format("2006-01-02"))
+	require.Error(t, err, "Should reject materialization for group plans")
+	assert.Contains(t, err.Error(), "group")
+	assert.Nil(t, aptRepo.created, "No appointment should be created for group plans")
+}
+
+func TestMaterialize_UsesDayTimesForAppointmentTime(t *testing.T) {
+	clinicID := uuid.New()
+	profID := uuid.New()
+
+	// Wednesday 2026-04-08, dtstart at 09:00
+	wednesday := time.Date(2026, 4, 8, 9, 0, 0, 0, time.UTC)
+	dtstart := time.Date(2026, 4, 6, 9, 0, 0, 0, time.UTC) // Monday start
+
+	plan := &model.SessionPlan{
+		ID:             uuid.New(),
+		ClinicID:       clinicID,
+		Status:         model.PlanStatusActive,
+		TotalSessions:  10,
+		SessionsDone:   0,
+		ProfessionalID: &profID,
+		RRule:          "FREQ=WEEKLY;BYDAY=MO,WE",
+		DtStart:        &dtstart,
+		DurationMins:   50,
+		DayTimes:       model.DayTimesMap{"MO": "08:00", "WE": "14:00"},
+	}
+
+	planRepo := &mockMaterializePlanRepo{plan: plan}
+	aptRepo := &mockMaterializeAppointmentRepo{}
+
+	svc := NewMaterializeService(planRepo, aptRepo)
+
+	apt, err := svc.Materialize(context.Background(), clinicID, plan.ID, wednesday.Format("2006-01-02"))
+	require.NoError(t, err)
+	require.NotNil(t, apt)
+	assert.Equal(t, 14, apt.StartTime.Hour(), "Wednesday session should start at 14:00 as defined in day_times, not 09:00")
+	assert.Equal(t, 0, apt.StartTime.Minute())
+}
+
 // --- Tests: Exception flow (cancel/reschedule single occurrence) ---
 
 func TestCancelOccurrence_SetsIsExceptionAndCanceledStatus(t *testing.T) {
