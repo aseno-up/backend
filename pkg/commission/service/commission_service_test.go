@@ -48,6 +48,15 @@ func (m *mockCommissionRepo) DeleteByAppointmentID(ctx context.Context, appointm
 	return m.Called(ctx, appointmentID, clinicID).Error(0)
 }
 
+func (m *mockCommissionRepo) GetBySessionPlanAndDate(ctx context.Context, sessionPlanID, clinicID uuid.UUID, date string) ([]model.Commission, error) {
+	args := m.Called(ctx, sessionPlanID, clinicID, date)
+	return args.Get(0).([]model.Commission), args.Error(1)
+}
+
+func (m *mockCommissionRepo) DeleteBySessionPlanAndDate(ctx context.Context, sessionPlanID, clinicID uuid.UUID, date string) error {
+	return m.Called(ctx, sessionPlanID, clinicID, date).Error(0)
+}
+
 // --- Mock: ProfessionalProcedureLookup ---
 
 type mockPPLookup struct{ mock.Mock }
@@ -220,6 +229,100 @@ func TestVoidByAppointment(t *testing.T) {
 
 	err := svc.VoidByAppointment(ctx, testAptID, testClinicID)
 
+	assert.NoError(t, err)
+	repo.AssertExpectations(t)
+}
+
+// --- Group Session Commission Tests ---
+
+var testPlanID = uuid.New()
+
+func TestCalculateAndStoreForGroupSession_Percentage(t *testing.T) {
+	svc, repo, ppLookup, _ := newTestService()
+	ctx := context.Background()
+
+	input := &GroupSessionCommissionInput{
+		SessionPlanID:  testPlanID,
+		SessionDate:    "2026-04-09",
+		ProfessionalID: testProfID,
+		ProcedureID:    testProcID,
+		SessionPrice:   200,
+	}
+
+	// No existing commission
+	repo.On("GetBySessionPlanAndDate", ctx, testPlanID, testClinicID, "2026-04-09").
+		Return([]model.Commission{}, nil)
+
+	ppLookup.On("ListByProfessional", ctx, testProfID, testClinicID).
+		Return([]professionalModel.ProfessionalProcedure{
+			{ProcedureID: testProcID, CommissionType: "percentage", CommissionValue: 50},
+		}, nil)
+
+	repo.On("Create", ctx, mock.MatchedBy(func(c *model.Commission) bool {
+		return c.CommissionValue == 100 && // 200 * 50% = 100
+			c.SessionPlanID != nil && *c.SessionPlanID == testPlanID &&
+			c.SessionDate == "2026-04-09" &&
+			c.AppointmentID == nil &&
+			c.Status == model.CommissionStatusPending
+	})).Return(nil)
+
+	err := svc.CalculateAndStoreForGroupSession(ctx, input, testClinicID)
+	assert.NoError(t, err)
+	repo.AssertExpectations(t)
+}
+
+func TestCalculateAndStoreForGroupSession_AlreadyExists_Idempotent(t *testing.T) {
+	svc, repo, _, _ := newTestService()
+	ctx := context.Background()
+
+	input := &GroupSessionCommissionInput{
+		SessionPlanID:  testPlanID,
+		SessionDate:    "2026-04-09",
+		ProfessionalID: testProfID,
+		ProcedureID:    testProcID,
+		SessionPrice:   200,
+	}
+
+	// Already exists
+	repo.On("GetBySessionPlanAndDate", ctx, testPlanID, testClinicID, "2026-04-09").
+		Return([]model.Commission{{ID: uuid.New()}}, nil)
+
+	err := svc.CalculateAndStoreForGroupSession(ctx, input, testClinicID)
+	assert.NoError(t, err)
+	repo.AssertNotCalled(t, "Create")
+}
+
+func TestCalculateAndStoreForGroupSession_NoCommissionConfig(t *testing.T) {
+	svc, repo, ppLookup, _ := newTestService()
+	ctx := context.Background()
+
+	input := &GroupSessionCommissionInput{
+		SessionPlanID:  testPlanID,
+		SessionDate:    "2026-04-09",
+		ProfessionalID: testProfID,
+		ProcedureID:    testProcID,
+		SessionPrice:   200,
+	}
+
+	repo.On("GetBySessionPlanAndDate", ctx, testPlanID, testClinicID, "2026-04-09").
+		Return([]model.Commission{}, nil)
+
+	// No commission config for this professional
+	ppLookup.On("ListByProfessional", ctx, testProfID, testClinicID).
+		Return([]professionalModel.ProfessionalProcedure{}, nil)
+
+	err := svc.CalculateAndStoreForGroupSession(ctx, input, testClinicID)
+	assert.NoError(t, err)
+	repo.AssertNotCalled(t, "Create")
+}
+
+func TestVoidByGroupSession(t *testing.T) {
+	svc, repo, _, _ := newTestService()
+	ctx := context.Background()
+
+	repo.On("DeleteBySessionPlanAndDate", ctx, testPlanID, testClinicID, "2026-04-09").Return(nil)
+
+	err := svc.VoidByGroupSession(ctx, testPlanID, testClinicID, "2026-04-09")
 	assert.NoError(t, err)
 	repo.AssertExpectations(t)
 }

@@ -15,6 +15,7 @@ import (
 // ProfessionalProcedureService handles commission business logic
 type ProfessionalProcedureService interface {
 	ListByProfessional(ctx context.Context, professionalID, clinicID uuid.UUID) ([]model.ProfessionalProcedureResponse, error)
+	ListProfessionalsByProcedure(ctx context.Context, procedureID, clinicID uuid.UUID) ([]model.ProfessionalWithCommission, error)
 	BulkUpsert(ctx context.Context, clinicID, professionalID uuid.UUID, req *model.BulkUpsertProfessionalProcedureRequest) ([]model.ProfessionalProcedureResponse, error)
 	Delete(ctx context.Context, id, clinicID uuid.UUID) error
 }
@@ -163,6 +164,37 @@ func (s *professionalProcedureService) BulkUpsert(ctx context.Context, clinicID,
 
 	// Return updated list
 	return s.ListByProfessional(ctx, professionalID, clinicID)
+}
+
+func (s *professionalProcedureService) ListProfessionalsByProcedure(ctx context.Context, procedureID, clinicID uuid.UUID) ([]model.ProfessionalWithCommission, error) {
+	items, err := s.ppRepo.ListByProcedure(ctx, procedureID, clinicID)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(items) == 0 {
+		return []model.ProfessionalWithCommission{}, nil
+	}
+
+	// Fetch professional names
+	results := make([]model.ProfessionalWithCommission, 0, len(items))
+	for _, item := range items {
+		if !item.IsActive {
+			continue
+		}
+		prof, err := s.professionalRepo.GetByID(ctx, item.ProfessionalID, clinicID)
+		if err != nil {
+			continue
+		}
+		results = append(results, model.ProfessionalWithCommission{
+			ProfessionalID:   item.ProfessionalID,
+			ProfessionalName: prof.Name,
+			CommissionType:   item.CommissionType,
+			CommissionValue:  item.CommissionValue,
+		})
+	}
+
+	return results, nil
 }
 
 func (s *professionalProcedureService) Delete(ctx context.Context, id, clinicID uuid.UUID) error {

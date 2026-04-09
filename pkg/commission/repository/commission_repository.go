@@ -15,10 +15,12 @@ import (
 type CommissionRepository interface {
 	Create(ctx context.Context, commission *model.Commission) error
 	GetByAppointmentID(ctx context.Context, appointmentID, clinicID uuid.UUID) (*model.Commission, error)
+	GetBySessionPlanAndDate(ctx context.Context, sessionPlanID, clinicID uuid.UUID, date string) ([]model.Commission, error)
 	ListByProfessional(ctx context.Context, professionalID, clinicID uuid.UUID, from, to time.Time) ([]model.Commission, error)
 	Summary(ctx context.Context, clinicID uuid.UUID, from, to time.Time) ([]model.ProfessionalCommissionSummary, error)
 	BulkMarkPaid(ctx context.Context, ids []uuid.UUID, clinicID uuid.UUID) error
 	DeleteByAppointmentID(ctx context.Context, appointmentID, clinicID uuid.UUID) error
+	DeleteBySessionPlanAndDate(ctx context.Context, sessionPlanID, clinicID uuid.UUID, date string) error
 }
 
 type commissionRepository struct {
@@ -108,6 +110,27 @@ func (r *commissionRepository) BulkMarkPaid(ctx context.Context, ids []uuid.UUID
 func (r *commissionRepository) DeleteByAppointmentID(ctx context.Context, appointmentID, clinicID uuid.UUID) error {
 	result := r.db.WithContext(ctx).
 		Where("appointment_id = ? AND clinic_id = ?", appointmentID, clinicID).
+		Delete(&model.Commission{})
+	if result.Error != nil {
+		return errors.ErrInternalInstance.WithError(result.Error)
+	}
+	return nil
+}
+
+func (r *commissionRepository) GetBySessionPlanAndDate(ctx context.Context, sessionPlanID, clinicID uuid.UUID, date string) ([]model.Commission, error) {
+	var results []model.Commission
+	err := r.db.WithContext(ctx).
+		Where("session_plan_id = ? AND clinic_id = ? AND session_date = ? AND deleted_at IS NULL", sessionPlanID, clinicID, date).
+		Find(&results).Error
+	if err != nil {
+		return nil, errors.ErrInternalInstance.WithError(err)
+	}
+	return results, nil
+}
+
+func (r *commissionRepository) DeleteBySessionPlanAndDate(ctx context.Context, sessionPlanID, clinicID uuid.UUID, date string) error {
+	result := r.db.WithContext(ctx).
+		Where("session_plan_id = ? AND clinic_id = ? AND session_date = ?", sessionPlanID, clinicID, date).
 		Delete(&model.Commission{})
 	if result.Error != nil {
 		return errors.ErrInternalInstance.WithError(result.Error)

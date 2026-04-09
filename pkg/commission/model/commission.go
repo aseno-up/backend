@@ -14,19 +14,22 @@ const (
 	CommissionStatusPaid    CommissionStatus = "paid"
 )
 
-// Commission records the calculated commission for a completed appointment.
+// Commission records the calculated commission for a completed appointment or group session.
 // Values are snapshots at the time of calculation — changes to commission config
 // do not retroactively affect existing records.
 type Commission struct {
 	ID              uuid.UUID        `json:"id" gorm:"type:uuid;primary_key;default:gen_random_uuid()"`
 	ClinicID        uuid.UUID        `json:"clinic_id" gorm:"type:uuid;not null;index"`
-	AppointmentID   uuid.UUID        `json:"appointment_id" gorm:"type:uuid;not null;uniqueIndex"`
+	AppointmentID   *uuid.UUID       `json:"appointment_id,omitempty" gorm:"type:uuid;index"`              // Set for individual appointment commissions
+	SessionPlanID   *uuid.UUID       `json:"session_plan_id,omitempty" gorm:"type:uuid;index"`             // Set for group session commissions
+	SessionDate     string           `json:"session_date,omitempty" gorm:"size:10"`                        // YYYY-MM-DD, set for group session commissions
 	ProfessionalID  uuid.UUID        `json:"professional_id" gorm:"type:uuid;not null;index"`
 	ProcedureID     uuid.UUID        `json:"procedure_id" gorm:"type:uuid;not null;index"`
-	SessionPrice    float64          `json:"session_price" gorm:"type:decimal(10,2);not null"`    // snapshot: procedure price at session time
-	CommissionType  string           `json:"commission_type" gorm:"type:varchar(10);not null"`    // snapshot: "percentage" | "fixed"
-	CommissionRate  float64          `json:"commission_rate" gorm:"type:decimal(10,4);not null"`  // snapshot: the rate/value configured
-	CommissionValue float64          `json:"commission_value" gorm:"type:decimal(10,2);not null"` // calculated commission amount
+	ProcedureName   string           `json:"procedure_name" gorm:"size:255"`                               // snapshot: procedure name at creation time (for group sessions)
+	SessionPrice    float64          `json:"session_price" gorm:"type:decimal(10,2);not null"`             // snapshot: procedure price at session time
+	CommissionType  string           `json:"commission_type" gorm:"type:varchar(10);not null"`             // snapshot: "percentage" | "fixed"
+	CommissionRate  float64          `json:"commission_rate" gorm:"type:decimal(10,4);not null"`           // snapshot: the rate/value configured
+	CommissionValue float64          `json:"commission_value" gorm:"type:decimal(10,2);not null"`          // calculated commission amount
 	Status          CommissionStatus `json:"status" gorm:"type:varchar(10);not null;default:'pending';index"`
 	PaidAt          *time.Time       `json:"paid_at,omitempty"`
 	CreatedAt       time.Time        `json:"created_at"`
@@ -41,7 +44,9 @@ func (Commission) TableName() string {
 // CommissionDetailResponse is a single commission row for the detailed report
 type CommissionDetailResponse struct {
 	ID              uuid.UUID        `json:"id"`
-	AppointmentID   uuid.UUID        `json:"appointment_id"`
+	AppointmentID   *uuid.UUID       `json:"appointment_id,omitempty"`
+	SessionPlanID   *uuid.UUID       `json:"session_plan_id,omitempty"`
+	SessionDate     string           `json:"session_date,omitempty"`
 	AppointmentDate time.Time        `json:"appointment_date"`
 	PatientName     string           `json:"patient_name"`
 	ProcedureName   string           `json:"procedure_name"`
@@ -51,6 +56,7 @@ type CommissionDetailResponse struct {
 	CommissionValue float64          `json:"commission_value"`
 	Status          CommissionStatus `json:"status"`
 	PaidAt          *time.Time       `json:"paid_at,omitempty"`
+	Source          string           `json:"source"` // "appointment" or "group_session"
 }
 
 // ProfessionalCommissionSummary is one row in the consolidated report

@@ -30,7 +30,7 @@ func NewProfessionalProcedureHandler(service service.ProfessionalProcedureServic
 	return &professionalProcedureHandler{service: service, auditSvc: auditSvc}
 }
 
-// RegisterRoutes registers professional procedure commission routes as sub-routes of /professionals
+// RegisterRoutes registers professional procedure commission routes
 func (h *professionalProcedureHandler) RegisterRoutes(router gin.IRouter) {
 	professionals := router.Group("/professionals")
 	{
@@ -38,6 +38,31 @@ func (h *professionalProcedureHandler) RegisterRoutes(router gin.IRouter) {
 		professionals.PUT("/:id/procedures", h.BulkUpsert)
 		professionals.DELETE("/:id/procedures/:ppId", h.Delete)
 	}
+
+	procedures := router.Group("/procedures")
+	{
+		procedures.GET("/:id/professionals", h.ListProfessionalsByProcedure)
+	}
+}
+
+// ListProfessionalsByProcedure returns professionals that have commission configured for a procedure
+func (h *professionalProcedureHandler) ListProfessionalsByProcedure(c *gin.Context) {
+	clinicID, _ := c.Get("clinic_id")
+
+	procedureID, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, errors.ToResponse(errors.ErrValidationInstance.WithMessage("ID do procedimento inválido")))
+		return
+	}
+
+	result, err := h.service.ListProfessionalsByProcedure(c.Request.Context(), procedureID, clinicID.(uuid.UUID))
+	if err != nil {
+		statusCode := errors.GetStatusCode(err)
+		c.JSON(statusCode, errors.ToResponse(err))
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"data": result})
 }
 
 // List returns all procedure commissions for a professional

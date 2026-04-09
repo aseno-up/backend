@@ -727,6 +727,16 @@ func main() {
 	groupAttendanceSvc := attendance_service.NewGroupAttendanceService(groupAttendanceRepo, sessionPlanRepo, enrollmentRepo)
 	groupAttendanceHdlr := attendance_handler.NewGroupAttendanceHandler(groupAttendanceSvc)
 
+	// Wire commission calculator and session professional repo into group attendance
+	groupSessionProfRepoForAttendance := attendance_repository.NewGroupSessionProfessionalRepository(db.GetDB())
+	groupAttendanceSvc.SetCommissionCalculator(commissionSvc)
+	groupAttendanceSvc.SetSessionProfessionalRepo(groupSessionProfRepoForAttendance)
+
+	// Initialize Group Session Professional service and handler
+	groupSessionProfRepo := attendance_repository.NewGroupSessionProfessionalRepository(db.GetDB())
+	groupSessionProfSvc := attendance_service.NewGroupSessionProfessionalService(groupSessionProfRepo, sessionPlanRepo)
+	groupSessionProfHdlr := attendance_handler.NewGroupSessionProfessionalHandler(groupSessionProfSvc)
+
 	appointmentHandler := appointment_handler.NewAppointmentHandler(
 		appointmentService,
 		appointment_handler.WithAttendanceRecorder(attendanceSvc),
@@ -793,6 +803,9 @@ func main() {
 	planPaymentRepo := sessionplan_repository.NewPlanPaymentRepository(db.GetDB())
 	planPaymentSvc := sessionplan_service.NewPlanPaymentService(planPaymentRepo, sessionPlanRepo, appointmentPaymentRepo)
 	planPaymentHdlr := sessionplan_handler.NewPlanPaymentHandler(planPaymentSvc)
+
+	// Wire plan payment repo into group attendance for guest payments
+	groupAttendanceSvc.SetPlanPaymentRepo(planPaymentRepo)
 
 	// Initialize Invite handler
 	inviteHdlr := invite_handler.NewInviteHandler(inviteSvc, auditSvc)
@@ -916,6 +929,7 @@ func main() {
 		marketplaceHdlr,
 		attendanceHdlr,
 		groupAttendanceHdlr,
+		groupSessionProfHdlr,
 		enrollmentHdlr,
 		planPaymentHdlr,
 		authMiddleware,
@@ -1013,6 +1027,7 @@ func setupRouter(
 	marketplaceHandler marketplace_handler.MarketplaceHandler,
 	attendanceHandler attendance_handler.AttendanceHandler,
 	groupAttendanceHandler attendance_handler.GroupAttendanceHandler,
+	groupSessionProfHandler attendance_handler.GroupSessionProfessionalHandler,
 	enrollmentHandler enrollment_handler.EnrollmentHandler,
 	planPaymentHandler sessionplan_handler.PlanPaymentHandler,
 	authMiddleware auth_middleware.AuthMiddleware,
@@ -1161,6 +1176,9 @@ func setupRouter(
 
 			// Group attendance routes (group session plan attendance by date)
 			groupAttendanceHandler.RegisterRoutes(protected)
+
+			// Group session professional routes (professional assignment per session date)
+			groupSessionProfHandler.RegisterRoutes(protected)
 
 			// Plan payment routes (upfront/monthly payments)
 			planPaymentHandler.RegisterRoutes(protected)
@@ -1332,6 +1350,7 @@ func runMigrations(db *database.Database) error {
 		&sessionplan_model.SessionPlan{},
 		&attendance_model.AppointmentAttendance{},
 		&attendance_model.GroupSessionAttendance{},
+		&attendance_model.GroupSessionProfessional{},
 		&enrollment_model.SessionPlanEnrollment{},
 		&sessionplan_model.SessionPlanPayment{},
 		&invite_model.Invite{},
@@ -1380,6 +1399,12 @@ func runMigrations(db *database.Database) error {
 	if err := db.AutoMigrate(models...); err != nil {
 		return err
 	}
+
+	// Drop legacy unique index on commissions.appointment_id (now nullable for group sessions)
+	db.GetDB().Exec(`DROP INDEX IF EXISTS idx_commissions_appointment_id`)
+
+	// Make appointment_id nullable for group session commissions (GORM AutoMigrate does not drop NOT NULL)
+	db.GetDB().Exec(`ALTER TABLE commissions ALTER COLUMN appointment_id DROP NOT NULL`)
 
 	// Partial index for payment timeout worker (only indexes awaiting_payment rows)
 	db.GetDB().Exec(`

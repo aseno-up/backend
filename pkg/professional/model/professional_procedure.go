@@ -37,6 +37,14 @@ type ProfessionalProcedureResponse struct {
 	IsActive        bool      `json:"is_active"`
 }
 
+// ProfessionalWithCommission represents a professional that has commission configured for a procedure
+type ProfessionalWithCommission struct {
+	ProfessionalID   uuid.UUID `json:"professional_id"`
+	ProfessionalName string    `json:"professional_name"`
+	CommissionType   string    `json:"commission_type"`
+	CommissionValue  float64   `json:"commission_value"`
+}
+
 // BulkUpsertItem represents a single item in a bulk upsert request
 type BulkUpsertItem struct {
 	ProcedureID     uuid.UUID `json:"procedure_id" binding:"required"`

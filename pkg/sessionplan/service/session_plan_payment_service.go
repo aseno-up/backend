@@ -83,7 +83,8 @@ func (s *planPaymentService) CreatePlanPayment(ctx context.Context, clinicID, se
 }
 
 // GetPlanPayments retrieves all payments for a plan.
-// For per_session plans, it aggregates appointment payments from linked appointments.
+// For per_session plans, it aggregates appointment payments from linked appointments
+// plus any direct SessionPlanPayments (e.g. guest payments for group plans).
 func (s *planPaymentService) GetPlanPayments(ctx context.Context, clinicID, sessionPlanID uuid.UUID) ([]*model.SessionPlanPayment, error) {
 	plan, err := s.planRepo.GetByID(ctx, clinicID, sessionPlanID)
 	if err != nil {
@@ -91,7 +92,22 @@ func (s *planPaymentService) GetPlanPayments(ctx context.Context, clinicID, sess
 	}
 
 	if plan.PaymentMode == model.PaymentModePerSession {
-		return s.getAppointmentPaymentsAsPlanPayments(ctx, clinicID, sessionPlanID)
+		aptPayments, err := s.getAppointmentPaymentsAsPlanPayments(ctx, clinicID, sessionPlanID)
+		if err != nil {
+			return nil, err
+		}
+
+		// Also include direct plan payments (guest avulso payments for group plans)
+		directPayments, err := s.paymentRepo.GetByPlan(ctx, clinicID, sessionPlanID)
+		if err != nil {
+			return nil, err
+		}
+
+		if len(directPayments) > 0 {
+			aptPayments = append(aptPayments, directPayments...)
+		}
+
+		return aptPayments, nil
 	}
 
 	return s.paymentRepo.GetByPlan(ctx, clinicID, sessionPlanID)

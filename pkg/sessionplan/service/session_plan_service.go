@@ -59,6 +59,11 @@ func (s *sessionPlanService) Create(ctx context.Context, clinicID uuid.UUID, req
 		return nil, errors.ErrValidationInstance.WithMessage("Invalid start date format. Use YYYY-MM-DD")
 	}
 
+	// Procedure is required for commission calculation
+	if req.ProcedureID == nil {
+		return nil, errors.ErrValidationInstance.WithMessage("Procedimento é obrigatório para criar um plano de sessão.")
+	}
+
 	// Validate frequency and week days
 	if req.Frequency == model.FrequencyCustom && len(req.WeekDays) == 0 {
 		return nil, errors.ErrValidationInstance.WithMessage("Week days are required for custom frequency")

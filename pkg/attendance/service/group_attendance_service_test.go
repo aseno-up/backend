@@ -113,6 +113,34 @@ func (m *mockGroupEnrollmentRepo) UpdateStatus(_ context.Context, _, enrollmentI
 	return nil
 }
 
+// --- Mock Plan Payment Repo ---
+
+type mockPlanPaymentRepo struct {
+	created []*sessionplan_model.SessionPlanPayment
+}
+
+func (m *mockPlanPaymentRepo) Create(_ context.Context, p *sessionplan_model.SessionPlanPayment) error {
+	p.ID = uuid.New()
+	m.created = append(m.created, p)
+	return nil
+}
+func (m *mockPlanPaymentRepo) GetByPlan(_ context.Context, _, _ uuid.UUID) ([]*sessionplan_model.SessionPlanPayment, error) {
+	return nil, nil
+}
+func (m *mockPlanPaymentRepo) GetByEnrollment(_ context.Context, _, _ uuid.UUID) ([]*sessionplan_model.SessionPlanPayment, error) {
+	return nil, nil
+}
+func (m *mockPlanPaymentRepo) GetTotalPaidByPlan(_ context.Context, _, _ uuid.UUID) (float64, error) {
+	return 0, nil
+}
+func (m *mockPlanPaymentRepo) GetTotalPaidByEnrollment(_ context.Context, _, _ uuid.UUID) (float64, error) {
+	return 0, nil
+}
+func (m *mockPlanPaymentRepo) GetTotalPaidByEnrollmentAndDate(_ context.Context, _, _ uuid.UUID, _ string) (float64, error) {
+	return 0, nil
+}
+func (m *mockPlanPaymentRepo) Delete(_ context.Context, _, _ uuid.UUID) error { return nil }
+
 // --- Helper to build group attendance service ---
 
 func buildGroupAttendanceService(
@@ -402,4 +430,84 @@ func TestRecordGroupAttendance_MultipleEntries(t *testing.T) {
 	require.Len(t, results, 2)
 	assert.True(t, enrollRepo.incrementCalled[enrollment1ID.String()], "Patient1 present → should increment")
 	assert.False(t, enrollRepo.incrementCalled[enrollment2ID.String()], "Patient2 absent → should NOT increment")
+}
+
+func TestRecordGroupAttendance_GuestWithPayment_CreatesSessionPlanPayment(t *testing.T) {
+	clinicID := uuid.New()
+	planID := uuid.New()
+	guestID := uuid.New()
+	paymentMethodID := uuid.New()
+	amount := 80.0
+
+	plan := &sessionplan_model.SessionPlan{
+		ID:       planID,
+		ClinicID: clinicID,
+		Type:     sessionplan_model.PlanTypeGroup,
+		Status:   sessionplan_model.PlanStatusActive,
+	}
+
+	gaRepo := newMockGroupAttendanceRepo()
+	planRepo := &mockGroupPlanRepo{plan: plan}
+	enrollRepo := newMockGroupEnrollmentRepo()
+	paymentRepo := &mockPlanPaymentRepo{}
+
+	svc := buildGroupAttendanceService(gaRepo, planRepo, enrollRepo)
+	svc.SetPlanPaymentRepo(paymentRepo)
+
+	results, err := svc.RecordGroupAttendance(context.Background(), clinicID, planID, &model.RecordGroupAttendanceRequest{
+		Date: "2026-04-09",
+		Entries: []model.GroupAttendanceEntry{
+			{
+				PatientID:       guestID,
+				Status:          model.AttendanceStatusPresent,
+				IsGuest:         true,
+				PaymentMethodID: &paymentMethodID,
+				PaymentAmount:   &amount,
+			},
+		},
+	})
+
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.True(t, results[0].IsGuest)
+
+	require.Len(t, paymentRepo.created, 1, "Should create a SessionPlanPayment for guest")
+	payment := paymentRepo.created[0]
+	assert.Equal(t, planID, payment.SessionPlanID)
+	assert.Equal(t, paymentMethodID, payment.PaymentMethodID)
+	assert.Equal(t, amount, payment.Amount)
+	assert.Equal(t, "2026-04-09", payment.SessionDate)
+	assert.Nil(t, payment.EnrollmentID, "Guest payment should not have enrollment")
+	assert.Contains(t, payment.Notes, "convidado")
+}
+
+func TestRecordGroupAttendance_GuestWithoutPayment_NoPlanPayment(t *testing.T) {
+	clinicID := uuid.New()
+	planID := uuid.New()
+	guestID := uuid.New()
+
+	plan := &sessionplan_model.SessionPlan{
+		ID:       planID,
+		ClinicID: clinicID,
+		Type:     sessionplan_model.PlanTypeGroup,
+		Status:   sessionplan_model.PlanStatusActive,
+	}
+
+	gaRepo := newMockGroupAttendanceRepo()
+	planRepo := &mockGroupPlanRepo{plan: plan}
+	enrollRepo := newMockGroupEnrollmentRepo()
+	paymentRepo := &mockPlanPaymentRepo{}
+
+	svc := buildGroupAttendanceService(gaRepo, planRepo, enrollRepo)
+	svc.SetPlanPaymentRepo(paymentRepo)
+
+	_, err := svc.RecordGroupAttendance(context.Background(), clinicID, planID, &model.RecordGroupAttendanceRequest{
+		Date: "2026-04-09",
+		Entries: []model.GroupAttendanceEntry{
+			{PatientID: guestID, Status: model.AttendanceStatusPresent, IsGuest: true},
+		},
+	})
+
+	require.NoError(t, err)
+	assert.Empty(t, paymentRepo.created, "No payment should be created without payment info")
 }

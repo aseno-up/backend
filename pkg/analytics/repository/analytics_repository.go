@@ -326,18 +326,33 @@ func (r *analyticsRepository) GetFinancialSummary(ctx context.Context, clinicID 
 		}
 	}
 
-	// Get actual received amounts from appointment_payments
+	// Get actual received amounts from appointment_payments + session_plan_payments
 	paymentQuery := `
 		SELECT
-			COALESCE(SUM(ap.amount), 0) as total_received,
-			COALESCE(SUM(ap.discount), 0) as total_discount
-		FROM appointment_payments ap
-		INNER JOIN appointments a ON ap.appointment_id = a.id
-		WHERE a.clinic_id = ?
-			AND a.start_time BETWEEN ? AND ?
-			AND a.status = 'completed'
-			AND a.deleted_at IS NULL
-			AND ap.deleted_at IS NULL
+			COALESCE(SUM(total_received), 0) as total_received,
+			COALESCE(SUM(total_discount), 0) as total_discount
+		FROM (
+			SELECT
+				COALESCE(SUM(ap.amount), 0) as total_received,
+				COALESCE(SUM(ap.discount), 0) as total_discount
+			FROM appointment_payments ap
+			INNER JOIN appointments a ON ap.appointment_id = a.id
+			WHERE a.clinic_id = ?
+				AND a.start_time BETWEEN ? AND ?
+				AND a.status = 'completed'
+				AND a.deleted_at IS NULL
+				AND ap.deleted_at IS NULL
+			UNION ALL
+			SELECT
+				COALESCE(SUM(spp.amount), 0) as total_received,
+				COALESCE(SUM(spp.discount), 0) as total_discount
+			FROM session_plan_payments spp
+			INNER JOIN session_plans sp ON spp.session_plan_id = sp.id
+			WHERE spp.clinic_id = ?
+				AND spp.paid_at BETWEEN ? AND ?
+				AND spp.deleted_at IS NULL
+				AND sp.deleted_at IS NULL
+		) combined
 	`
 
 	var paymentData struct {
@@ -346,13 +361,43 @@ func (r *analyticsRepository) GetFinancialSummary(ctx context.Context, clinicID 
 	}
 
 	if professionalID != nil {
-		paymentQuery += " AND a.professional_id = ?"
-		err := r.db.WithContext(ctx).Raw(paymentQuery, clinicID, start, end, *professionalID).Scan(&paymentData).Error
+		// For professional filter, we need to add the condition to both sub-queries.
+		// Rebuild the query with professional filter on both branches.
+		paymentQuery = `
+			SELECT
+				COALESCE(SUM(total_received), 0) as total_received,
+				COALESCE(SUM(total_discount), 0) as total_discount
+			FROM (
+				SELECT
+					COALESCE(SUM(ap.amount), 0) as total_received,
+					COALESCE(SUM(ap.discount), 0) as total_discount
+				FROM appointment_payments ap
+				INNER JOIN appointments a ON ap.appointment_id = a.id
+				WHERE a.clinic_id = ?
+					AND a.start_time BETWEEN ? AND ?
+					AND a.status = 'completed'
+					AND a.deleted_at IS NULL
+					AND ap.deleted_at IS NULL
+					AND a.professional_id = ?
+				UNION ALL
+				SELECT
+					COALESCE(SUM(spp.amount), 0) as total_received,
+					COALESCE(SUM(spp.discount), 0) as total_discount
+				FROM session_plan_payments spp
+				INNER JOIN session_plans sp ON spp.session_plan_id = sp.id
+				WHERE spp.clinic_id = ?
+					AND spp.paid_at BETWEEN ? AND ?
+					AND spp.deleted_at IS NULL
+					AND sp.deleted_at IS NULL
+					AND sp.professional_id = ?
+			) combined
+		`
+		err := r.db.WithContext(ctx).Raw(paymentQuery, clinicID, start, end, *professionalID, clinicID, start, end, *professionalID).Scan(&paymentData).Error
 		if err != nil {
 			return nil, errors.ErrInternalInstance.WithError(err)
 		}
 	} else {
-		err := r.db.WithContext(ctx).Raw(paymentQuery, clinicID, start, end).Scan(&paymentData).Error
+		err := r.db.WithContext(ctx).Raw(paymentQuery, clinicID, start, end, clinicID, start, end).Scan(&paymentData).Error
 		if err != nil {
 			return nil, errors.ErrInternalInstance.WithError(err)
 		}
@@ -373,45 +418,75 @@ func (r *analyticsRepository) GetFinancialSummary(ctx context.Context, clinicID 
 }
 
 // GetDailyReceivables retrieves financial data grouped by day
+// Includes both appointment_payments and session_plan_payments.
 func (r *analyticsRepository) GetDailyReceivables(ctx context.Context, clinicID uuid.UUID, professionalID *uuid.UUID, start, end time.Time) ([]model.DailyReceivable, error) {
+	// Combine appointment data (sessions, expected, received) with session_plan_payments received
+	// using a CTE-like approach with UNION ALL and then aggregate by date.
 	query := `
 		SELECT
-			TO_CHAR(a.start_time, 'YYYY-MM-DD') as date,
-			COUNT(*) as sessions,
-			COALESCE(SUM(a.price), 0) as expected,
-			COALESCE(SUM(
-				(SELECT COALESCE(SUM(ap.amount), 0) FROM appointment_payments ap WHERE ap.appointment_id = a.id AND ap.deleted_at IS NULL)
-			), 0) as received
-		FROM appointments a
-		WHERE a.clinic_id = ?
-			AND a.start_time BETWEEN ? AND ?
-			AND a.status = 'completed'
-			AND a.deleted_at IS NULL
+			date,
+			SUM(sessions) as sessions,
+			SUM(expected) as expected,
+			SUM(received) as received
+		FROM (
+			SELECT
+				TO_CHAR(a.start_time, 'YYYY-MM-DD') as date,
+				COUNT(*) as sessions,
+				COALESCE(SUM(a.price), 0) as expected,
+				COALESCE(SUM(
+					(SELECT COALESCE(SUM(ap.amount), 0) FROM appointment_payments ap WHERE ap.appointment_id = a.id AND ap.deleted_at IS NULL)
+				), 0) as received
+			FROM appointments a
+			WHERE a.clinic_id = ?
+				AND a.start_time BETWEEN ? AND ?
+				AND a.status = 'completed'
+				AND a.deleted_at IS NULL
 	`
 
 	if professionalID != nil {
 		query += " AND a.professional_id = ?"
-		query += " GROUP BY TO_CHAR(a.start_time, 'YYYY-MM-DD') ORDER BY date DESC"
-		var results []model.DailyReceivable
-		err := r.db.WithContext(ctx).Raw(query, clinicID, start, end, *professionalID).Scan(&results).Error
-		if err != nil {
-			return nil, errors.ErrInternalInstance.WithError(err)
-		}
-		for i := range results {
-			results[i].Pending = results[i].Expected - results[i].Received
-			if results[i].Pending < 0 {
-				results[i].Pending = 0
-			}
-		}
-		return results, nil
 	}
 
-	query += " GROUP BY TO_CHAR(a.start_time, 'YYYY-MM-DD') ORDER BY date DESC"
+	query += `
+			GROUP BY TO_CHAR(a.start_time, 'YYYY-MM-DD')
+			UNION ALL
+			SELECT
+				TO_CHAR(spp.paid_at, 'YYYY-MM-DD') as date,
+				0 as sessions,
+				0 as expected,
+				COALESCE(SUM(spp.amount), 0) as received
+			FROM session_plan_payments spp
+			INNER JOIN session_plans sp ON spp.session_plan_id = sp.id
+			WHERE spp.clinic_id = ?
+				AND spp.paid_at BETWEEN ? AND ?
+				AND spp.deleted_at IS NULL
+				AND sp.deleted_at IS NULL
+	`
+
+	if professionalID != nil {
+		query += " AND sp.professional_id = ?"
+	}
+
+	query += `
+			GROUP BY TO_CHAR(spp.paid_at, 'YYYY-MM-DD')
+		) combined
+		GROUP BY date
+		ORDER BY date DESC
+	`
+
 	var results []model.DailyReceivable
-	err := r.db.WithContext(ctx).Raw(query, clinicID, start, end).Scan(&results).Error
+	var err error
+
+	if professionalID != nil {
+		err = r.db.WithContext(ctx).Raw(query, clinicID, start, end, *professionalID, clinicID, start, end, *professionalID).Scan(&results).Error
+	} else {
+		err = r.db.WithContext(ctx).Raw(query, clinicID, start, end, clinicID, start, end).Scan(&results).Error
+	}
+
 	if err != nil {
 		return nil, errors.ErrInternalInstance.WithError(err)
 	}
+
 	for i := range results {
 		results[i].Pending = results[i].Expected - results[i].Received
 		if results[i].Pending < 0 {
@@ -422,27 +497,50 @@ func (r *analyticsRepository) GetDailyReceivables(ctx context.Context, clinicID 
 }
 
 // GetPaymentMethodBreakdown retrieves revenue breakdown by payment method
+// Includes both appointment_payments and session_plan_payments.
 func (r *analyticsRepository) GetPaymentMethodBreakdown(ctx context.Context, clinicID uuid.UUID, start, end time.Time) ([]model.PaymentMethodBreakdown, error) {
 	query := `
 		SELECT
-			pm.name as method_name,
-			pm.type as method_type,
-			COALESCE(SUM(ap.amount), 0) as total,
-			COUNT(*) as count
-		FROM appointment_payments ap
-		INNER JOIN appointments a ON ap.appointment_id = a.id
-		INNER JOIN payment_methods pm ON ap.payment_method_id = pm.id
-		WHERE a.clinic_id = ?
-			AND a.start_time BETWEEN ? AND ?
-			AND a.status = 'completed'
-			AND a.deleted_at IS NULL
-			AND ap.deleted_at IS NULL
-		GROUP BY pm.id, pm.name, pm.type
+			method_name,
+			method_type,
+			SUM(total) as total,
+			SUM(count) as count
+		FROM (
+			SELECT
+				pm.name as method_name,
+				pm.type as method_type,
+				COALESCE(SUM(ap.amount), 0) as total,
+				COUNT(*) as count
+			FROM appointment_payments ap
+			INNER JOIN appointments a ON ap.appointment_id = a.id
+			INNER JOIN payment_methods pm ON ap.payment_method_id = pm.id
+			WHERE a.clinic_id = ?
+				AND a.start_time BETWEEN ? AND ?
+				AND a.status = 'completed'
+				AND a.deleted_at IS NULL
+				AND ap.deleted_at IS NULL
+			GROUP BY pm.id, pm.name, pm.type
+			UNION ALL
+			SELECT
+				pm.name as method_name,
+				pm.type as method_type,
+				COALESCE(SUM(spp.amount), 0) as total,
+				COUNT(*) as count
+			FROM session_plan_payments spp
+			INNER JOIN session_plans sp ON spp.session_plan_id = sp.id
+			INNER JOIN payment_methods pm ON spp.payment_method_id = pm.id
+			WHERE spp.clinic_id = ?
+				AND spp.paid_at BETWEEN ? AND ?
+				AND spp.deleted_at IS NULL
+				AND sp.deleted_at IS NULL
+			GROUP BY pm.id, pm.name, pm.type
+		) combined
+		GROUP BY method_name, method_type
 		ORDER BY total DESC
 	`
 
 	var results []model.PaymentMethodBreakdown
-	err := r.db.WithContext(ctx).Raw(query, clinicID, start, end).Scan(&results).Error
+	err := r.db.WithContext(ctx).Raw(query, clinicID, start, end, clinicID, start, end).Scan(&results).Error
 	if err != nil {
 		return nil, errors.ErrInternalInstance.WithError(err)
 	}

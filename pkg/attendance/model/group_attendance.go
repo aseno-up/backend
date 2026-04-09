@@ -32,9 +32,11 @@ func (GroupSessionAttendance) TableName() string {
 
 // GroupAttendanceEntry represents a single entry in a bulk group attendance request
 type GroupAttendanceEntry struct {
-	PatientID uuid.UUID        `json:"patient_id" binding:"required"`
-	Status    AttendanceStatus `json:"status" binding:"required"`
-	IsGuest   bool             `json:"is_guest"`
+	PatientID       uuid.UUID        `json:"patient_id" binding:"required"`
+	Status          AttendanceStatus `json:"status" binding:"required"`
+	IsGuest         bool             `json:"is_guest"`
+	PaymentMethodID *uuid.UUID       `json:"payment_method_id,omitempty"` // For guest avulso payment
+	PaymentAmount   *float64         `json:"payment_amount,omitempty"`    // For guest avulso payment
 }
 
 // RecordGroupAttendanceRequest represents the request to record attendance for a group session
