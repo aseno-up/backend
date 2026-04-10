@@ -221,11 +221,11 @@ func (s *userService) RemoveUser(ctx context.Context, clinicID, userID, currentU
 		return errors.ErrCannotRemoveOwnerInstance
 	}
 
-	// Unlink professional before deleting user (professional continues to exist)
+	// Deactivate linked professional (keeps history for reports, but removes from schedule)
 	if s.professionalRepo != nil {
 		prof, err := s.professionalRepo.GetByUserID(ctx, userID, clinicID)
 		if err == nil && prof != nil {
-			prof.UserID = nil
+			prof.IsActive = false
 			_ = s.professionalRepo.Update(ctx, prof)
 		}
 	}
@@ -246,12 +246,12 @@ func (s *userService) BulkRemoveUsers(ctx context.Context, clinicID uuid.UUID, c
 		return errors.ErrValidationInstance.WithMessage("Não é possível remover a si próprio desta forma")
 	}
 
-	// Unlink professionals before deleting users
+	// Deactivate linked professionals
 	if s.professionalRepo != nil {
 		for _, uid := range idsToDelete {
 			prof, err := s.professionalRepo.GetByUserID(ctx, uid, clinicID)
 			if err == nil && prof != nil {
-				prof.UserID = nil
+				prof.IsActive = false
 				_ = s.professionalRepo.Update(ctx, prof)
 			}
 		}

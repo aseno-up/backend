@@ -23,6 +23,7 @@ import (
 	email_service "github.com/aseno/backend/pkg/email/service"
 	payment_model "github.com/aseno/backend/pkg/payment/model"
 	plan_repo "github.com/aseno/backend/pkg/plan/repository"
+	professional_model "github.com/aseno/backend/pkg/professional/model"
 	professional_repository "github.com/aseno/backend/pkg/professional/repository"
 	user_model "github.com/aseno/backend/pkg/user/model"
 	user_repository "github.com/aseno/backend/pkg/user/repository"
@@ -361,6 +362,30 @@ func (s *authService) Register(ctx context.Context, req *model.RegisterRequest) 
 		})
 	}
 
+	// Create professional linked to the owner user (non-blocking — user can link later if this fails)
+	if s.professionalRepo != nil {
+		defaultSlot := []professional_model.TimeSlot{{Start: "09:00", End: "18:00"}}
+		professional := &professional_model.Professional{
+			ClinicID: clinicID,
+			UserID:   &userID,
+			Name:     req.Name,
+			Email:    req.Email,
+			Phone:    req.Phone,
+			Color:    "#7C3AED",
+			IsActive: true,
+			WorkingHours: professional_model.WorkingHours{
+				Monday:    defaultSlot,
+				Tuesday:   defaultSlot,
+				Wednesday: defaultSlot,
+				Thursday:  defaultSlot,
+				Friday:    defaultSlot,
+			},
+		}
+		if err := s.professionalRepo.Create(ctx, professional); err != nil {
+			fmt.Printf("[AUTH] Failed to create professional for user %s: %v\n", userID, err)
+		}
+	}
+
 	// Generate tokens
 	tc := s.buildTokenContext(ctx, user, clinicID)
 	tokenPair, err := s.jwtService.GenerateTokenPair(tc)
@@ -613,6 +638,29 @@ func (s *authService) GoogleLogin(ctx context.Context, req *model.GoogleLoginReq
 				Role:     user_model.UserRoleOwner,
 				IsActive: true,
 			})
+		}
+
+		// Create professional linked to the owner user (non-blocking — user can link later if this fails)
+		if s.professionalRepo != nil {
+			defaultSlot := []professional_model.TimeSlot{{Start: "09:00", End: "18:00"}}
+			professional := &professional_model.Professional{
+				ClinicID: clinicID,
+				UserID:   &userID,
+				Name:     googleUser.Name,
+				Email:    googleUser.Email,
+				Color:    "#7C3AED",
+				IsActive: true,
+				WorkingHours: professional_model.WorkingHours{
+					Monday:    defaultSlot,
+					Tuesday:   defaultSlot,
+					Wednesday: defaultSlot,
+					Thursday:  defaultSlot,
+					Friday:    defaultSlot,
+				},
+			}
+			if err := s.professionalRepo.Create(ctx, professional); err != nil {
+				fmt.Printf("[AUTH] Failed to create professional for Google user %s: %v\n", userID, err)
+			}
 		}
 
 		// Create Asaas customer unconditionally for the new account

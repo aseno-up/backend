@@ -394,7 +394,7 @@ func main() {
 	} else {
 		authService = auth_service.NewAuthService(userRepo, clinicRepo, accountRepo, passwordResetRepo, emailVerificationRepo, planRepo, professionalRepo, clinicMemberRepo, jwtService, emailSvc, cfg.GetFrontendURL())
 	}
-	professionalService := professional_service.NewProfessionalService(professionalRepo, clinicRepo, appointmentRepo)
+	professionalService := professional_service.NewProfessionalService(professionalRepo, clinicRepo, appointmentRepo, userRepo)
 	professionalProcedureService := professional_service.NewProfessionalProcedureService(professionalProcedureRepo, professionalRepo, procedureRepo)
 	commissionSvc := commission_service.NewCommissionService(commissionRepo, professionalProcedureRepo, appointmentRepo)
 	patientService := patient_service.NewPatientService(patientRepo, clinicRepo)
@@ -708,7 +708,7 @@ func main() {
 	// Initialize handlers
 	healthHandler := health_handler.NewHealthHandler(db)
 	authHandler := auth_handler.NewAuthHandler(authService)
-	professionalHandler := professional_handler.NewProfessionalHandler(professionalService, auditSvc)
+	professionalHandler := professional_handler.NewProfessionalHandler(professionalService, inviteSvc, auditSvc)
 	professionalProcedureHandler := professional_handler.NewProfessionalProcedureHandler(professionalProcedureService, auditSvc)
 	commissionHandler := commission_handler.NewCommissionHandler(commissionSvc, auditSvc)
 	patientHandler := patient_handler.NewPatientHandler(patientService)

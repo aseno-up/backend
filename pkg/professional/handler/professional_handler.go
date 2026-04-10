@@ -9,9 +9,12 @@ import (
 	"github.com/aseno/backend/internal/errors"
 	audit_model "github.com/aseno/backend/pkg/audit/model"
 	audit_service "github.com/aseno/backend/pkg/audit/service"
+	invite_model "github.com/aseno/backend/pkg/invite/model"
+	invite_service "github.com/aseno/backend/pkg/invite/service"
 	"github.com/aseno/backend/pkg/pagination"
 	"github.com/aseno/backend/pkg/professional/model"
 	"github.com/aseno/backend/pkg/professional/service"
+	user_model "github.com/aseno/backend/pkg/user/model"
 )
 
 // ProfessionalHandler defines the interface for professional handlers
@@ -27,13 +30,14 @@ type ProfessionalHandler interface {
 
 // professionalHandler implements ProfessionalHandler
 type professionalHandler struct {
-	service  service.ProfessionalService
-	auditSvc audit_service.AuditService
+	service    service.ProfessionalService
+	inviteSvc  invite_service.InviteService
+	auditSvc   audit_service.AuditService
 }
 
 // NewProfessionalHandler creates a new professional handler
-func NewProfessionalHandler(service service.ProfessionalService, auditSvc audit_service.AuditService) ProfessionalHandler {
-	return &professionalHandler{service: service, auditSvc: auditSvc}
+func NewProfessionalHandler(service service.ProfessionalService, inviteSvc invite_service.InviteService, auditSvc audit_service.AuditService) ProfessionalHandler {
+	return &professionalHandler{service: service, inviteSvc: inviteSvc, auditSvc: auditSvc}
 }
 
 // RegisterRoutes registers professional routes
@@ -44,33 +48,67 @@ func (h *professionalHandler) RegisterRoutes(router gin.IRouter) {
 		professionals.GET("", h.List)
 		professionals.GET("/:id", h.GetByID)
 		professionals.PUT("/:id", h.Update)
-		professionals.DELETE("/:id", h.Delete)
-		professionals.POST("/bulk-delete", h.BulkDelete)
 	}
 }
 
-// Create handles creating a new professional
+// createProfessionalRequest represents the new POST /professionals request
+// Either email (sends invite) or user_id (links to existing user) must be provided
+type createProfessionalRequest struct {
+	Email  string     `json:"email" binding:"omitempty,email"`
+	UserID *uuid.UUID `json:"user_id"`
+}
+
+// Create handles creating a new professional via invite (email) or linking to existing user (user_id)
 func (h *professionalHandler) Create(c *gin.Context) {
 	clinicID, _ := c.Get("clinic_id")
+	userID, _ := c.Get("user_id")
 
-	var req model.CreateProfessionalRequest
+	var req createProfessionalRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, errors.ToResponse(errors.ErrValidationInstance.WithError(err)))
 		return
 	}
 
-	professional, err := h.service.Create(c.Request.Context(), clinicID.(uuid.UUID), &req)
+	if req.Email == "" && req.UserID == nil {
+		c.JSON(http.StatusBadRequest, errors.ToResponse(errors.ErrValidationInstance.WithMessage(
+			"Informe o email para enviar convite ou o user_id para vincular a um usuário existente")))
+		return
+	}
+
+	ctx := c.Request.Context()
+
+	if req.UserID != nil {
+		// Option 2: Link to existing user (owner/admin)
+		professional, err := h.service.CreateForExistingUser(ctx, clinicID.(uuid.UUID), *req.UserID)
+		if err != nil {
+			statusCode := errors.GetStatusCode(err)
+			c.JSON(statusCode, errors.ToResponse(err))
+			return
+		}
+
+		if h.auditSvc != nil {
+			_ = h.auditSvc.LogFromGin(c, audit_model.AuditActionCreate, audit_model.AuditEntityProfessional, professional.ID.String(), nil, professional)
+		}
+
+		c.JSON(http.StatusCreated, professional)
+		return
+	}
+
+	// Option 1: Send invite by email
+	inviteReq := &invite_model.CreateInviteRequest{
+		Email:               req.Email,
+		Role:                user_model.UserRoleProfessional,
+		NewProfessionalName: req.Email, // Will be updated when user accepts invite
+	}
+
+	invite, err := h.inviteSvc.CreateInvite(ctx, clinicID.(uuid.UUID), userID.(uuid.UUID), inviteReq)
 	if err != nil {
 		statusCode := errors.GetStatusCode(err)
 		c.JSON(statusCode, errors.ToResponse(err))
 		return
 	}
 
-	if h.auditSvc != nil {
-		_ = h.auditSvc.LogFromGin(c, audit_model.AuditActionCreate, audit_model.AuditEntityProfessional, professional.ID.String(), nil, professional)
-	}
-
-	c.JSON(http.StatusCreated, professional)
+	c.JSON(http.StatusCreated, invite)
 }
 
 // GetByID handles getting a professional by ID

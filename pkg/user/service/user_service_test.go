@@ -9,6 +9,8 @@ import (
 	"github.com/stretchr/testify/mock"
 
 	"github.com/aseno/backend/pkg/pagination"
+	professional_model "github.com/aseno/backend/pkg/professional/model"
+	professional_repository "github.com/aseno/backend/pkg/professional/repository"
 	"github.com/aseno/backend/pkg/user/model"
 )
 
@@ -55,7 +57,11 @@ func (_m *MockUserRepository) Create(ctx context.Context, user *model.User) erro
 
 func (_m *MockUserRepository) GetByID(ctx context.Context, id, clinicID uuid.UUID) (*model.User, error) {
 	ret := _m.Called(ctx, id, clinicID)
-	return nil, ret.Error(1)
+	var user *model.User
+	if ret.Get(0) != nil {
+		user = ret.Get(0).(*model.User)
+	}
+	return user, ret.Error(1)
 }
 func (_m *MockUserRepository) GetByIDNoTenant(ctx context.Context, id uuid.UUID) (*model.User, error) {
 	ret := _m.Called(ctx, id)
@@ -92,6 +98,70 @@ func (_m *MockUserRepository) Delete(ctx context.Context, id, clinicID uuid.UUID
 func (_m *MockUserRepository) BulkDelete(ctx context.Context, clinicID uuid.UUID, ids []uuid.UUID) error {
 	ret := _m.Called(ctx, clinicID, ids)
 	return ret.Error(0)
+}
+
+// MockProfessionalRepository
+type MockProfessionalRepository struct {
+	professional_repository.ProfessionalRepository
+	mock.Mock
+}
+
+func (m *MockProfessionalRepository) GetByUserID(ctx context.Context, userID, clinicID uuid.UUID) (*professional_model.Professional, error) {
+	args := m.Called(ctx, userID, clinicID)
+	var prof *professional_model.Professional
+	if args.Get(0) != nil {
+		prof = args.Get(0).(*professional_model.Professional)
+	}
+	return prof, args.Error(1)
+}
+
+func (m *MockProfessionalRepository) Update(ctx context.Context, professional *professional_model.Professional) error {
+	args := m.Called(ctx, professional)
+	return args.Error(0)
+}
+
+func TestUserService_RemoveUser_DeactivatesProfessional(t *testing.T) {
+	mockUserRepo := new(MockUserRepository)
+	mockProfRepo := new(MockProfessionalRepository)
+	service := NewUserService(mockUserRepo, mockProfRepo)
+
+	ctx := context.Background()
+	clinicID := uuid.New()
+	userID := uuid.New()
+	currentUserID := uuid.New()
+	profID := uuid.New()
+
+	// User to remove (not owner, not self)
+	mockUserRepo.On("GetByID", ctx, userID, clinicID).Return(&model.User{
+		ID:       userID,
+		ClinicID: clinicID,
+		Name:     "Professional User",
+		Role:     model.UserRoleProfessional,
+		IsActive: true,
+	}, nil)
+
+	// Professional exists and is linked to this user
+	prof := &professional_model.Professional{
+		ID:       profID,
+		UserID:   &userID,
+		IsActive: true,
+	}
+	mockProfRepo.On("GetByUserID", ctx, userID, clinicID).Return(prof, nil)
+
+	// Professional should be deactivated (IsActive = false), NOT unlinked (UserID stays)
+	mockProfRepo.On("Update", ctx, mock.MatchedBy(func(p *professional_model.Professional) bool {
+		return p.ID == profID && p.IsActive == false && p.UserID != nil && *p.UserID == userID
+	})).Return(nil)
+
+	// User should be deleted
+	mockUserRepo.On("Delete", ctx, userID, clinicID).Return(nil)
+
+	err := service.RemoveUser(ctx, clinicID, userID, currentUserID)
+
+	assert.NoError(t, err)
+
+	mockProfRepo.AssertExpectations(t)
+	mockUserRepo.AssertExpectations(t)
 }
 
 func TestUserService_ListUsers(t *testing.T) {

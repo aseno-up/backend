@@ -13,11 +13,14 @@ import (
 	"github.com/aseno/backend/pkg/pagination"
 	"github.com/aseno/backend/pkg/professional/model"
 	"github.com/aseno/backend/pkg/professional/repository"
+	user_model "github.com/aseno/backend/pkg/user/model"
+	user_repository "github.com/aseno/backend/pkg/user/repository"
 )
 
 // ProfessionalService defines the interface for professional business logic
 type ProfessionalService interface {
 	Create(ctx context.Context, clinicID uuid.UUID, req *model.CreateProfessionalRequest) (*model.ProfessionalResponse, error)
+	CreateForExistingUser(ctx context.Context, clinicID, userID uuid.UUID) (*model.ProfessionalResponse, error)
 	GetByID(ctx context.Context, id, clinicID uuid.UUID) (*model.ProfessionalResponse, error)
 	List(ctx context.Context, clinicID uuid.UUID, filter pagination.Filter) (pagination.Response[*model.ProfessionalResponse], error)
 	Update(ctx context.Context, id, clinicID uuid.UUID, req *model.UpdateProfessionalRequest) (*model.ProfessionalResponse, error)
@@ -30,14 +33,16 @@ type professionalService struct {
 	repo            repository.ProfessionalRepository
 	clinicRepo      clinic_repository.ClinicRepository
 	appointmentRepo appointment_repository.AppointmentRepository
+	userRepo        user_repository.UserRepository
 }
 
 // NewProfessionalService creates a new professional service
-func NewProfessionalService(repo repository.ProfessionalRepository, clinicRepo clinic_repository.ClinicRepository, appointmentRepo appointment_repository.AppointmentRepository) ProfessionalService {
+func NewProfessionalService(repo repository.ProfessionalRepository, clinicRepo clinic_repository.ClinicRepository, appointmentRepo appointment_repository.AppointmentRepository, userRepo user_repository.UserRepository) ProfessionalService {
 	return &professionalService{
 		repo:            repo,
 		clinicRepo:      clinicRepo,
 		appointmentRepo: appointmentRepo,
+		userRepo:        userRepo,
 	}
 }
 
@@ -91,6 +96,73 @@ func (s *professionalService) Create(ctx context.Context, clinicID uuid.UUID, re
 
 	if professional.Color == "" {
 		professional.Color = "#7C3AED"
+	}
+
+	if err := s.repo.Create(ctx, professional); err != nil {
+		return nil, err
+	}
+
+	return professional.ToResponse(), nil
+}
+
+// CreateForExistingUser creates a professional linked to an existing user (owner or admin)
+func (s *professionalService) CreateForExistingUser(ctx context.Context, clinicID, userID uuid.UUID) (*model.ProfessionalResponse, error) {
+	// Validate user exists and belongs to clinic
+	user, err := s.userRepo.GetByID(ctx, userID, clinicID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Only owner or admin can be linked as professional
+	if user.Role != user_model.UserRoleOwner && user.Role != user_model.UserRoleAdmin {
+		return nil, errors.ErrValidationInstance.WithMessage(
+			"Somente usuários com papel owner ou admin podem ser vinculados como profissional")
+	}
+
+	// Check if user already has a professional linked
+	existingProf, err := s.repo.GetByUserID(ctx, userID, clinicID)
+	if err == nil && existingProf != nil {
+		return nil, errors.ErrValidationInstance.WithMessage(
+			"Este usuário já possui um profissional vinculado")
+	}
+
+	// Check plan limits
+	clinic, err := s.clinicRepo.GetByID(ctx, clinicID)
+	if err != nil {
+		return nil, err
+	}
+
+	if clinic.Account != nil {
+		limit := clinic.Account.MaxProfessionals
+		if !planlimit.IsUnlimited(limit) {
+			count, err := s.repo.CountActiveByAccountID(ctx, clinic.AccountID)
+			if err != nil {
+				return nil, err
+			}
+			if int(count) >= limit {
+				return nil, errors.ErrValidationInstance.WithMessage(
+					fmt.Sprintf("Limite de %d profissionais atingido. Faça upgrade para adicionar mais.", limit))
+			}
+		}
+	}
+
+	// Create professional inheriting user data
+	defaultSlot := []model.TimeSlot{{Start: "09:00", End: "18:00"}}
+	professional := &model.Professional{
+		ClinicID: clinicID,
+		UserID:   &userID,
+		Name:     user.Name,
+		Email:    user.Email,
+		Phone:    user.Phone,
+		Color:    "#7C3AED",
+		IsActive: true,
+		WorkingHours: model.WorkingHours{
+			Monday:    defaultSlot,
+			Tuesday:   defaultSlot,
+			Wednesday: defaultSlot,
+			Thursday:  defaultSlot,
+			Friday:    defaultSlot,
+		},
 	}
 
 	if err := s.repo.Create(ctx, professional); err != nil {
