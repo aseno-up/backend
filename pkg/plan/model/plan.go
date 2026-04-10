@@ -16,7 +16,11 @@ func (s StringArray) Value() (driver.Value, error) {
 	if s == nil {
 		return "[]", nil
 	}
-	return json.Marshal(s)
+	b, err := json.Marshal(s)
+	if err != nil {
+		return nil, err
+	}
+	return string(b), nil
 }
 
 func (s *StringArray) Scan(value interface{}) error {

@@ -49,10 +49,15 @@ type ConversationHistory []ConversationTurn
 
 // Value implements driver.Valuer for ConversationHistory
 func (h ConversationHistory) Value() (driver.Value, error) {
+	var v interface{} = h
 	if h == nil {
-		return json.Marshal([]ConversationTurn{})
+		v = []ConversationTurn{}
 	}
-	return json.Marshal(h)
+	b, err := json.Marshal(v)
+	if err != nil {
+		return nil, err
+	}
+	return string(b), nil
 }
 
 // Scan implements sql.Scanner for ConversationHistory
@@ -80,10 +85,15 @@ type PendingActions map[string]interface{}
 
 // Value implements driver.Valuer for PendingActions
 func (p PendingActions) Value() (driver.Value, error) {
+	var v interface{} = p
 	if p == nil {
-		return json.Marshal(map[string]interface{}{})
+		v = map[string]interface{}{}
 	}
-	return json.Marshal(p)
+	b, err := json.Marshal(v)
+	if err != nil {
+		return nil, err
+	}
+	return string(b), nil
 }
 
 // Scan implements sql.Scanner for PendingActions
@@ -111,10 +121,15 @@ type ConversationMetadata map[string]interface{}
 
 // Value implements driver.Valuer for ConversationMetadata
 func (m ConversationMetadata) Value() (driver.Value, error) {
+	var v interface{} = m
 	if m == nil {
-		return json.Marshal(map[string]interface{}{})
+		v = map[string]interface{}{}
 	}
-	return json.Marshal(m)
+	b, err := json.Marshal(v)
+	if err != nil {
+		return nil, err
+	}
+	return string(b), nil
 }
 
 // Scan implements sql.Scanner for ConversationMetadata
@@ -258,7 +273,7 @@ type ToolCallLog struct {
 	ID             uuid.UUID              `json:"id" gorm:"type:uuid;primary_key;default:gen_random_uuid()"`
 	ConversationID uuid.UUID              `json:"conversation_id" gorm:"type:uuid;not null;index"`
 	ToolName       string                 `json:"tool_name" gorm:"type:varchar(100);not null;index"`
-	Parameters     map[string]interface{} `json:"parameters" gorm:"type:jsonb"`
+	Parameters     ToolCallParameters     `json:"parameters" gorm:"type:jsonb"`
 	Result         ToolCallResult         `json:"result" gorm:"type:jsonb"`
 	Error          string                 `json:"error" gorm:"type:text"`
 	DurationMS     int                    `json:"duration_ms" gorm:"type:int"`
@@ -275,10 +290,15 @@ type ToolCallParameters map[string]interface{}
 
 // Value implements driver.Valuer for ToolCallParameters
 func (p ToolCallParameters) Value() (driver.Value, error) {
+	var v interface{} = p
 	if p == nil {
-		return json.Marshal(map[string]interface{}{})
+		v = map[string]interface{}{}
 	}
-	return json.Marshal(p)
+	b, err := json.Marshal(v)
+	if err != nil {
+		return nil, err
+	}
+	return string(b), nil
 }
 
 // Scan implements sql.Scanner for ToolCallParameters

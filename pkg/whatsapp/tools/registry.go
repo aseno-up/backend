@@ -222,11 +222,11 @@ func (r *Registry) registerAppointmentManagementTools() {
 			Properties: map[string]*genai.Schema{
 				"professional_id": {
 					Type:        genai.TypeString,
-					Description: "UUID of the professional. REQUIRED. MUST be valid UUID from get_available_professionals result, never use names or invent values.",
+					Description: "The UUID from the \"id\" field returned by get_available_professionals (e.g. \"c07523c1-44eb-4fc5-b445-207a65cbe91b\"). REQUIRED. MUST be a valid UUID in xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx format. NEVER pass names, text, or invented values.",
 				},
 				"start_time": {
 					Type:        genai.TypeString,
-					Description: "Start date and time in ISO 8601 format (YYYY-MM-DDTHH:MM:SS or YYYY-MM-DDTHH:MM:SS-03:00). REQUIRED. Use the EXACT timestamp from get_available_slots result.",
+					Description: "The EXACT start_time timestamp returned by get_available_slots (e.g. \"2026-04-10T10:00:00-03:00\"). REQUIRED. MUST be in ISO 8601 format. NEVER invent timestamps.",
 				},
 				"duration_minutes": {
 					Type:        genai.TypeInteger,

@@ -185,7 +185,12 @@ func (b *SystemPromptBuilder) conversationFlowGuidelines() string {
    **Dias da semana em português:**
    Segunda, Terça, Quarta, Quinta, Sexta, Sábado, Domingo
 
-   d) Após paciente escolher um horário, use create_appointment com o UUID do profissional e o start_time exato
+   d) Após paciente escolher um horário, use create_appointment:
+      ⛔ O campo professional_id DEVE ser o UUID (ex: "c07523c1-44eb-4fc5-b445-207a65cbe91b") retornado no campo "id" de get_available_professionals.
+      ⛔ NUNCA passe nomes, textos ou strings inventadas como professional_id. APENAS o UUID do campo "id".
+      ⛔ O campo start_time DEVE ser o timestamp EXATO retornado por get_available_slots (ex: "2026-04-10T10:00:00-03:00").
+      - Se o paciente disse "qualquer um", escolha o PRIMEIRO profissional que tem o horário pedido.
+      - Consulte os resultados anteriores de get_available_professionals para obter o UUID correto.
 
    e) Confirme os detalhes do agendamento criado
 
@@ -229,7 +234,7 @@ func (b *SystemPromptBuilder) toolUsageGuidelines() string {
 
 ⛔ **REGRAS CRÍTICAS:**
 - NUNCA invente dados! Use APENAS o que as ferramentas retornarem
-- SEMPRE use UUIDs (campo "id"), NUNCA use nomes como professional_id
+- professional_id DEVE ser um UUID real (formato: "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx") vindo do campo "id" de get_available_professionals. NUNCA passe nomes, strings ou valores inventados.
 - Se ferramenta retornar lista vazia ou erro, NÃO invente dados fictícios
 - Quando ferramentas falharem, informe o problema e ofereça alternativas
 
@@ -261,11 +266,29 @@ Segunda, Terça, Quarta, Quinta, Sexta, Sábado, Domingo
 }
 
 func (b *SystemPromptBuilder) formattingGuidelines() string {
-	currentTime := time.Now().In(time.FixedZone("BRT", -3*60*60))
+	brt := time.FixedZone("BRT", -3*60*60)
+	currentTime := time.Now().In(brt)
+
+	// Build next 7 days reference so the model doesn't miscalculate dates
+	weekdaysPT := []string{"Domingo", "Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado"}
+	var daysRef string
+	for i := 0; i < 7; i++ {
+		d := currentTime.AddDate(0, 0, i)
+		label := "hoje"
+		if i == 1 {
+			label = "amanhã"
+		} else if i > 1 {
+			label = weekdaysPT[d.Weekday()]
+		}
+		daysRef += fmt.Sprintf("- %s = %s %s\n", label, weekdaysPT[d.Weekday()], d.Format("02/01/2006"))
+	}
 
 	return fmt.Sprintf(`**Formatação e Apresentação:**
 
-**⚠️ DATA/HORA ATUAL:** %s (horário de Brasília)
+**⚠️ DATA/HORA ATUAL:** %s %s (horário de Brasília)
+
+**📅 REFERÊNCIA DE DATAS (use para converter "amanhã", "sexta", etc.):**
+%s
 **IMPORTANTE:** Ao buscar horários disponíveis, NÃO passe o parâmetro "date" - deixe vazio para buscar a partir de hoje automaticamente!
 
 **Ao apresentar horários:**
@@ -307,7 +330,7 @@ Gostaria de remarcar para outro horário?"
 - Sempre inclua dia da semana + data + horário completo
 - Seja específico: evite "amanhã", prefira "Sábado 20/01"
 - Ao final de um agendamento bem-sucedido, sempre inclua os detalhes completos
-`, currentTime.Format("02/01/2006 15:04"), b.clinicName, b.clinicName)
+`, weekdaysPT[currentTime.Weekday()], currentTime.Format("02/01/2006 15:04"), daysRef, b.clinicName, b.clinicName)
 }
 
 // BuildUserPrompt builds the user message with conversation history

@@ -117,9 +117,6 @@ func (m *conversationManager) AddUserMessage(ctx context.Context, conversationID
 
 	conversation.AddUserTurn(content, m.maxTurns)
 
-	// Extend expiration time on user activity
-	conversation.ExpiresAt = time.Now().Add(m.defaultTTL)
-
 	return m.repo.Update(ctx, conversation)
 }
 

@@ -514,6 +514,7 @@ func main() {
 				bookingSvc,
 				clinicRepo,
 				professionalRepo,
+				systemLogSvc,
 			)
 			if err != nil {
 				logger.Printf("Warning: Failed to initialize AI Agent: %v", err)
@@ -2003,6 +2004,7 @@ func initializeAIAgent(
 	bookingService booking_service.BookingService,
 	clinicRepo clinic_repository.ClinicRepository,
 	professionalRepo professional_repository.ProfessionalRepository,
+	systemLogSvc systemlog_service.SystemLogService,
 ) (agent.Service, conversation.Manager, *tools.ExecutionContext, error) {
 	// Check if AI agent is enabled
 	workerCfg := config.NewWorkerConfig()
@@ -2107,6 +2109,7 @@ func initializeAIAgent(
 		featureFlags,
 		clinicRepo,
 		workerCfg.MinDelayBetweenMessagesSeconds,
+		systemLogSvc,
 	)
 
 	logger.Printf("AI Agent initialized: provider=%s model=%s", workerCfg.AIAgentProvider, workerCfg.AIAgentModel)

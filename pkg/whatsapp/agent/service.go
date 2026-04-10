@@ -11,6 +11,7 @@ import (
 
 	clinic_model "github.com/aseno/backend/pkg/clinic/model"
 	clinic_repository "github.com/aseno/backend/pkg/clinic/repository"
+	systemlog_service "github.com/aseno/backend/pkg/systemlog/service"
 	"github.com/aseno/backend/pkg/whatsapp/conversation"
 	"github.com/aseno/backend/pkg/whatsapp/model"
 	"github.com/aseno/backend/pkg/whatsapp/tools"
@@ -55,6 +56,7 @@ type aiAgentService struct {
 	executionContext               *tools.ExecutionContext
 	featureFlags                   *FeatureFlags
 	clinicRepo                     clinic_repository.ClinicRepository
+	systemLogSvc                   systemlog_service.SystemLogService
 	defaultMinDelayBetweenMessages int
 }
 
@@ -76,6 +78,7 @@ func NewService(
 	featureFlags *FeatureFlags,
 	clinicRepo clinic_repository.ClinicRepository,
 	defaultMinDelayBetweenMessages int,
+	systemLogSvc systemlog_service.SystemLogService,
 ) Service {
 	return &aiAgentService{
 		agent:                          agent,
@@ -85,6 +88,7 @@ func NewService(
 		executionContext:               executionContext,
 		featureFlags:                   featureFlags,
 		clinicRepo:                     clinicRepo,
+		systemLogSvc:                   systemLogSvc,
 		defaultMinDelayBetweenMessages: defaultMinDelayBetweenMessages,
 	}
 }
@@ -174,9 +178,9 @@ func (s *aiAgentService) ProcessMessage(ctx context.Context, req *MessageRequest
 			duration = time.Since(*toolCall.ExecutedAt)
 		}
 
-		var err error
+		var toolErr error
 		if toolCall.Error != "" {
-			err = fmt.Errorf("%s", toolCall.Error)
+			toolErr = fmt.Errorf("%s", toolCall.Error)
 		}
 
 		if logErr := s.conversationMgr.LogToolCall(
@@ -185,10 +189,43 @@ func (s *aiAgentService) ProcessMessage(ctx context.Context, req *MessageRequest
 			toolCall.Name,
 			toolCall.Arguments,
 			toolCall.Result,
-			err,
+			toolErr,
 			duration,
 		); logErr != nil {
 			logger.Printf("[AI Agent Service] Warning: failed to log tool call: %v", logErr)
+
+			// Log to system_logs so failures are visible
+			if s.systemLogSvc != nil {
+				_ = s.systemLogSvc.Log(ctx, systemlog_service.SystemLogEntry{
+					ClinicID: &req.ClinicID,
+					Service:  "ai_agent",
+					Event:    "tool_call_log_failed",
+					Status:   "failed",
+					Payload: map[string]interface{}{
+						"tool_name":       toolCall.Name,
+						"conversation_id": conv.ID.String(),
+						"log_error":       logErr.Error(),
+					},
+					Error: logErr.Error(),
+				})
+			}
+		}
+
+		// Also log tool execution errors to system_logs
+		if toolErr != nil && s.systemLogSvc != nil {
+			_ = s.systemLogSvc.Log(ctx, systemlog_service.SystemLogEntry{
+				ClinicID: &req.ClinicID,
+				Service:  "ai_agent",
+				Event:    "tool_call_error",
+				Status:   "failed",
+				Payload: map[string]interface{}{
+					"tool_name":       toolCall.Name,
+					"conversation_id": conv.ID.String(),
+					"arguments":       toolCall.Arguments,
+				},
+				Error:    toolCall.Error,
+				Duration: int(duration.Milliseconds()),
+			})
 		}
 	}
 
