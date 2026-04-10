@@ -132,9 +132,6 @@ func (s *clinicService) Update(ctx context.Context, id uuid.UUID, req *model.Upd
 		if req.Settings.RequirePaymentBeforeBooking != nil {
 			clinic.Settings.RequirePaymentBeforeBooking = *req.Settings.RequirePaymentBeforeBooking
 		}
-		if req.Settings.AllowAIScheduling != nil {
-			clinic.Settings.AllowAIScheduling = *req.Settings.AllowAIScheduling
-		}
 		if req.Settings.AIAgentEnabled != nil {
 			clinic.Settings.AIAgentEnabled = *req.Settings.AIAgentEnabled
 		}

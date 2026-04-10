@@ -148,63 +148,6 @@ func TestUpdate_RequirePaymentBeforeBooking_NilDoesNotChange(t *testing.T) {
 	assert.False(t, result.Settings.AllowOnlineBooking)
 }
 
-func TestUpdate_AllowAIScheduling_Enable(t *testing.T) {
-	repo := newMockClinicRepo()
-	svc := NewClinicService(repo, "http://localhost:3000")
-	clinic := createTestClinic(repo)
-
-	// Verify initial state
-	assert.False(t, clinic.Settings.AllowAIScheduling)
-
-	// Enable allow_ai_scheduling
-	result, err := svc.Update(context.Background(), clinic.ID, &model.UpdateClinicRequest{
-		Settings: &model.UpdateClinicSettingsRequest{
-			AllowAIScheduling: boolPtr(true),
-		},
-	})
-
-	require.NoError(t, err)
-	assert.True(t, result.Settings.AllowAIScheduling)
-
-	// Verify it persisted in repo
-	stored := repo.clinics[clinic.ID]
-	assert.True(t, stored.Settings.AllowAIScheduling)
-}
-
-func TestUpdate_AllowAIScheduling_Disable(t *testing.T) {
-	repo := newMockClinicRepo()
-	svc := NewClinicService(repo, "http://localhost:3000")
-	clinic := createTestClinic(repo)
-	clinic.Settings.AllowAIScheduling = true
-
-	// Disable
-	result, err := svc.Update(context.Background(), clinic.ID, &model.UpdateClinicRequest{
-		Settings: &model.UpdateClinicSettingsRequest{
-			AllowAIScheduling: boolPtr(false),
-		},
-	})
-
-	require.NoError(t, err)
-	assert.False(t, result.Settings.AllowAIScheduling)
-}
-
-func TestUpdate_AllowAIScheduling_NilDoesNotChange(t *testing.T) {
-	repo := newMockClinicRepo()
-	svc := NewClinicService(repo, "http://localhost:3000")
-	clinic := createTestClinic(repo)
-	clinic.Settings.AllowAIScheduling = true
-
-	// Update other settings without touching AllowAIScheduling
-	result, err := svc.Update(context.Background(), clinic.ID, &model.UpdateClinicRequest{
-		Settings: &model.UpdateClinicSettingsRequest{
-			AllowOnlineBooking: boolPtr(false),
-		},
-	})
-
-	require.NoError(t, err)
-	assert.True(t, result.Settings.AllowAIScheduling)
-}
-
 func TestUpdate_SettingsNil_DoesNotCrash(t *testing.T) {
 	repo := newMockClinicRepo()
 	svc := NewClinicService(repo, "http://localhost:3000")

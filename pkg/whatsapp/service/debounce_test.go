@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
+	clinic_model "github.com/aseno/backend/pkg/clinic/model"
 	"github.com/aseno/backend/pkg/whatsapp/agent"
 	"github.com/aseno/backend/pkg/whatsapp/model"
 )
@@ -241,6 +242,55 @@ func TestDebouncer_IndependentPerClinic(t *testing.T) {
 	}
 	if got := atomic.LoadInt32(&calledB); got != 1 {
 		t.Errorf("clínica B: esperava 1 disparo, recebeu %d", got)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Teste: clínica com AI desabilitado não entra no debouncer
+// ---------------------------------------------------------------------------
+
+// aiDisabledClinic retorna uma clínica com AIAgentEnabled=false.
+func aiDisabledClinic() *clinic_model.Clinic {
+	return &clinic_model.Clinic{
+		Settings: clinic_model.ClinicSettings{
+			AIAgentEnabled: false,
+		},
+	}
+}
+
+// TestHandleIncomingMessage_AIDisabled_SkipsDebouncer verifica que quando a
+// clínica tem AIAgentEnabled=false, a mensagem NÃO entra no debouncer e o AI
+// NÃO é chamado — mesmo que o aiAgentService esteja injetado.
+// O bug: toda mensagem entrava no debouncer (porque o check era s.aiAgentService != nil),
+// e como retornava nil na linha 809, o fluxo tradicional era completamente pulado.
+func TestHandleIncomingMessage_AIDisabled_SkipsDebouncer(t *testing.T) {
+	ai := &stubAIAgentService{}
+	debounce := 50 * time.Millisecond
+	svc := newTestService(ai, debounce).(*whatsAppService)
+	svc.clinicRepo = &stubClinicRepo{clinic: aiDisabledClinic()}
+
+	clinicID := uuid.New()
+	phone := "+5511999994444"
+	if err := svc.HandleIncomingMessage(context.Background(), clinicID, newMsg(phone, "Oi")); err != nil {
+		t.Fatalf("HandleIncomingMessage retornou erro: %v", err)
+	}
+
+	// Verifica que o debouncer NÃO tem nenhum timer pendente para este telefone.
+	// Se o bug ainda existir, a mensagem entrará no debouncer e terá um timer.
+	key := debounceKey(clinicID, phone)
+	svc.debouncer.mu.Lock()
+	_, hasPending := svc.debouncer.timers[key]
+	svc.debouncer.mu.Unlock()
+
+	if hasPending {
+		t.Errorf("Debouncer NÃO deveria ter timer pendente quando AIAgentEnabled=false, mas tem — mensagem entrou no debouncer indevidamente")
+	}
+
+	// Espera para confirmar que AI nunca é chamado.
+	time.Sleep(debounce + 80*time.Millisecond)
+
+	if got := ai.callCount(); got != 0 {
+		t.Errorf("AI agent NÃO deveria ter sido chamado quando AIAgentEnabled=false, mas foi chamado %d vez(es)", got)
 	}
 }
 

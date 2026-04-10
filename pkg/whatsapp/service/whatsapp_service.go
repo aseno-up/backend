@@ -790,43 +790,62 @@ func (s *whatsAppService) HandleIncomingMessage(ctx context.Context, clinicID uu
 	// Log incoming message (logs original text or transcribed text)
 	s.logMessage(ctx, clinicID, nil, msg.Phone, model.MessageDirectionInbound, msg.Content, model.MessageStatusDelivered, msg.MessageID)
 
-	// Se o AI Agent está habilitado, debounce antes de processar.
+	// Se o AI Agent está habilitado E a clínica permite IA, debounce antes de processar.
 	// Evita respostas instantâneas que podem acionar bloqueio pelo WhatsApp.
 	if s.aiAgentService != nil {
-		logger.Printf("[Debounce] Message from %s received — waiting %v idle before processing",
-			msg.Phone, s.debounceDelay)
-
-		bgCtx := context.Background()
-		capClinicID := clinicID
-
-		s.debouncer.schedule(clinicID, msg, s.debounceDelay, func(lastMsg *model.ParsedIncomingMessage) {
-			logger.Printf("[Debounce] Idle window elapsed for %s — processing with AI Agent: %q",
-				lastMsg.Phone, lastMsg.Content)
-			if err := s.handleWithAIAgent(bgCtx, capClinicID, lastMsg); err != nil {
-				logger.Printf("[Debounce] Error handling AI Agent message from %s: %v", lastMsg.Phone, err)
+		// Verificar se a clínica tem IA habilitada antes de entrar no debouncer.
+		// Sem esta verificação, o fluxo tradicional era pulado para todas as clínicas.
+		aiEnabled := true
+		if s.clinicRepo != nil {
+			clinic, err := s.clinicRepo.GetByID(ctx, clinicID)
+			if err != nil {
+				logger.Printf("[AI Agent] Warning: failed to fetch clinic settings: %v", err)
+			} else if !clinic.Settings.AIAgentEnabled {
+				aiEnabled = false
+				logger.Printf("[AI Agent] Clinic %s has AIAgentEnabled=false, falling through to traditional flow", clinicID)
 			}
-		})
+		} else {
+			logger.Printf("[AI Agent] Clinic %s not found, falling through to traditional flow", clinicID)
+		}
+
+		if aiEnabled {
+			logger.Printf("[Debounce] Message from %s received — waiting %v idle before processing",
+				msg.Phone, s.debounceDelay)
+
+			bgCtx := context.Background()
+			capClinicID := clinicID
+
+			s.debouncer.schedule(clinicID, msg, s.debounceDelay, func(lastMsg *model.ParsedIncomingMessage) {
+				logger.Printf("[Debounce] Idle window elapsed for %s — processing with AI Agent: %q",
+					lastMsg.Phone, lastMsg.Content)
+				if err := s.handleWithAIAgent(bgCtx, capClinicID, lastMsg); err != nil {
+					logger.Printf("[Debounce] Error handling AI Agent message from %s: %v", lastMsg.Phone, err)
+				}
+			})
+			return nil
+		}
+	}
+
+	// Sem IA, apenas respostas por botão são processadas (confirm/cancel/reschedule).
+	// Texto livre é ignorado — sem classificação, sem custo de tokens.
+	if msg.ButtonID == "" {
 		return nil
 	}
 
-	// Check for reschedule button response first (rsch_0, rsch_1, etc.)
-	if msg.ButtonID != "" && strings.HasPrefix(msg.ButtonID, "rsch_") {
+	if strings.HasPrefix(msg.ButtonID, "rsch_") {
 		return s.handleRescheduleResponse(ctx, msg)
 	}
 
-	// Classify intent
-	intent := s.ClassifyMessage(msg.Content)
-
-	// If it's a button response, use the button ID directly
-	if msg.ButtonID != "" {
-		switch msg.ButtonID {
-		case "confirm":
-			intent = model.MessageIntentConfirm
-		case "cancel":
-			intent = model.MessageIntentCancel
-		case "reschedule":
-			intent = model.MessageIntentReschedule
-		}
+	var intent model.MessageIntent
+	switch msg.ButtonID {
+	case "confirm":
+		intent = model.MessageIntentConfirm
+	case "cancel":
+		intent = model.MessageIntentCancel
+	case "reschedule":
+		intent = model.MessageIntentReschedule
+	default:
+		return nil
 	}
 
 	// Handle the response based on intent
