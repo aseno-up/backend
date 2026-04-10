@@ -712,6 +712,9 @@ func main() {
 	professionalProcedureHandler := professional_handler.NewProfessionalProcedureHandler(professionalProcedureService, auditSvc)
 	commissionHandler := commission_handler.NewCommissionHandler(commissionSvc, auditSvc)
 	patientHandler := patient_handler.NewPatientHandler(patientService)
+	patientWhatsAppConnRepo := patient_repository.NewPatientWhatsAppConnectionRepository(db.GetDB())
+	patientWhatsAppConnService := patient_service.NewPatientWhatsAppConnectionService(patientWhatsAppConnRepo, patientRepo, whatsappConnRepo)
+	patientWhatsAppConnHandler := patient_handler.NewPatientWhatsAppConnectionHandler(patientWhatsAppConnService)
 	// Initialize Enrollment service and handler
 	enrollmentRepo := enrollment_repository.NewEnrollmentRepository(db.GetDB())
 	enrollmentSvc := enrollment_service.NewEnrollmentService(enrollmentRepo, sessionPlanRepo)
@@ -933,6 +936,7 @@ func main() {
 		groupSessionProfHdlr,
 		enrollmentHdlr,
 		planPaymentHdlr,
+		patientWhatsAppConnHandler,
 		authMiddleware,
 		tenantMiddleware,
 	)
@@ -1031,6 +1035,7 @@ func setupRouter(
 	groupSessionProfHandler attendance_handler.GroupSessionProfessionalHandler,
 	enrollmentHandler enrollment_handler.EnrollmentHandler,
 	planPaymentHandler sessionplan_handler.PlanPaymentHandler,
+	patientWhatsAppConnHandler patient_handler.PatientWhatsAppConnectionHandler,
 	authMiddleware auth_middleware.AuthMiddleware,
 	tenantMiddleware auth_middleware.TenantMiddleware,
 ) *gin.Engine {
@@ -1131,6 +1136,7 @@ func setupRouter(
 
 			// Patient routes
 			patientHandler.RegisterRoutes(protected)
+			patientWhatsAppConnHandler.RegisterRoutes(protected)
 
 			// Appointment routes (with professional access control)
 			appointmentsProtected := protected.Group("")
@@ -1382,6 +1388,8 @@ func runMigrations(db *database.Database) error {
 		&clinicmember_model.ClinicMember{},
 		// CRM Leads
 		&lead_model.Lead{},
+		// Patient WhatsApp connection preferences
+		&patient_model.PatientWhatsAppConnection{},
 		// Payment methods and appointment payments
 		&paymentmethod_model.PaymentMethod{},
 		&appointment_model.AppointmentPayment{},

@@ -80,6 +80,7 @@ type ClinicSettings struct {
 	AboutUs string `json:"about_us,omitempty"`
 
 	// AI/WhatsApp settings
+	AllowAIScheduling         bool                 `json:"allow_ai_scheduling"`
 	AIAgentEnabled            bool                 `json:"ai_agent_enabled"`
 	AIMinDelayBetweenMessages *int                 `json:"ai_min_delay_between_messages,omitempty"`
 	AIMinDelayBetweenPatients *int                 `json:"ai_min_delay_between_patients,omitempty"`
@@ -176,6 +177,7 @@ type UpdateClinicSettingsRequest struct {
 	AboutUs *string `json:"about_us,omitempty"`
 
 	// AI/WhatsApp settings
+	AllowAIScheduling         *bool                `json:"allow_ai_scheduling,omitempty"`
 	AIAgentEnabled            *bool                `json:"ai_agent_enabled,omitempty"`
 	AIMinDelayBetweenMessages *int                 `json:"ai_min_delay_between_messages,omitempty"`
 	AIMinDelayBetweenPatients *int                 `json:"ai_min_delay_between_patients,omitempty"`

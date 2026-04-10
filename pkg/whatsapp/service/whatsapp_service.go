@@ -690,13 +690,13 @@ func (s *whatsAppService) SendReminderMessage(ctx context.Context, instance stri
 	var reminderText string
 	switch msg.ReminderType {
 	case model.ReminderType48Hours:
-		reminderText = "Lembrete: sua consulta e em 2 dias!"
+		reminderText = "Lembrete: sua consulta é em 2 dias!"
 	case model.ReminderType24Hours:
-		reminderText = "Lembrete: sua consulta e amanha!"
+		reminderText = "Lembrete: sua consulta é amanhã!"
 	case model.ReminderType2Hours:
-		reminderText = "Lembrete: sua consulta e em 2 horas!"
+		reminderText = "Lembrete: sua consulta é em 2 horas!"
 	case model.ReminderType1Hour:
-		reminderText = "Lembrete: sua consulta e em 1 hora!"
+		reminderText = "Lembrete: sua consulta é em 1 hora!"
 	default:
 		reminderText = "Lembrete de consulta"
 	}
@@ -711,7 +711,8 @@ func (s *whatsAppService) SendReminderMessage(ctx context.Context, instance stri
 			"🕐 Horario: %s\n"+
 			"👨‍⚕️ Profissional: %s\n"+
 			"🏥 Local: %s\n\n"+
-			"Caso precise remarcar ou cancelar, responda esta mensagem.",
+			"Confirme sua presença?",
+			"Se precisar remarcar ou cancelar, responda esta mensagem.",
 		reminderText,
 		greeting,
 		dateStr,
@@ -1574,9 +1575,9 @@ func (s *whatsAppService) buildGreeting(patientName string) string {
 	timeOfDay := getTimeOfDay()
 
 	greetings := map[string]string{
-		"morning":   "Ola %s, bom dia! 😊",
-		"afternoon": "Ola %s, boa tarde! 😊",
-		"evening":   "Ola %s, boa noite! 😊",
+		"morning":   "Olá %s, bom dia! 😊",
+		"afternoon": "Olá %s, boa tarde! 😊",
+		"evening":   "Olá %s, boa noite! 😊",
 	}
 
 	greeting := greetings[timeOfDay]
