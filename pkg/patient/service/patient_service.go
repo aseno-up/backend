@@ -72,6 +72,11 @@ func maskRiskData(resp *model.PatientResponse) {
 
 // Create creates a new patient
 func (s *patientService) Create(ctx context.Context, clinicID uuid.UUID, req *model.CreatePatientRequest) (*model.PatientResponse, error) {
+	source := req.Source
+	if source == "" {
+		source = model.PatientSourceInternal
+	}
+
 	patient := &model.Patient{
 		ClinicID:  clinicID,
 		Name:      req.Name,
@@ -87,6 +92,7 @@ func (s *patientService) Create(ctx context.Context, clinicID uuid.UUID, req *mo
 		ZipCode:   req.ZipCode,
 		Notes:     req.Notes,
 		IsActive:  true,
+		Source:    source,
 	}
 
 	// If WhatsApp not provided, use phone

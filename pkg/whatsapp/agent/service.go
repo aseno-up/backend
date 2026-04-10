@@ -130,6 +130,22 @@ func (s *aiAgentService) ProcessMessage(ctx context.Context, req *MessageRequest
 		return nil, fmt.Errorf("failed to get/create conversation: %w", err)
 	}
 
+	// If the conversation has no patient linked yet, try to resolve it now.
+	// The patient may already exist (created by the ensurer on first contact).
+	if conv.PatientID == nil && s.executionContext.PatientFinderCreator != nil {
+		patient, findErr := s.executionContext.PatientFinderCreator.FindOrCreateByPhone(
+			ctx, req.ClinicID, req.PatientPhone, req.PatientName,
+		)
+		if findErr != nil {
+			logger.Printf("[AI Agent Service] Warning: failed to resolve patient for %s: %v", req.PatientPhone, findErr)
+		} else if patient != nil {
+			conv.PatientID = &patient.ID
+			if err := s.conversationMgr.SetPatientID(ctx, conv.ID, patient.ID); err != nil {
+				logger.Printf("[AI Agent Service] Warning: failed to persist patient ID on conversation: %v", err)
+			}
+		}
+	}
+
 	// Update execution context with current request details
 	s.executionContext.Context = ctx
 	s.executionContext.ClinicID = req.ClinicID
@@ -164,6 +180,13 @@ func (s *aiAgentService) ProcessMessage(ctx context.Context, req *MessageRequest
 	agentResp, err := s.agent.Generate(ctx, agentReq)
 	if err != nil {
 		return nil, fmt.Errorf("AI agent generation failed: %w", err)
+	}
+
+	// Persist PatientID to conversation if it was resolved during tool execution
+	if s.executionContext.PatientID != nil && conv.PatientID == nil {
+		if err := s.conversationMgr.SetPatientID(ctx, conv.ID, *s.executionContext.PatientID); err != nil {
+			logger.Printf("[AI Agent Service] Warning: failed to set patient ID on conversation: %v", err)
+		}
 	}
 
 	// Add assistant message to conversation history

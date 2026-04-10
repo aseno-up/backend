@@ -200,6 +200,7 @@ func (s *stubWhatsAppSvc) SetDefaultDelayBetweenPatients(_ int)                 
 func (s *stubWhatsAppSvc) SetDebounceDelay(_ time.Duration)                             {}
 func (s *stubWhatsAppSvc) SetAudioTranscriber(_ transcriber.AudioTranscriber)           {}
 func (s *stubWhatsAppSvc) SetPatientAIPreferenceChecker(_ service.PatientAIPreferenceChecker) {}
+func (s *stubWhatsAppSvc) SetPatientEnsurer(_ service.PatientEnsurer)                        {}
 func (s *stubWhatsAppSvc) SetSystemLogService(_ systemlog_service.SystemLogService)           {}
 
 // newTestRouter cria um router Gin com o handler e clinic_id injetados no contexto.

@@ -29,8 +29,9 @@ const (
 type PatientSource string
 
 const (
-	PatientSourceInternal       PatientSource = "INTERNAL"        // Registered by reception/staff
-	PatientSourceSelfRegistered PatientSource = "SELF_REGISTERED" // Registered via public booking link
+	PatientSourceInternal       PatientSource = "INTERNAL"         // Registered by reception/staff
+	PatientSourceSelfRegistered PatientSource = "SELF_REGISTERED"  // Registered via public booking link
+	PatientSourceWhatsApp       PatientSource = "WHATSAPP_INBOUND" // Auto-created from incoming WhatsApp message
 )
 
 // Patient represents a patient in the clinic
@@ -136,18 +137,19 @@ func (p *Patient) GetWhatsAppNumber() string {
 
 // CreatePatientRequest represents the request to create a patient
 type CreatePatientRequest struct {
-	Name      string     `json:"name" binding:"required,min=2,max=100"`
-	Email     string     `json:"email" binding:"omitempty,email"`
-	Phone     string     `json:"phone" binding:"required"`
-	WhatsApp  string     `json:"whatsapp"`
-	Document  string     `json:"document"`
-	BirthDate *time.Time `json:"birth_date"`
-	Gender    Gender     `json:"gender" binding:"omitempty,oneof=male female other"`
-	Address   string     `json:"address"`
-	City      string     `json:"city"`
-	State     string     `json:"state"`
-	ZipCode   string     `json:"zip_code"`
-	Notes     string     `json:"notes"`
+	Name      string        `json:"name" binding:"required,min=2,max=100"`
+	Email     string        `json:"email" binding:"omitempty,email"`
+	Phone     string        `json:"phone" binding:"required"`
+	WhatsApp  string        `json:"whatsapp"`
+	Document  string        `json:"document"`
+	BirthDate *time.Time    `json:"birth_date"`
+	Gender    Gender        `json:"gender" binding:"omitempty,oneof=male female other"`
+	Address   string        `json:"address"`
+	City      string        `json:"city"`
+	State     string        `json:"state"`
+	ZipCode   string        `json:"zip_code"`
+	Notes     string        `json:"notes"`
+	Source    PatientSource `json:"source,omitempty"`
 }
 
 // UpdatePatientRequest represents the request to update a patient

@@ -197,6 +197,9 @@ type WhatsAppService interface {
 	// SetPatientAIPreferenceChecker sets the checker for per-patient AI scheduling preference
 	SetPatientAIPreferenceChecker(checker PatientAIPreferenceChecker)
 
+	// SetPatientEnsurer sets the patient ensurer for early patient creation on WhatsApp contact
+	SetPatientEnsurer(ensurer PatientEnsurer)
+
 	// SetSystemLogService sets the system log service for persistent event logging
 	SetSystemLogService(svc systemlog_service.SystemLogService)
 }
@@ -237,6 +240,8 @@ type whatsAppService struct {
 	audioTranscriber transcriber.AudioTranscriber
 	// Patient AI preference checker for per-patient AI toggle
 	patientAIPrefChecker PatientAIPreferenceChecker
+	// Patient ensurer: creates patient on first WhatsApp contact
+	patientEnsurer PatientEnsurer
 	// System log service for persistent event logging
 	systemLogSvc systemlog_service.SystemLogService
 }
@@ -284,6 +289,12 @@ type PatientFinderCreator interface {
 // PatientAIPreferenceChecker checks whether AI scheduling is enabled for a patient
 type PatientAIPreferenceChecker interface {
 	IsAISchedulingEnabledByPhone(ctx context.Context, clinicID uuid.UUID, phone string) (bool, error)
+}
+
+// PatientEnsurer ensures a patient record exists for a given phone number.
+// If no patient exists, one is created with Source = WHATSAPP_INBOUND.
+type PatientEnsurer interface {
+	EnsureByPhone(ctx context.Context, clinicID uuid.UUID, phone, senderName string) error
 }
 
 // ProfessionalInfo represents professional info for scheduling
@@ -462,6 +473,11 @@ func (s *whatsAppService) SetAudioTranscriber(t transcriber.AudioTranscriber) {
 // SetPatientAIPreferenceChecker sets the checker for per-patient AI scheduling preference
 func (s *whatsAppService) SetPatientAIPreferenceChecker(checker PatientAIPreferenceChecker) {
 	s.patientAIPrefChecker = checker
+}
+
+// SetPatientEnsurer sets the patient ensurer for early patient creation on WhatsApp contact
+func (s *whatsAppService) SetPatientEnsurer(ensurer PatientEnsurer) {
+	s.patientEnsurer = ensurer
 }
 
 // SetSystemLogService sets the system log service for persistent event logging
@@ -789,6 +805,14 @@ func (s *whatsAppService) HandleIncomingMessage(ctx context.Context, clinicID uu
 
 	// Log incoming message (logs original text or transcribed text)
 	s.logMessage(ctx, clinicID, nil, msg.Phone, model.MessageDirectionInbound, msg.Content, model.MessageStatusDelivered, msg.MessageID)
+
+	// Ensure patient record exists before AI preference check.
+	// This allows the clinic to disable AI for this contact immediately.
+	if s.patientEnsurer != nil {
+		if err := s.patientEnsurer.EnsureByPhone(ctx, clinicID, msg.Phone, msg.SenderName); err != nil {
+			logger.Printf("[WhatsApp] Warning: failed to ensure patient for %s: %v", msg.Phone, err)
+		}
+	}
 
 	// Se o AI Agent está habilitado E a clínica permite IA, debounce antes de processar.
 	// Evita respostas instantâneas que podem acionar bloqueio pelo WhatsApp.

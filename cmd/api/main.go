@@ -440,6 +440,7 @@ func main() {
 		schedulingIntentRepo := whatsapp_repository.NewSchedulingIntentRepository(db.GetDB())
 		whatsappService.SetSchedulingIntentRepo(schedulingIntentRepo)
 		whatsappService.SetPatientFinderCreator(&patientFinderCreatorAdapter{patientRepo: patientRepo})
+		whatsappService.SetPatientEnsurer(&patientEnsurerAdapter{patientRepo: patientRepo, patientService: patientService})
 		whatsappService.SetProfessionalLister(&professionalListerAdapter{professionalRepo: professionalRepo})
 		whatsappService.SetSlotFinder(&slotFinderAdapter{appointmentService: appointmentService, professionalRepo: professionalRepo})
 		whatsappService.SetNewAppointmentCreator(&newAppointmentCreatorAdapter{appointmentService: appointmentService})
@@ -1885,6 +1886,33 @@ func (a *patientAIPreferenceAdapter) IsAISchedulingEnabledByPhone(ctx context.Co
 	}
 
 	return conn.AISchedulingEnabled, nil
+}
+
+// patientEnsurerAdapter ensures a patient record exists when a WhatsApp message arrives.
+// If no patient exists for the given phone, creates one with Source = WHATSAPP_INBOUND.
+type patientEnsurerAdapter struct {
+	patientRepo    patient_repository.PatientRepository
+	patientService patient_service.PatientService
+}
+
+func (a *patientEnsurerAdapter) EnsureByPhone(ctx context.Context, clinicID uuid.UUID, phone, senderName string) error {
+	// If patient already exists, nothing to do
+	patient, err := a.patientRepo.GetByPhone(ctx, phone, clinicID)
+	if err == nil && patient != nil {
+		return nil
+	}
+
+	name := senderName
+	if name == "" {
+		name = phone
+	}
+
+	_, err = a.patientService.Create(ctx, clinicID, &patient_model.CreatePatientRequest{
+		Name:   name,
+		Phone:  phone,
+		Source: patient_model.PatientSourceWhatsApp,
+	})
+	return err
 }
 
 // professionalListerAdapter adapts professional_repository to whatsapp_service.ProfessionalLister
