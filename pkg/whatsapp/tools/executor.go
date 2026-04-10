@@ -29,6 +29,7 @@ type ExecutionContext struct {
 	ProfessionalInfoProvider ProfessionalInfoProvider
 	PatientInfoProvider      PatientInfoProvider
 	PatientFinderCreator     PatientFinderCreator
+	PatientNameUpdater       PatientNameUpdater
 }
 
 // Service interfaces that tools will call
@@ -127,6 +128,10 @@ type PatientFinderCreator interface {
 	FindOrCreateByPhone(ctx context.Context, clinicID uuid.UUID, phone, name string) (*PatientInfo, error)
 }
 
+type PatientNameUpdater interface {
+	UpdateName(ctx context.Context, clinicID, patientID uuid.UUID, newName string) error
+}
+
 // Executor executes tool calls using the provided context
 type Executor struct {
 	registry *Registry
@@ -170,6 +175,8 @@ func (e *Executor) Execute(execCtx *ExecutionContext, toolName string, params ma
 		return e.getProfessionalInfo(execCtx, params)
 	case "get_patient_info":
 		return e.getPatientInfo(execCtx, params)
+	case "update_patient_name":
+		return e.updatePatientName(execCtx, params)
 	default:
 		// Fallback to generic handler if exists
 		if tool.Handler != nil {
@@ -740,4 +747,35 @@ func (e *Executor) getPatientInfo(execCtx *ExecutionContext, params map[string]i
 	}
 
 	return info, nil
+}
+
+func (e *Executor) updatePatientName(execCtx *ExecutionContext, params map[string]interface{}) (interface{}, error) {
+	newName, ok := params["new_name"].(string)
+	if !ok || newName == "" {
+		return nil, fmt.Errorf("new_name is required")
+	}
+
+	if execCtx.PatientID == nil {
+		return nil, fmt.Errorf("patient not identified yet")
+	}
+
+	if execCtx.PatientNameUpdater == nil {
+		return nil, fmt.Errorf("PatientNameUpdater not configured")
+	}
+
+	oldName := execCtx.PatientName
+
+	if err := execCtx.PatientNameUpdater.UpdateName(execCtx.Context, execCtx.ClinicID, *execCtx.PatientID, newName); err != nil {
+		return nil, fmt.Errorf("failed to update patient name: %w", err)
+	}
+
+	// Update the execution context so subsequent tool calls see the new name
+	execCtx.PatientName = newName
+
+	return map[string]interface{}{
+		"success":  true,
+		"old_name": oldName,
+		"new_name": newName,
+		"message":  fmt.Sprintf("Nome atualizado de %s para %s", oldName, newName),
+	}, nil
 }

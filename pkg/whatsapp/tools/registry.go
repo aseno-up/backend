@@ -383,4 +383,20 @@ func (r *Registry) registerInformationTools() {
 			Properties: map[string]*genai.Schema{},
 		},
 	})
+
+	// update_patient_name
+	r.register(&Tool{
+		Name:        "update_patient_name",
+		Description: "Atualiza o nome do paciente. Use quando o paciente informar que seu nome está errado ou pedir para corrigir/alterar o nome cadastrado.",
+		Parameters: &genai.Schema{
+			Type:     genai.TypeObject,
+			Required: []string{"new_name"},
+			Properties: map[string]*genai.Schema{
+				"new_name": {
+					Type:        genai.TypeString,
+					Description: "O nome correto do paciente, conforme informado por ele.",
+				},
+			},
+		},
+	})
 }

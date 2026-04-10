@@ -2111,6 +2111,7 @@ func initializeAIAgent(
 		ProfessionalInfoProvider: &aiAgentProfessionalInfoAdapter{professionalService: professionalService},
 		PatientInfoProvider:      &aiAgentPatientInfoAdapter{patientService: patientService},
 		PatientFinderCreator:     &aiAgentPatientFinderCreatorAdapter{patientService: patientService, patientRepo: patientRepo},
+		PatientNameUpdater:       &aiAgentPatientNameUpdaterAdapter{patientService: patientService},
 	}
 
 	// 5. Create tool executor
@@ -2517,4 +2518,15 @@ func (a *aiAgentPatientFinderCreatorAdapter) FindOrCreateByPhone(ctx context.Con
 		Phone: newPatient.Phone,
 		Email: newPatient.Email,
 	}, nil
+}
+
+type aiAgentPatientNameUpdaterAdapter struct {
+	patientService patient_service.PatientService
+}
+
+func (a *aiAgentPatientNameUpdaterAdapter) UpdateName(ctx context.Context, clinicID, patientID uuid.UUID, newName string) error {
+	_, err := a.patientService.Update(ctx, patientID, clinicID, &patient_model.UpdatePatientRequest{
+		Name: newName,
+	})
+	return err
 }

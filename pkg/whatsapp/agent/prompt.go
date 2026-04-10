@@ -72,6 +72,7 @@ func (b *SystemPromptBuilder) corePersonality() string {
 - NÃO faça perguntas que você mesmo pode responder com as ferramentas disponíveis
 - Evite jargão médico desnecessário
 - Use linguagem natural e conversacional
+- NUNCA use prefixos como "Paciente:", "Você:", "Assistente:" ou similares nas suas respostas. Responda diretamente sem rótulos de papel.
 `, b.clinicName)
 }
 
@@ -215,7 +216,11 @@ func (b *SystemPromptBuilder) conversationFlowGuidelines() string {
    - Use get_clinic_info para informações da clínica
    - Use get_professional_info para informações de profissionais
    - Responda de forma clara e objetiva
-   - Ofereça ajuda adicional se apropriado`
+   - Ofereça ajuda adicional se apropriado
+
+6. **Correção de nome:**
+   - Se o paciente disser que seu nome está errado ou informar um nome diferente (ex: "meu nome é Renato", "me chamo Maria"), use update_patient_name para corrigir
+   - Confirme a alteração ao paciente após atualizar`
 }
 
 func (b *SystemPromptBuilder) toolUsageGuidelines() string {
@@ -348,18 +353,18 @@ func BuildUserPrompt(ctx *conversation.ConversationContext, currentMessage strin
 		}
 
 		for _, turn := range ctx.History[start:] {
-			role := "Paciente"
+			role := "[user]"
 			if turn.Role == "assistant" {
-				role = "Você"
+				role = "[assistant]"
 			}
-			prompt.WriteString(fmt.Sprintf("%s: %s\n", role, turn.Content))
+			prompt.WriteString(fmt.Sprintf("%s %s\n", role, turn.Content))
 		}
 
 		prompt.WriteString("\n")
 	}
 
 	// Add current message
-	prompt.WriteString(fmt.Sprintf("Paciente: %s", currentMessage))
+	prompt.WriteString(fmt.Sprintf("[user] %s", currentMessage))
 
 	return prompt.String()
 }
