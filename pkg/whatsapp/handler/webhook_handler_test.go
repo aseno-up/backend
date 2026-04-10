@@ -19,6 +19,7 @@ import (
 	"github.com/aseno/backend/pkg/whatsapp/agent"
 	"github.com/aseno/backend/pkg/whatsapp/classifier"
 	whatsapp_model "github.com/aseno/backend/pkg/whatsapp/model"
+	systemlog_service "github.com/aseno/backend/pkg/systemlog/service"
 	"github.com/aseno/backend/pkg/whatsapp/service"
 	"github.com/aseno/backend/pkg/whatsapp/transcriber"
 )
@@ -198,6 +199,8 @@ func (s *stubWhatsAppSvc) SetScheduledMessageRepo(_ service.ScheduledMessageRepo
 func (s *stubWhatsAppSvc) SetDefaultDelayBetweenPatients(_ int)                         {}
 func (s *stubWhatsAppSvc) SetDebounceDelay(_ time.Duration)                             {}
 func (s *stubWhatsAppSvc) SetAudioTranscriber(_ transcriber.AudioTranscriber)           {}
+func (s *stubWhatsAppSvc) SetPatientAIPreferenceChecker(_ service.PatientAIPreferenceChecker) {}
+func (s *stubWhatsAppSvc) SetSystemLogService(_ systemlog_service.SystemLogService)           {}
 
 // newTestRouter cria um router Gin com o handler e clinic_id injetados no contexto.
 func newTestRouter(h WhatsAppHandler, clinicID uuid.UUID) *gin.Engine {

@@ -16,6 +16,8 @@ import (
 	"github.com/aseno/backend/internal/queue"
 	aptModel "github.com/aseno/backend/pkg/appointment/model"
 	clinic_model "github.com/aseno/backend/pkg/clinic/model"
+	systemlog_model "github.com/aseno/backend/pkg/systemlog/model"
+	systemlog_service "github.com/aseno/backend/pkg/systemlog/service"
 	"github.com/aseno/backend/pkg/whatsapp/agent"
 	"github.com/aseno/backend/pkg/whatsapp/classifier"
 	"github.com/aseno/backend/pkg/whatsapp/model"
@@ -90,6 +92,7 @@ type MessageQueue interface {
 type ClinicRepository interface {
 	GetByID(ctx context.Context, id uuid.UUID) (*clinic_model.Clinic, error)
 }
+
 
 // ScheduledMessageRepository defines the interface for scheduled message operations
 type ScheduledMessageRepository interface {
@@ -190,6 +193,12 @@ type WhatsAppService interface {
 
 	// SetAudioTranscriber sets the audio transcriber for voice message transcription
 	SetAudioTranscriber(t transcriber.AudioTranscriber)
+
+	// SetPatientAIPreferenceChecker sets the checker for per-patient AI scheduling preference
+	SetPatientAIPreferenceChecker(checker PatientAIPreferenceChecker)
+
+	// SetSystemLogService sets the system log service for persistent event logging
+	SetSystemLogService(svc systemlog_service.SystemLogService)
 }
 
 // whatsAppService implements WhatsAppService
@@ -226,6 +235,10 @@ type whatsAppService struct {
 	debounceDelay time.Duration
 	// Audio transcriber for voice message transcription
 	audioTranscriber transcriber.AudioTranscriber
+	// Patient AI preference checker for per-patient AI toggle
+	patientAIPrefChecker PatientAIPreferenceChecker
+	// System log service for persistent event logging
+	systemLogSvc systemlog_service.SystemLogService
 }
 
 // AppointmentStatusUpdater interface for updating appointment status
@@ -266,6 +279,11 @@ type PatientInfo struct {
 // PatientFinderCreator interface for finding or creating patients
 type PatientFinderCreator interface {
 	FindOrCreateByPhone(ctx context.Context, clinicID uuid.UUID, phone, name string) (*PatientInfo, error)
+}
+
+// PatientAIPreferenceChecker checks whether AI scheduling is enabled for a patient
+type PatientAIPreferenceChecker interface {
+	IsAISchedulingEnabledByPhone(ctx context.Context, clinicID uuid.UUID, phone string) (bool, error)
 }
 
 // ProfessionalInfo represents professional info for scheduling
@@ -439,6 +457,16 @@ func (s *whatsAppService) SetDebounceDelay(d time.Duration) {
 // SetAudioTranscriber sets the audio transcriber for voice message transcription
 func (s *whatsAppService) SetAudioTranscriber(t transcriber.AudioTranscriber) {
 	s.audioTranscriber = t
+}
+
+// SetPatientAIPreferenceChecker sets the checker for per-patient AI scheduling preference
+func (s *whatsAppService) SetPatientAIPreferenceChecker(checker PatientAIPreferenceChecker) {
+	s.patientAIPrefChecker = checker
+}
+
+// SetSystemLogService sets the system log service for persistent event logging
+func (s *whatsAppService) SetSystemLogService(svc systemlog_service.SystemLogService) {
+	s.systemLogSvc = svc
 }
 
 // SetAppointmentFinder sets the appointment finder for WhatsApp response handling
@@ -711,7 +739,7 @@ func (s *whatsAppService) SendReminderMessage(ctx context.Context, instance stri
 			"🕐 Horario: %s\n"+
 			"👨‍⚕️ Profissional: %s\n"+
 			"🏥 Local: %s\n\n"+
-			"Confirme sua presença?",
+			"Confirme sua presença?\n"+
 			"Se precisar remarcar ou cancelar, responda esta mensagem.",
 		reminderText,
 		greeting,
@@ -1076,6 +1104,29 @@ func (s *whatsAppService) handleWithAIAgent(ctx context.Context, clinicID uuid.U
 			logger.Printf("[AI Agent] Warning: failed to fetch clinic settings: %v", err)
 		} else if !clinic.Settings.AIAgentEnabled {
 			logger.Printf("[AI Agent] Clinic %s has AIAgentEnabled=false, AI agent will not respond", clinicID)
+			return nil
+		}
+	}
+
+	// Check if AI scheduling is enabled for this patient
+	if s.patientAIPrefChecker != nil {
+		enabled, err := s.patientAIPrefChecker.IsAISchedulingEnabledByPhone(ctx, clinicID, msg.Phone)
+		if err != nil {
+			logger.Printf("[AI Agent] Warning: failed to check patient AI preference for %s: %v", msg.Phone, err)
+		} else if !enabled {
+			logger.Printf("[AI Agent] Patient %s has AI scheduling disabled, skipping AI agent", msg.Phone)
+			if s.systemLogSvc != nil {
+				_ = s.systemLogSvc.Log(ctx, systemlog_service.SystemLogEntry{
+					ClinicID: &clinicID,
+					Service:  "ai_agent",
+					Event:    "patient_ai_disabled",
+					Status:   systemlog_model.LogStatusWarning,
+					Payload: map[string]interface{}{
+						"phone":  msg.Phone,
+						"action": "skipped_ai_processing",
+					},
+				})
+			}
 			return nil
 		}
 	}

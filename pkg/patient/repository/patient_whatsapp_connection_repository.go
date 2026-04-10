@@ -44,23 +44,28 @@ func (r *patientWhatsAppConnectionRepository) GetByPatientID(ctx context.Context
 
 // Upsert creates or updates a patient-whatsapp connection
 func (r *patientWhatsAppConnectionRepository) Upsert(ctx context.Context, conn *model.PatientWhatsAppConnection) error {
+	var existing model.PatientWhatsAppConnection
 	result := r.db.WithContext(ctx).
 		Where("patient_id = ? AND clinic_id = ?", conn.PatientID, conn.ClinicID).
-		Assign(model.PatientWhatsAppConnection{
-			WhatsAppConnectionID: conn.WhatsAppConnectionID,
-			AISchedulingEnabled:  conn.AISchedulingEnabled,
-			RemindersEnabled:     conn.RemindersEnabled,
-		}).
-		FirstOrCreate(conn)
+		First(&existing)
+
+	if result.Error == gorm.ErrRecordNotFound {
+		if err := r.db.WithContext(ctx).Create(conn).Error; err != nil {
+			return errors.ErrInternalInstance.WithError(err)
+		}
+		return nil
+	}
 	if result.Error != nil {
 		return errors.ErrInternalInstance.WithError(result.Error)
 	}
-	// If record already existed, update it
-	if result.RowsAffected == 0 {
-		result = r.db.WithContext(ctx).Save(conn)
-		if result.Error != nil {
-			return errors.ErrInternalInstance.WithError(result.Error)
-		}
+
+	// Update existing — Select forces GORM to include zero-value booleans (false)
+	conn.ID = existing.ID
+	result = r.db.WithContext(ctx).
+		Select("WhatsAppConnectionID", "AISchedulingEnabled", "RemindersEnabled").
+		Save(conn)
+	if result.Error != nil {
+		return errors.ErrInternalInstance.WithError(result.Error)
 	}
 	return nil
 }

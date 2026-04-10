@@ -6,6 +6,8 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 
+	audit_model "github.com/aseno/backend/pkg/audit/model"
+	audit_service "github.com/aseno/backend/pkg/audit/service"
 	"github.com/aseno/backend/internal/errors"
 	"github.com/aseno/backend/pkg/patient/model"
 	"github.com/aseno/backend/pkg/patient/service"
@@ -20,12 +22,13 @@ type PatientWhatsAppConnectionHandler interface {
 
 // patientWhatsAppConnectionHandler implements PatientWhatsAppConnectionHandler
 type patientWhatsAppConnectionHandler struct {
-	service service.PatientWhatsAppConnectionService
+	service  service.PatientWhatsAppConnectionService
+	auditSvc audit_service.AuditService
 }
 
 // NewPatientWhatsAppConnectionHandler creates a new handler
-func NewPatientWhatsAppConnectionHandler(service service.PatientWhatsAppConnectionService) PatientWhatsAppConnectionHandler {
-	return &patientWhatsAppConnectionHandler{service: service}
+func NewPatientWhatsAppConnectionHandler(service service.PatientWhatsAppConnectionService, auditSvc audit_service.AuditService) PatientWhatsAppConnectionHandler {
+	return &patientWhatsAppConnectionHandler{service: service, auditSvc: auditSvc}
 }
 
 // RegisterRoutes registers patient whatsapp connection routes
@@ -70,10 +73,20 @@ func (h *patientWhatsAppConnectionHandler) Update(c *gin.Context) {
 		return
 	}
 
+	// Fetch old data for audit log
+	var oldData *model.PatientWhatsAppConnectionResponse
+	if h.auditSvc != nil {
+		oldData, _ = h.service.GetByPatientID(c.Request.Context(), patientID, clinicID.(uuid.UUID))
+	}
+
 	result, err := h.service.Update(c.Request.Context(), patientID, clinicID.(uuid.UUID), &req)
 	if err != nil {
 		c.JSON(errors.GetStatusCode(err), errors.ToResponse(err))
 		return
+	}
+
+	if h.auditSvc != nil {
+		_ = h.auditSvc.LogFromGin(c, audit_model.AuditActionUpdate, audit_model.AuditEntityPatientWhatsAppConn, patientID.String(), oldData, result)
 	}
 
 	c.JSON(http.StatusOK, result)

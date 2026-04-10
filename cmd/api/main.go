@@ -522,6 +522,11 @@ func main() {
 				whatsappService.SetAIAgentService(aiAgentService)
 				whatsappService.SetClinicRepo(clinicRepo)
 				whatsappService.SetScheduledMessageRepo(scheduledMsgRepo)
+				whatsappService.SetPatientAIPreferenceChecker(&patientAIPreferenceAdapter{
+					patientRepo: patientRepo,
+					connRepo:    patient_repository.NewPatientWhatsAppConnectionRepository(db.GetDB()),
+				})
+				whatsappService.SetSystemLogService(systemLogSvc)
 				whatsappService.SetDefaultDelayBetweenPatients(workerCfg.MinDelayBetweenPatientsSeconds)
 				whatsappService.SetDebounceDelay(time.Duration(workerCfg.ResponseDebounceSeconds) * time.Second)
 				logger.Printf("AI Agent service connected to WhatsApp (response debounce: %ds)", workerCfg.ResponseDebounceSeconds)
@@ -714,7 +719,7 @@ func main() {
 	patientHandler := patient_handler.NewPatientHandler(patientService)
 	patientWhatsAppConnRepo := patient_repository.NewPatientWhatsAppConnectionRepository(db.GetDB())
 	patientWhatsAppConnService := patient_service.NewPatientWhatsAppConnectionService(patientWhatsAppConnRepo, patientRepo, whatsappConnRepo)
-	patientWhatsAppConnHandler := patient_handler.NewPatientWhatsAppConnectionHandler(patientWhatsAppConnService)
+	patientWhatsAppConnHandler := patient_handler.NewPatientWhatsAppConnectionHandler(patientWhatsAppConnService, auditSvc)
 	// Initialize Enrollment service and handler
 	enrollmentRepo := enrollment_repository.NewEnrollmentRepository(db.GetDB())
 	enrollmentSvc := enrollment_service.NewEnrollmentService(enrollmentRepo, sessionPlanRepo)
@@ -1858,6 +1863,28 @@ func (a *patientFinderCreatorAdapter) FindOrCreateByPhone(ctx context.Context, c
 		Name:  newPatient.Name,
 		Phone: newPatient.Phone,
 	}, nil
+}
+
+// patientAIPreferenceAdapter checks if AI scheduling is enabled for a patient by phone
+type patientAIPreferenceAdapter struct {
+	patientRepo  patient_repository.PatientRepository
+	connRepo     patient_repository.PatientWhatsAppConnectionRepository
+}
+
+func (a *patientAIPreferenceAdapter) IsAISchedulingEnabledByPhone(ctx context.Context, clinicID uuid.UUID, phone string) (bool, error) {
+	patient, err := a.patientRepo.GetByPhone(ctx, phone, clinicID)
+	if err != nil || patient == nil {
+		// Patient not found — default to AI enabled (new patient)
+		return true, nil
+	}
+
+	conn, err := a.connRepo.GetByPatientID(ctx, patient.ID, clinicID)
+	if err != nil {
+		// No preference record — default to AI enabled
+		return true, nil
+	}
+
+	return conn.AISchedulingEnabled, nil
 }
 
 // professionalListerAdapter adapts professional_repository to whatsapp_service.ProfessionalLister

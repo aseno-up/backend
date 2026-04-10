@@ -38,6 +38,7 @@ const (
 	AuditEntitySpecialty             AuditEntityType = "SPECIALTY"
 	AuditEntityProfessionalProcedure AuditEntityType = "PROFESSIONAL_PROCEDURE"
 	AuditEntityCommission            AuditEntityType = "COMMISSION"
+	AuditEntityPatientWhatsAppConn   AuditEntityType = "PATIENT_WHATSAPP_CONNECTION"
 )
 
 // AuditLog represents an audit trail entry
