@@ -38,7 +38,7 @@ func (m *MockPaymentService) CreateCustomerForClinic(ctx context.Context, clinic
 	return args.Error(0)
 }
 
-func (m *MockPaymentService) CreateSubscriptionForClinic(ctx context.Context, clinicID uuid.UUID, planID uuid.UUID, offerToken *string, billing string) error {
+func (m *MockPaymentService) CreateSubscriptionForClinic(ctx context.Context, clinicID uuid.UUID, planID uuid.UUID, offerToken *string, billing string, units int) error {
 	args := m.Called(ctx, clinicID, planID, offerToken, billing)
 	return args.Error(0)
 }
@@ -235,8 +235,8 @@ func (m *MockProfessionalRepository) List(ctx context.Context, clinicID uuid.UUI
 	return args.Get(0).([]*professional_model.Professional), args.Get(1).(int64), args.Error(2)
 }
 
-func (m *MockProfessionalRepository) CountActiveByAccountID(ctx context.Context, accountID uuid.UUID) (int64, error) {
-	args := m.Called(ctx, accountID)
+func (m *MockProfessionalRepository) CountActiveByClinicID(ctx context.Context, clinicID uuid.UUID) (int64, error) {
+	args := m.Called(ctx, clinicID)
 	return args.Get(0).(int64), args.Error(1)
 }
 

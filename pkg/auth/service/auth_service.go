@@ -58,7 +58,7 @@ type GoogleAuthClient interface {
 // PaymentService defines minimal interface for payment operations during registration
 type PaymentService interface {
 	CreateCustomerForClinic(ctx context.Context, clinicID uuid.UUID, req *payment_model.CreateCustomerRequest) error
-	CreateSubscriptionForClinic(ctx context.Context, clinicID uuid.UUID, planID uuid.UUID, offerToken *string, billing string) error
+	CreateSubscriptionForClinic(ctx context.Context, clinicID uuid.UUID, planID uuid.UUID, offerToken *string, billing string, units int) error
 }
 
 // TemplateSeedService defines minimal interface for seeding default templates on clinic creation
@@ -429,7 +429,7 @@ func (s *authService) Register(ctx context.Context, req *model.RegisterRequest) 
 						offerToken = &req.OfferToken
 					}
 
-					if err := s.paymentService.CreateSubscriptionForClinic(ctx, clinic.ID, planID, offerToken, req.Billing); err != nil {
+					if err := s.paymentService.CreateSubscriptionForClinic(ctx, clinic.ID, planID, offerToken, req.Billing, req.Units); err != nil {
 						// Log error but don't fail registration
 						fmt.Printf("[AUTH] Failed to create Asaas subscription for clinic %s: %v\n", clinic.ID, err)
 					} else {

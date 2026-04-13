@@ -38,7 +38,7 @@ type IntegrationRepository interface {
 	Delete(ctx context.Context, clinicID uuid.UUID) error
 	UpdateTokens(ctx context.Context, clinicID uuid.UUID, accessToken, refreshToken string, expiry time.Time) error
 	UpdateLastSync(ctx context.Context, clinicID uuid.UUID, lastSyncAt time.Time, syncError string) error
-	CountByAccountID(ctx context.Context, accountID uuid.UUID) (int64, error)
+	CountByClinicID(ctx context.Context, clinicID uuid.UUID) (int64, error)
 }
 
 // SyncRepository defines the interface for calendar sync persistence
@@ -123,7 +123,7 @@ func (s *calendarService) checkCalendarLimit(ctx context.Context, clinic *clinic
 		return nil
 	}
 
-	count, err := s.integrationRepo.CountByAccountID(ctx, clinic.AccountID)
+	count, err := s.integrationRepo.CountByClinicID(ctx, clinic.ID)
 	if err != nil {
 		return err
 	}
@@ -132,7 +132,7 @@ func (s *calendarService) checkCalendarLimit(ctx context.Context, clinic *clinic
 	_, existingErr := s.integrationRepo.GetByClinicID(ctx, clinic.ID)
 	if existingErr != nil && int(count) >= limit {
 		return errors.ErrValidationInstance.WithMessage(
-			fmt.Sprintf("Limite de %d integrações com Google Calendar atingido. Faça upgrade para adicionar mais.", limit))
+			fmt.Sprintf("Limite de %d integrações com Google Calendar por unidade atingido. Faça upgrade para adicionar mais.", limit))
 	}
 
 	return nil

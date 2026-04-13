@@ -75,7 +75,7 @@ func (m *mockConnRepo) HasAnyByClinicID(ctx context.Context, clinicID uuid.UUID)
 func (m *mockConnRepo) Deactivate(ctx context.Context, clinicID uuid.UUID) error {
 	return nil
 }
-func (m *mockConnRepo) CountActiveByAccountID(ctx context.Context, accountID uuid.UUID) (int64, error) {
+func (m *mockConnRepo) CountActiveByClinicID(ctx context.Context, clinicID uuid.UUID) (int64, error) {
 	return 0, nil
 }
 

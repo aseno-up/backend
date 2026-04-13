@@ -92,12 +92,12 @@ type PaymentService interface {
 	CreateSubscription(ctx context.Context, clinicID uuid.UUID, req *CreateSubscriptionInput) (*model.Subscription, error)
 	GetSubscription(ctx context.Context, clinicID uuid.UUID) (*model.Subscription, error)
 	CancelSubscription(ctx context.Context, clinicID uuid.UUID) error
-	SwitchPlan(ctx context.Context, clinicID uuid.UUID, newPlan string, billingType string, cycle string, offerToken *string, creditCard *model.CreditCardInfo, creditCardHolder *model.CreditCardHolderInfo) (*model.Subscription, error)
+	SwitchPlan(ctx context.Context, clinicID uuid.UUID, newPlan string, billingType string, cycle string, offerToken *string, creditCard *model.CreditCardInfo, creditCardHolder *model.CreditCardHolderInfo, units int) (*model.Subscription, error)
 	GetSubscriptionPayments(ctx context.Context, clinicID uuid.UUID) (*model.PaymentListResponse, error)
 
 	// Helper methods for registration flow
 	CreateCustomerForClinic(ctx context.Context, clinicID uuid.UUID, req *model.CreateCustomerRequest) error
-	CreateSubscriptionForClinic(ctx context.Context, clinicID uuid.UUID, planID uuid.UUID, offerToken *string, billing string) error
+	CreateSubscriptionForClinic(ctx context.Context, clinicID uuid.UUID, planID uuid.UUID, offerToken *string, billing string, units int) error
 
 	// Webhook handling
 	HandleWebhook(ctx context.Context, payload *model.AsaasWebhookPayload) error
@@ -131,6 +131,7 @@ type CreateSubscriptionInput struct {
 	PlanID      uuid.UUID
 	OfferToken  *string
 	Cycle       model.BillingCycle
+	Units       int // number of units (clinics) contracted; required for "advanced" (min 2)
 }
 
 // paymentService implements PaymentService
@@ -456,6 +457,14 @@ func (s *paymentService) CreateSubscription(ctx context.Context, clinicID uuid.U
 		return nil, errors.ErrBadRequestInstance.WithMessage(err.Error())
 	}
 
+	// Advanced plan: bill per contracted unit, require at least 2.
+	if plan.Slug == "advanced" {
+		if req.Units < 2 {
+			return nil, errors.ErrValidationInstance.WithMessage("O plano Avançado exige contratação mínima de 2 unidades")
+		}
+		value = value * float64(req.Units)
+	}
+
 	description := "Assinatura " + plan.Name
 
 	// Create subscription in Asaas
@@ -501,6 +510,9 @@ func (s *paymentService) CreateSubscription(ctx context.Context, clinicID uuid.U
 		if offer.CustomMaxProfessionals != nil {
 			maxProfessionals = *offer.CustomMaxProfessionals
 		}
+	}
+	if plan.Slug == "advanced" {
+		maxClinics = req.Units
 	}
 
 	// Save subscription to database
@@ -786,7 +798,7 @@ func (s *paymentService) CreateCustomerForClinic(ctx context.Context, clinicID u
 }
 
 // CreateSubscriptionForClinic creates an Asaas subscription for a clinic during registration
-func (s *paymentService) CreateSubscriptionForClinic(ctx context.Context, clinicID uuid.UUID, planID uuid.UUID, offerToken *string, billing string) error {
+func (s *paymentService) CreateSubscriptionForClinic(ctx context.Context, clinicID uuid.UUID, planID uuid.UUID, offerToken *string, billing string, units int) error {
 	clinic, err := s.clinicRepo.GetByID(ctx, clinicID)
 	if err != nil {
 		return err
@@ -826,6 +838,14 @@ func (s *paymentService) CreateSubscriptionForClinic(ctx context.Context, clinic
 	value, err := s.planService.CalculateBestPrice(ctx, plan, offer, planCycleType)
 	if err != nil {
 		return errors.ErrBadRequestInstance.WithMessage(err.Error())
+	}
+
+	// Advanced plan: bill per contracted unit, require at least 2.
+	if plan.Slug == "advanced" {
+		if units < 2 {
+			return errors.ErrValidationInstance.WithMessage("O plano Avançado exige contratação mínima de 2 unidades")
+		}
+		value = value * float64(units)
 	}
 
 	// Calculate next due date (immediate charge)
@@ -871,6 +891,9 @@ func (s *paymentService) CreateSubscriptionForClinic(ctx context.Context, clinic
 			maxProfessionals = *offer.CustomMaxProfessionals
 		}
 	}
+	if plan.Slug == "advanced" {
+		maxClinics = units
+	}
 
 	// Save subscription in database
 	subscription := &model.Subscription{
@@ -899,7 +922,7 @@ func (s *paymentService) CreateSubscriptionForClinic(ctx context.Context, clinic
 // SwitchPlan handles plan switching: cancels current subscription and creates new one
 // For trial/expired accounts: creates immediate subscription
 // For active accounts: cancels current, creates new with nextDueDate = current period end
-func (s *paymentService) SwitchPlan(ctx context.Context, clinicID uuid.UUID, newPlan string, billingType string, cycle string, offerToken *string, creditCard *model.CreditCardInfo, creditCardHolder *model.CreditCardHolderInfo) (*model.Subscription, error) {
+func (s *paymentService) SwitchPlan(ctx context.Context, clinicID uuid.UUID, newPlan string, billingType string, cycle string, offerToken *string, creditCard *model.CreditCardInfo, creditCardHolder *model.CreditCardHolderInfo, units int) (*model.Subscription, error) {
 	clinic, err := s.clinicRepo.GetByID(ctx, clinicID)
 	if err != nil {
 		return nil, errors.ErrNotFoundInstance.WithMessage("Clinic not found")
@@ -956,6 +979,14 @@ func (s *paymentService) SwitchPlan(ctx context.Context, clinicID uuid.UUID, new
 	value, err := s.planService.CalculateBestPrice(ctx, plan, offer, cycleType)
 	if err != nil {
 		return nil, errors.ErrInternalInstance.WithMessage("Falha ao calcular o preço do plano").WithError(err)
+	}
+
+	// Advanced plan: bill per contracted unit, require at least 2.
+	if plan.Slug == "advanced" {
+		if units < 2 {
+			return nil, errors.ErrValidationInstance.WithMessage("O plano Avançado exige contratação mínima de 2 unidades")
+		}
+		value = value * float64(units)
 	}
 
 	// Check for existing active subscription
@@ -1055,6 +1086,9 @@ func (s *paymentService) SwitchPlan(ctx context.Context, clinicID uuid.UUID, new
 		if offer.CustomMaxProfessionals != nil {
 			subscription.MaxProfessionalsAtContract = *offer.CustomMaxProfessionals
 		}
+	}
+	if plan.Slug == "advanced" {
+		subscription.MaxClinicsAtContract = units
 	}
 
 	if err := s.subscriptionRepo.Create(ctx, subscription); err != nil {

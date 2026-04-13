@@ -85,8 +85,8 @@ func (m *mockProfRepo) GetByUserID(ctx context.Context, userID, clinicID uuid.UU
 	return args.Get(0).(*model.Professional), args.Error(1)
 }
 
-func (m *mockProfRepo) CountActiveByAccountID(ctx context.Context, accountID uuid.UUID) (int64, error) {
-	args := m.Called(ctx, accountID)
+func (m *mockProfRepo) CountActiveByClinicID(ctx context.Context, clinicID uuid.UUID) (int64, error) {
+	args := m.Called(ctx, clinicID)
 	return args.Get(0).(int64), args.Error(1)
 }
 

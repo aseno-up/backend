@@ -203,11 +203,11 @@ func (h *whatsAppHandler) Connect(c *gin.Context) {
 		return
 	}
 
-	// Check WhatsApp connection limit via Account
+	// Check WhatsApp connection limit per clinic
 	if clinic.Account != nil {
 		limit := clinic.Account.MaxWhatsappConnections
 		if !planlimit.IsUnlimited(limit) {
-			count, err := h.connRepo.CountActiveByAccountID(c.Request.Context(), clinic.AccountID)
+			count, err := h.connRepo.CountActiveByClinicID(c.Request.Context(), clinic.ID)
 			if err != nil {
 				statusCode := errors.GetStatusCode(err)
 				c.JSON(statusCode, errors.ToResponse(err))
@@ -218,7 +218,7 @@ func (h *whatsAppHandler) Connect(c *gin.Context) {
 			if !hasExisting && int(count) >= limit {
 				c.JSON(http.StatusForbidden, errors.ToResponse(
 					errors.ErrValidationInstance.WithMessage(
-						fmt.Sprintf("Limite de %d conexões WhatsApp atingido. Faça upgrade para adicionar mais.", limit))))
+						fmt.Sprintf("Limite de %d conexões WhatsApp por unidade atingido. Faça upgrade para adicionar mais.", limit))))
 				return
 			}
 		}

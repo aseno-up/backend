@@ -318,6 +318,7 @@ type CreateSubscriptionRequest struct {
 	PlanID      string  `json:"plan_id" binding:"required,uuid"`
 	OfferToken  *string `json:"offer_token,omitempty"`
 	Cycle       string  `json:"cycle" binding:"required"`
+	Units       int     `json:"units"`
 }
 
 // CreateSubscription creates a new subscription
@@ -345,6 +346,7 @@ func (h *paymentHandler) CreateSubscription(c *gin.Context) {
 		PlanID:      planID,
 		OfferToken:  req.OfferToken,
 		Cycle:       model.BillingCycle(req.Cycle),
+		Units:       req.Units,
 	}
 
 	subscription, err := h.service.CreateSubscription(c.Request.Context(), clinicID.(uuid.UUID), input)
@@ -382,6 +384,7 @@ type SwitchPlanRequest struct {
 	OfferToken           *string                     `json:"offer_token,omitempty"`
 	CreditCard           *model.CreditCardInfo       `json:"credit_card,omitempty"`
 	CreditCardHolderInfo *model.CreditCardHolderInfo `json:"credit_card_holder_info,omitempty"`
+	Units                int                         `json:"units"`
 }
 
 // SwitchPlan handles plan switching (cancel current + create new)
@@ -398,7 +401,7 @@ func (h *paymentHandler) SwitchPlan(c *gin.Context) {
 		return
 	}
 
-	subscription, err := h.service.SwitchPlan(c.Request.Context(), clinicID.(uuid.UUID), req.Plan, req.BillingType, req.Cycle, req.OfferToken, req.CreditCard, req.CreditCardHolderInfo)
+	subscription, err := h.service.SwitchPlan(c.Request.Context(), clinicID.(uuid.UUID), req.Plan, req.BillingType, req.Cycle, req.OfferToken, req.CreditCard, req.CreditCardHolderInfo, req.Units)
 	if err != nil {
 		statusCode := errors.GetStatusCode(err)
 		c.JSON(statusCode, errors.ToResponse(err))

@@ -417,7 +417,24 @@ func (m *mockPlanService) CalculateBestPrice(ctx context.Context, plan *plan_mod
 
 // Add dummy methods to satisfy the interface if necessary
 func (m *mockPlanService) GetPlanByID(ctx context.Context, id uuid.UUID) (*plan_model.Plan, error) {
-	return nil, nil
+	if !m.ExpectedCalls_Has("GetPlanByID") {
+		return nil, nil
+	}
+	args := m.Called(ctx, id)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*plan_model.Plan), args.Error(1)
+}
+
+// ExpectedCalls_Has checks if a method has been set up with mock expectations
+func (m *mockPlanService) ExpectedCalls_Has(method string) bool {
+	for _, call := range m.ExpectedCalls {
+		if call.Method == method {
+			return true
+		}
+	}
+	return false
 }
 func (m *mockPlanService) ValidateOffer(ctx context.Context, token string) (*plan_model.Offer, error) {
 	return nil, nil
@@ -510,7 +527,7 @@ func TestSwitchPlan_NewSubscription_FromTrial(t *testing.T) {
 	accountRepo.On("Update", ctx, mock.AnythingOfType("*model.Account")).Return(nil)
 
 	// Execute
-	result, err := svc.SwitchPlan(ctx, clinicID, "professional", "PIX", "MONTHLY", nil, nil, nil)
+	result, err := svc.SwitchPlan(ctx, clinicID, "professional", "PIX", "MONTHLY", nil, nil, nil, 0)
 
 	// Assertions
 	assert.NoError(t, err)
@@ -568,14 +585,14 @@ func TestSwitchPlan_ExistingActiveSubscription_UsesNextDueDate(t *testing.T) {
 
 	// Mock Asaas creates new subscription with future nextDueDate
 
+	// Advanced plan with units=2 → value is multiplied: 349 * 2 = 698
 	client.On("CreateSubscription", ctx, mock.MatchedBy(func(req *model.CreateSubscriptionRequest) bool {
-		// Verify nextDueDate is set to the existing subscription's next due date
-		return req.NextDueDate == futureDate.Format("2006-01-02") && req.Value == 349.00
+		return req.NextDueDate == futureDate.Format("2006-01-02") && req.Value == 698.00
 	})).Return(&model.AsaasSubscriptionResponse{
 		ID:          "sub_new_advanced",
 		Status:      "ACTIVE",
 		BillingType: "CREDIT_CARD",
-		Value:       349.00,
+		Value:       698.00,
 		Cycle:       "MONTHLY",
 		NextDueDate: futureDate.Format("2006-01-02"),
 		Description: "Plano Avançado - Aseno",
@@ -593,13 +610,13 @@ func TestSwitchPlan_ExistingActiveSubscription_UsesNextDueDate(t *testing.T) {
 	accountRepo.On("Update", ctx, mock.AnythingOfType("*model.Account")).Return(nil)
 
 	// Execute
-	result, err := svc.SwitchPlan(ctx, clinicID, "advanced", "CREDIT_CARD", "MONTHLY", nil, nil, nil)
+	result, err := svc.SwitchPlan(ctx, clinicID, "advanced", "CREDIT_CARD", "MONTHLY", nil, nil, nil, 2)
 
 	// Assertions
 	assert.NoError(t, err)
 	assert.NotNil(t, result)
 	assert.Equal(t, "sub_new_advanced", result.AsaasSubscriptionID)
-	assert.Equal(t, float64(349.00), result.Value)
+	assert.Equal(t, float64(698.00), result.Value)
 
 	// Verify old subscription was cancelled
 	client.AssertCalled(t, "DeleteSubscription", ctx, "sub_old")
@@ -626,7 +643,7 @@ func TestSwitchPlan_InvalidPlan_ReturnsError(t *testing.T) {
 	planServiceMock.On("ListPlans", ctx).Return([]plan_model.Plan{}, nil)
 
 	// Execute with invalid plan
-	result, err := svc.SwitchPlan(ctx, clinicID, "invalid_plan", "PIX", "MONTHLY", nil, nil, nil)
+	result, err := svc.SwitchPlan(ctx, clinicID, "invalid_plan", "PIX", "MONTHLY", nil, nil, nil, 0)
 
 	// Assertions
 	assert.Error(t, err)
@@ -680,7 +697,7 @@ func TestSwitchPlan_YearlyCycle_CalculatesAnnualPrice(t *testing.T) {
 	accountRepo.On("Update", ctx, mock.AnythingOfType("*model.Account")).Return(nil)
 
 	// Execute
-	result, err := svc.SwitchPlan(ctx, clinicID, "basic", "PIX", "YEARLY", nil, nil, nil)
+	result, err := svc.SwitchPlan(ctx, clinicID, "basic", "PIX", "YEARLY", nil, nil, nil, 0)
 
 	assert.NoError(t, err)
 	assert.NotNil(t, result)
@@ -873,7 +890,7 @@ func TestSwitchPlan_SetsPendingNotActive(t *testing.T) {
 		return acc.SubscriptionStatus == account_model.SubscriptionStatusPending
 	})).Return(nil)
 
-	result, err := svc.SwitchPlan(ctx, clinicID, "basic", "PIX", "MONTHLY", nil, nil, nil)
+	result, err := svc.SwitchPlan(ctx, clinicID, "basic", "PIX", "MONTHLY", nil, nil, nil, 0)
 
 	assert.NoError(t, err)
 	assert.NotNil(t, result)
@@ -917,7 +934,7 @@ func TestSwitchPlan_EmptyAsaasID_ReturnsError(t *testing.T) {
 		NextDueDate: "",
 	}, nil)
 
-	result, err := svc.SwitchPlan(ctx, clinicID, "basic", "PIX", "MONTHLY", nil, nil, nil)
+	result, err := svc.SwitchPlan(ctx, clinicID, "basic", "PIX", "MONTHLY", nil, nil, nil, 0)
 
 	// Should return error, not try to save with empty ID
 	assert.Error(t, err)
@@ -984,7 +1001,7 @@ func TestSwitchPlan_PopulatesPlanFields(t *testing.T) {
 		return acc.SubscriptionStatus == account_model.SubscriptionStatusPending
 	})).Return(nil)
 
-	result, err := svc.SwitchPlan(ctx, clinicID, "basic", "PIX", "MONTHLY", nil, nil, nil)
+	result, err := svc.SwitchPlan(ctx, clinicID, "basic", "PIX", "MONTHLY", nil, nil, nil, 0)
 
 	assert.NoError(t, err)
 	assert.NotNil(t, result)
@@ -1054,7 +1071,7 @@ func TestSwitchPlan_AccountPlanID_MatchesSelectedPlan(t *testing.T) {
 		updatedAccount = args.Get(1).(*account_model.Account)
 	}).Return(nil)
 
-	result, err := svc.SwitchPlan(ctx, clinicID, "professional", "PIX", "MONTHLY", nil, nil, nil)
+	result, err := svc.SwitchPlan(ctx, clinicID, "professional", "PIX", "MONTHLY", nil, nil, nil, 0)
 
 	assert.NoError(t, err)
 	assert.NotNil(t, result)
@@ -1117,7 +1134,7 @@ func TestSwitchPlan_AccountUpdate_DoesNotSetPlanAssociation(t *testing.T) {
 		updatedAccount = args.Get(1).(*account_model.Account)
 	}).Return(nil)
 
-	result, err := svc.SwitchPlan(ctx, clinicID, "professional", "PIX", "MONTHLY", nil, nil, nil)
+	result, err := svc.SwitchPlan(ctx, clinicID, "professional", "PIX", "MONTHLY", nil, nil, nil, 0)
 
 	assert.NoError(t, err)
 	assert.NotNil(t, result)
@@ -1250,7 +1267,7 @@ func TestSwitchPlan_GhostSubscription_SkipsAsaasDelete(t *testing.T) {
 		return acc.SubscriptionStatus == account_model.SubscriptionStatusPending
 	})).Return(nil)
 
-	result, err := svc.SwitchPlan(ctx, clinicID, "basic", "PIX", "MONTHLY", nil, nil, nil)
+	result, err := svc.SwitchPlan(ctx, clinicID, "basic", "PIX", "MONTHLY", nil, nil, nil, 0)
 
 	assert.NoError(t, err)
 	assert.NotNil(t, result)
@@ -1264,4 +1281,93 @@ func TestSwitchPlan_GhostSubscription_SkipsAsaasDelete(t *testing.T) {
 
 	// Verify new subscription was created
 	subscriptionRepo.AssertCalled(t, "Create", ctx, mock.AnythingOfType("*model.Subscription"))
+}
+
+// --- Advanced plan: per-unit billing + minimum 2 units ---
+
+func TestCreateSubscription_Advanced_RequiresMinimumTwoUnits(t *testing.T) {
+	svc, _, customerRepo, _, subscriptionRepo, clinicRepo, _, planServiceMock := setupTestService()
+	ctx := context.Background()
+
+	clinicID := uuid.New()
+	accountID := uuid.New()
+	planID := uuid.New()
+
+	clinicRepo.On("GetByID", ctx, clinicID).Return(&clinic_model.Clinic{
+		ID:        clinicID,
+		AccountID: accountID,
+	}, nil)
+	customerRepo.On("GetByAccountID", ctx, accountID).Return(&model.Customer{
+		ID:              uuid.New(),
+		AsaasCustomerID: "cus_adv",
+	}, nil)
+	subscriptionRepo.On("GetByAccountID", ctx, accountID).Return(nil, assert.AnError)
+
+	advanced := &plan_model.Plan{ID: planID, Slug: "advanced", Name: "Plano Avançado", MaxProfessionals: 14}
+	planServiceMock.On("GetPlanByID", ctx, planID).Return(advanced, nil)
+	planServiceMock.On("CalculateBestPrice", ctx, mock.Anything, mock.Anything, mock.Anything).Return(499.00, nil)
+
+	// Units = 1 must be rejected (below minimum)
+	_, err := svc.CreateSubscription(ctx, clinicID, &CreateSubscriptionInput{
+		BillingType: model.BillingTypePix,
+		PlanID:      planID,
+		Cycle:       model.BillingCycleMonthly,
+		Units:       1,
+	})
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "2 unidades")
+}
+
+func TestCreateSubscription_Advanced_ValueMultipliedByUnits(t *testing.T) {
+	svc, client, customerRepo, _, subscriptionRepo, clinicRepo, _, planServiceMock := setupTestService()
+	ctx := context.Background()
+
+	clinicID := uuid.New()
+	accountID := uuid.New()
+	planID := uuid.New()
+
+	clinicRepo.On("GetByID", ctx, clinicID).Return(&clinic_model.Clinic{
+		ID:        clinicID,
+		AccountID: accountID,
+	}, nil)
+	customerRepo.On("GetByAccountID", ctx, accountID).Return(&model.Customer{
+		ID:              uuid.New(),
+		AsaasCustomerID: "cus_adv2",
+	}, nil)
+	subscriptionRepo.On("GetByAccountID", ctx, accountID).Return(nil, assert.AnError)
+
+	advanced := &plan_model.Plan{ID: planID, Slug: "advanced", Name: "Plano Avançado", MaxProfessionals: 14}
+	planServiceMock.On("GetPlanByID", ctx, planID).Return(advanced, nil)
+	planServiceMock.On("CalculateBestPrice", ctx, mock.Anything, mock.Anything, mock.Anything).Return(499.00, nil)
+
+	// Asaas must be called with value = 499 * 3 = 1497
+	client.On("CreateSubscription", ctx, mock.MatchedBy(func(req *model.CreateSubscriptionRequest) bool {
+		return req.Value == 1497.00
+	})).Return(&model.AsaasSubscriptionResponse{
+		ID:          "sub_adv_3u",
+		Status:      "ACTIVE",
+		BillingType: "PIX",
+		Value:       1497.00,
+		Cycle:       "MONTHLY",
+		NextDueDate: time.Now().AddDate(0, 0, 1).Format("2006-01-02"),
+		Description: "Assinatura Plano Avançado",
+	}, nil)
+
+	// Subscription persisted with MaxClinicsAtContract = 3 (units) and the multiplied value
+	subscriptionRepo.On("Create", ctx, mock.MatchedBy(func(sub *model.Subscription) bool {
+		return sub.MaxClinicsAtContract == 3 && sub.PriceAtContract == 1497.00
+	})).Return(nil)
+
+	result, err := svc.CreateSubscription(ctx, clinicID, &CreateSubscriptionInput{
+		BillingType: model.BillingTypePix,
+		PlanID:      planID,
+		Cycle:       model.BillingCycleMonthly,
+		Units:       3,
+	})
+
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	client.AssertExpectations(t)
+	subscriptionRepo.AssertExpectations(t)
 }

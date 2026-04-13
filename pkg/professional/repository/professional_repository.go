@@ -20,7 +20,7 @@ type ProfessionalRepository interface {
 	Delete(ctx context.Context, id, clinicID uuid.UUID) error
 	BulkDelete(ctx context.Context, ids []uuid.UUID, clinicID uuid.UUID) error
 	GetByUserID(ctx context.Context, userID, clinicID uuid.UUID) (*model.Professional, error)
-	CountActiveByAccountID(ctx context.Context, accountID uuid.UUID) (int64, error)
+	CountActiveByClinicID(ctx context.Context, clinicID uuid.UUID) (int64, error)
 }
 
 // professionalRepository implements ProfessionalRepository
@@ -147,13 +147,12 @@ func (r *professionalRepository) BulkDelete(ctx context.Context, ids []uuid.UUID
 	return nil
 }
 
-// CountActiveByAccountID counts active professionals across all clinics belonging to an account
-func (r *professionalRepository) CountActiveByAccountID(ctx context.Context, accountID uuid.UUID) (int64, error) {
+// CountActiveByClinicID counts active professionals belonging to a single clinic
+func (r *professionalRepository) CountActiveByClinicID(ctx context.Context, clinicID uuid.UUID) (int64, error) {
 	var count int64
 	err := r.db.WithContext(ctx).
 		Model(&model.Professional{}).
-		Joins("JOIN clinics ON clinics.id = professionals.clinic_id AND clinics.deleted_at IS NULL").
-		Where("clinics.account_id = ? AND professionals.is_active = true AND professionals.deleted_at IS NULL", accountID).
+		Where("clinic_id = ? AND is_active = true AND deleted_at IS NULL", clinicID).
 		Count(&count).Error
 	if err != nil {
 		return 0, errors.ErrInternalInstance.WithError(err)

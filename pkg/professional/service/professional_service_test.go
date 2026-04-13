@@ -49,8 +49,8 @@ func (m *MockProfessionalRepository) GetByUserID(ctx context.Context, userID, cl
 	return prof, args.Error(1)
 }
 
-func (m *MockProfessionalRepository) CountActiveByAccountID(ctx context.Context, accountID uuid.UUID) (int64, error) {
-	args := m.Called(ctx, accountID)
+func (m *MockProfessionalRepository) CountActiveByClinicID(ctx context.Context, clinicID uuid.UUID) (int64, error) {
+	args := m.Called(ctx, clinicID)
 	return args.Get(0).(int64), args.Error(1)
 }
 
@@ -243,16 +243,53 @@ func TestCreateForExistingUser_PlanLimit(t *testing.T) {
 
 	mockRepo.On("GetByUserID", ctx, userID, clinicID).Return(nil, errors.ErrProfessionalNotFoundInstance)
 
-	// Plan limit is 2, already 2 professionals
+	// Plan limit is 2 per clinic, already 2 professionals in this clinic
 	mockClinicRepo.On("GetByID", ctx, clinicID).Return(&clinic_model.Clinic{
 		AccountID: accountID,
 		Account:   &account_model.Account{MaxProfessionals: 2},
 	}, nil)
-	mockRepo.On("CountActiveByAccountID", ctx, accountID).Return(int64(2), nil)
+	mockRepo.On("CountActiveByClinicID", ctx, clinicID).Return(int64(2), nil)
 
 	resp, err := svc.CreateForExistingUser(ctx, clinicID, userID)
 
 	assert.Error(t, err)
 	assert.Nil(t, resp)
 	assert.Contains(t, err.Error(), "Limite")
+}
+
+// TestCreate_LimitIsPerClinic_NotAcrossAccount ensures that the plan limit is
+// evaluated per clinic (unidade), not aggregated across all clinics of the account.
+// An account with 2 clinics should allow each clinic to have up to plan.MaxProfessionals
+// independently.
+func TestCreate_LimitIsPerClinic_NotAcrossAccount(t *testing.T) {
+	mockRepo := new(MockProfessionalRepository)
+	mockClinicRepo := new(MockClinicRepository)
+	mockAppointmentRepo := new(MockAppointmentRepository)
+	mockUserRepo := new(MockUserRepository)
+
+	svc := NewProfessionalService(mockRepo, mockClinicRepo, mockAppointmentRepo, mockUserRepo)
+
+	ctx := context.Background()
+	clinicBID := uuid.New()
+	accountID := uuid.New()
+
+	// Plan limit = 7 per clinic. Clinic B currently has 0 professionals.
+	// (If the limit were aggregated per account, another clinic with 7 would block this.)
+	mockClinicRepo.On("GetByID", ctx, clinicBID).Return(&clinic_model.Clinic{
+		AccountID: accountID,
+		Account:   &account_model.Account{MaxProfessionals: 7},
+	}, nil)
+	mockRepo.On("CountActiveByClinicID", ctx, clinicBID).Return(int64(0), nil)
+	mockRepo.On("Create", ctx, mock.AnythingOfType("*model.Professional")).Return(nil)
+
+	resp, err := svc.Create(ctx, clinicBID, &model.CreateProfessionalRequest{
+		Name:  "Prof B1",
+		Email: "b1@example.com",
+		Phone: "11988887777",
+	})
+
+	assert.NoError(t, err)
+	assert.NotNil(t, resp)
+	// Confirms the service queried by clinic, not by account
+	mockRepo.AssertCalled(t, "CountActiveByClinicID", ctx, clinicBID)
 }

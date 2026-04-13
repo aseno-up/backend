@@ -139,7 +139,7 @@ func (r *stubConnRepo) Deactivate(_ context.Context, _ uuid.UUID) error {
 	return nil
 }
 
-func (r *stubConnRepo) CountActiveByAccountID(_ context.Context, _ uuid.UUID) (int64, error) {
+func (r *stubConnRepo) CountActiveByClinicID(_ context.Context, _ uuid.UUID) (int64, error) {
 	return 0, nil
 }
 

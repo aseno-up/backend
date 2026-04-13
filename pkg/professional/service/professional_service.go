@@ -57,13 +57,13 @@ func (s *professionalService) Create(ctx context.Context, clinicID uuid.UUID, re
 	if clinic.Account != nil {
 		limit := clinic.Account.MaxProfessionals
 		if !planlimit.IsUnlimited(limit) {
-			count, err := s.repo.CountActiveByAccountID(ctx, clinic.AccountID)
+			count, err := s.repo.CountActiveByClinicID(ctx, clinicID)
 			if err != nil {
 				return nil, err
 			}
 			if int(count) >= limit {
 				return nil, errors.ErrValidationInstance.WithMessage(
-					fmt.Sprintf("Limite de %d profissionais atingido. Faça upgrade para adicionar mais.", limit))
+					fmt.Sprintf("Limite de %d profissionais por unidade atingido. Faça upgrade para adicionar mais.", limit))
 			}
 		}
 	}
@@ -135,13 +135,13 @@ func (s *professionalService) CreateForExistingUser(ctx context.Context, clinicI
 	if clinic.Account != nil {
 		limit := clinic.Account.MaxProfessionals
 		if !planlimit.IsUnlimited(limit) {
-			count, err := s.repo.CountActiveByAccountID(ctx, clinic.AccountID)
+			count, err := s.repo.CountActiveByClinicID(ctx, clinicID)
 			if err != nil {
 				return nil, err
 			}
 			if int(count) >= limit {
 				return nil, errors.ErrValidationInstance.WithMessage(
-					fmt.Sprintf("Limite de %d profissionais atingido. Faça upgrade para adicionar mais.", limit))
+					fmt.Sprintf("Limite de %d profissionais por unidade atingido. Faça upgrade para adicionar mais.", limit))
 			}
 		}
 	}

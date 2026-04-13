@@ -100,7 +100,7 @@ func (m *mockWhatsAppConnRepoForPatient) UpdateConnected(_ context.Context, _ uu
 func (m *mockWhatsAppConnRepoForPatient) Deactivate(_ context.Context, _ uuid.UUID) error { return nil }
 func (m *mockWhatsAppConnRepoForPatient) HasAnyByClinicID(_ context.Context, _ uuid.UUID) bool { return false }
 func (m *mockWhatsAppConnRepoForPatient) UpsertInstance(_ context.Context, _ uuid.UUID, _ string) error { return nil }
-func (m *mockWhatsAppConnRepoForPatient) CountActiveByAccountID(_ context.Context, _ uuid.UUID) (int64, error) { return 0, nil }
+func (m *mockWhatsAppConnRepoForPatient) CountActiveByClinicID(_ context.Context, _ uuid.UUID) (int64, error) { return 0, nil }
 
 // --- Helpers ---
 
