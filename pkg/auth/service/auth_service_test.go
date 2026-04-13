@@ -674,3 +674,73 @@ func TestAuthService_GoogleLogin_CreatesAsaasCustomerUnconditionally(t *testing.
 
 	mockPaymentService.AssertExpectations(t)
 }
+
+// TestAuthService_Register_DefaultsWhatsAppRemindersEnabled garante que toda
+// clinica nova ja vem com o lembrete WhatsApp habilitado por padrao. Se essa
+// flag for false, o reminder_worker filtra o appointment fora da query e
+// nenhum lembrete eh enviado — quebrando o core do produto.
+func TestAuthService_Register_DefaultsWhatsAppRemindersEnabled(t *testing.T) {
+	mockUserRepo := new(MockUserRepository)
+	mockClinicRepo := new(MockClinicRepository)
+	mockAccountRepo := new(MockAccountRepository)
+	mockJWTService := new(MockJWTService)
+	mockEmailService := new(MockEmailService)
+	mockEmailVerifRepo := new(MockEmailVerificationRepository)
+	mockPassResetRepo := new(MockPasswordResetRepository)
+	mockPlanRepo := new(MockPlanRepository)
+	mockProfRepo := new(MockProfessionalRepository)
+
+	svc := NewAuthService(
+		mockUserRepo,
+		mockClinicRepo,
+		mockAccountRepo,
+		mockPassResetRepo,
+		mockEmailVerifRepo,
+		mockPlanRepo,
+		mockProfRepo,
+		nil,
+		mockJWTService,
+		mockEmailService,
+		"http://localhost:3000",
+	).(*authService)
+
+	ctx := context.Background()
+	req := &model.RegisterRequest{
+		Email:      "newclinic@example.com",
+		ClinicName: "New Clinic",
+		Name:       "Owner",
+		Phone:      "11999999999",
+		Password:   "password123",
+		Plan:       "trial",
+	}
+
+	planID := uuid.New()
+	mockPlanRepo.On("GetBySlug", mock.Anything, mock.Anything).Return(&plan_model.Plan{ID: planID, Slug: "professional", Name: "Professional"}, nil)
+	mockUserRepo.On("ExistsByEmail", ctx, req.Email).Return(false, nil)
+	mockClinicRepo.On("ExistsBySlug", ctx, mock.Anything).Return(false, nil)
+	mockAccountRepo.On("Create", ctx, mock.Anything).Return(nil)
+
+	var createdClinic *clinic_model.Clinic
+	mockClinicRepo.On("Create", ctx, mock.MatchedBy(func(c *clinic_model.Clinic) bool {
+		createdClinic = c
+		return true
+	})).Return(nil)
+
+	mockUserRepo.On("Create", ctx, mock.Anything).Return(nil)
+	mockJWTService.On("GenerateTokenPair", mock.Anything).Return(&model.TokenPair{AccessToken: "a", RefreshToken: "r", ExpiresIn: 3600}, nil)
+	mockUserRepo.On("UpdateRefreshToken", ctx, mock.Anything, "r").Return(nil)
+	mockUserRepo.On("UpdateLastLogin", ctx, mock.Anything).Return(nil)
+	mockUserRepo.On("GetByIDNoTenant", mock.Anything, mock.Anything).Return(&user_model.User{Email: req.Email, Name: req.Name}, nil)
+	mockEmailVerifRepo.On("Create", mock.Anything, mock.Anything).Return(nil)
+	mockEmailService.On("SendEmailVerification", mock.Anything, mock.Anything).Return(nil)
+	mockProfRepo.On("Create", ctx, mock.Anything).Return(nil)
+	mockProfRepo.On("GetByUserID", ctx, mock.Anything, mock.Anything).Return(nil, errors.ErrProfessionalNotFoundInstance).Maybe()
+
+	_, err := svc.Register(ctx, req)
+	assert.NoError(t, err)
+	time.Sleep(50 * time.Millisecond)
+
+	assert.NotNil(t, createdClinic)
+	assert.True(t, createdClinic.Settings.WhatsAppRemindersEnabled,
+		"clinica nova deve vir com WhatsAppRemindersEnabled=true por padrao — sem isso o reminder_worker filtra o appointment fora")
+}

@@ -105,17 +105,32 @@ func (r *inMemoryConnRepo) Deactivate(_ context.Context, clinicID uuid.UUID) err
 
 func (r *inMemoryConnRepo) UpsertInstance(ctx context.Context, clinicID uuid.UUID, instance string) error {
 	existing, err := r.GetActiveByClinicID(ctx, clinicID)
-	if err != nil {
-		return r.Create(ctx, &model.WhatsAppConnection{
-			ClinicID:  clinicID,
-			Instance:  &instance,
-			Connected: false,
-			IsActive:  true,
-		})
+	if err == nil {
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		r.store[existing.ID].Instance = &instance
+		return nil
 	}
+	// Reativa a conexao inativa mais recente da clinica (evita violar o unique
+	// index de instance ao reconectar com o mesmo nome de instance).
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.store[existing.ID].Instance = &instance
+	for _, c := range r.store {
+		if c.ClinicID == clinicID {
+			c.Instance = &instance
+			c.IsActive = true
+			c.Connected = false
+			return nil
+		}
+	}
+	id := uuid.New()
+	r.store[id] = &model.WhatsAppConnection{
+		ID:        id,
+		ClinicID:  clinicID,
+		Instance:  &instance,
+		Connected: false,
+		IsActive:  true,
+	}
 	return nil
 }
 
@@ -385,4 +400,32 @@ func TestConnRepo_Deactivate_MultiTenant(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, connB.Connected, "clínica B não deve ser afetada")
 	assert.True(t, connB.IsActive, "clínica B deve continuar ativa")
+}
+
+// TestConnRepo_UpsertInstance_Reativa_Apos_Disconnect:
+// Apos Deactivate (is_active=false), reconectar com o mesmo nome de instance
+// nao pode falhar com unique constraint. UpsertInstance deve REATIVAR a linha
+// existente (UPDATE), nao tentar INSERT.
+func TestConnRepo_UpsertInstance_Reativa_Apos_Disconnect(t *testing.T) {
+	repo := newInMemoryConnRepo()
+	ctx := context.Background()
+	clinicID := uuid.New()
+	instance := "jos-hamilton-santos-j-nior-e38a335d"
+
+	// Cria conexao + desconecta (cenario do bug: usuario clicou em desconectar)
+	require.NoError(t, repo.Create(ctx, &model.WhatsAppConnection{
+		ClinicID: clinicID, Instance: ptr(instance), Connected: true, IsActive: true,
+	}))
+	require.NoError(t, repo.Deactivate(ctx, clinicID))
+
+	// Reconectar com o MESMO nome de instance — antes do fix, isso explodia
+	// com duplicate key violation no idx_whatsapp_connections_instance.
+	err := repo.UpsertInstance(ctx, clinicID, instance)
+	require.NoError(t, err, "reconectar com o mesmo instance nao pode violar unique constraint")
+
+	got, err := repo.GetActiveByClinicID(ctx, clinicID)
+	require.NoError(t, err, "conexao deve estar ativa novamente apos UpsertInstance")
+	assert.Equal(t, instance, *got.Instance)
+	assert.True(t, got.IsActive, "is_active deve voltar para true")
+	assert.False(t, got.Connected, "connected deve iniciar false ate o webhook confirmar")
 }

@@ -494,3 +494,108 @@ func TestSendMessage_ComWhatsAppConectado(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.Equal(t, "sent", resp["status"])
 }
+
+// ---------------------------------------------------------------------------
+// Testes do Webhook — evento connection.update (Evolution)
+// ---------------------------------------------------------------------------
+
+// stubConnRepo precisa rastrear chamadas de UpdateConnected por instance/clinic
+// para validar que o webhook de connection.update marca a flag corretamente.
+// (Helpers extras adicionados via metodo externo abaixo.)
+
+// TestWebhook_ConnectionUpdate_StateOpen_MarcaConectado:
+// Quando o Evolution dispara connection.update com state="open" (QR foi lido),
+// o handler deve persistir connected=true. Sem isso, o reminder_worker filtra
+// a clinica fora da query (wc.connected=true) e nenhum lembrete eh enviado.
+func TestWebhook_ConnectionUpdate_StateOpen_MarcaConectado(t *testing.T) {
+	clinicID := uuid.New()
+	instance := "clinica-teste-abc12345"
+
+	connRepo := newStubConnRepo()
+	_ = connRepo.UpsertInstance(context.Background(), clinicID, instance)
+	connRepo.activeConn.Connected = false
+
+	h := NewWhatsAppHandler(&stubWhatsAppSvc{}, &stubClinicRepo{}, connRepo, "", "evolution")
+
+	payload := map[string]interface{}{
+		"event":    "connection.update",
+		"instance": instance,
+		"data": map[string]interface{}{
+			"state": "open",
+		},
+	}
+	body, _ := json.Marshal(payload)
+
+	router := gin.New()
+	router.POST("/api/v1/whatsapp/webhook/evolution", h.WebhookEvolution)
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest(http.MethodPost, "/api/v1/whatsapp/webhook/evolution", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.True(t, connRepo.activeConn.Connected,
+		"connected deve ser true apos receber connection.update com state=open")
+}
+
+// TestWebhook_ConnectionUpdate_StateClose_MarcaDesconectado:
+// Quando o WhatsApp desloga (celular sem internet, sessao expirada),
+// o Evolution emite connection.update state="close". Devemos refletir isso
+// no banco para o reminder_worker parar de tentar enviar.
+func TestWebhook_ConnectionUpdate_StateClose_MarcaDesconectado(t *testing.T) {
+	clinicID := uuid.New()
+	instance := "clinica-teste-def67890"
+
+	connRepo := newStubConnRepo()
+	_ = connRepo.UpsertInstance(context.Background(), clinicID, instance)
+	connRepo.activeConn.Connected = true
+
+	h := NewWhatsAppHandler(&stubWhatsAppSvc{}, &stubClinicRepo{}, connRepo, "", "evolution")
+
+	payload := map[string]interface{}{
+		"event":    "connection.update",
+		"instance": instance,
+		"data": map[string]interface{}{
+			"state": "close",
+		},
+	}
+	body, _ := json.Marshal(payload)
+
+	router := gin.New()
+	router.POST("/api/v1/whatsapp/webhook/evolution", h.WebhookEvolution)
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest(http.MethodPost, "/api/v1/whatsapp/webhook/evolution", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.False(t, connRepo.activeConn.Connected,
+		"connected deve ser false apos receber connection.update com state=close")
+}
+
+// TestWebhook_ConnectionUpdate_InstanceDesconhecida_NaoFalha:
+// Webhook de instance desconhecida (ex: instance ja deletada) nao pode causar
+// 5xx — o Evolution reenviaria infinitamente. Deve retornar 200.
+func TestWebhook_ConnectionUpdate_InstanceDesconhecida_NaoFalha(t *testing.T) {
+	connRepo := newStubConnRepo()
+	h := NewWhatsAppHandler(&stubWhatsAppSvc{}, &stubClinicRepo{}, connRepo, "", "evolution")
+
+	payload := map[string]interface{}{
+		"event":    "connection.update",
+		"instance": "instance-fantasma",
+		"data":     map[string]interface{}{"state": "open"},
+	}
+	body, _ := json.Marshal(payload)
+
+	router := gin.New()
+	router.POST("/api/v1/whatsapp/webhook/evolution", h.WebhookEvolution)
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest(http.MethodPost, "/api/v1/whatsapp/webhook/evolution", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+}

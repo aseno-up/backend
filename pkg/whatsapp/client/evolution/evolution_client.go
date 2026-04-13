@@ -115,6 +115,7 @@ func (c *evolutionClient) SetWebhook(ctx context.Context, instance string) error
 			"webhookBase64":   false,
 			"events": []string{
 				"MESSAGES_UPSERT",
+				"CONNECTION_UPDATE",
 			},
 		},
 	}

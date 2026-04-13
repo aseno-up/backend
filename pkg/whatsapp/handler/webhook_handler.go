@@ -136,6 +136,33 @@ func (h *whatsAppHandler) processWebhook(c *gin.Context, provider string) {
 		logger.Printf("[Webhook] WhatsApp message received (not JSON): %s", string(body))
 	}
 
+	// Connection lifecycle events (Evolution: connection.update) update the
+	// `connected` flag on whatsapp_connections. Without this, reminder_worker
+	// filters the clinic out of its query and no reminders ever leave.
+	if provider == "evolution" {
+		var envelope struct {
+			Event    string `json:"event"`
+			Instance string `json:"instance"`
+			Data     struct {
+				State string `json:"state"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(body, &envelope); err == nil && envelope.Event == "connection.update" {
+			conn, err := h.connRepo.GetByInstance(c.Request.Context(), envelope.Instance)
+			if err != nil {
+				logger.Printf("[Webhook] connection.update for unknown instance: %s", envelope.Instance)
+				c.JSON(http.StatusOK, gin.H{"status": "unknown_instance"})
+				return
+			}
+			connected := envelope.Data.State == "open"
+			if err := h.connRepo.UpdateConnected(c.Request.Context(), conn.ClinicID, connected); err != nil {
+				logger.Printf("[Webhook] Failed to update connected for clinic %s: %v", conn.ClinicID, err)
+			}
+			c.JSON(http.StatusOK, gin.H{"status": "connection_updated", "connected": connected})
+			return
+		}
+	}
+
 	// Parse the webhook payload based on provider
 	var parsed *model.ParsedIncomingMessage
 	switch provider {

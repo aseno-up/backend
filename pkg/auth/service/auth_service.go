@@ -311,6 +311,7 @@ func (s *authService) Register(ctx context.Context, req *model.RegisterRequest) 
 			AllowOnlineBooking:        false,
 			RequireConfirmation:       true,
 			AIAgentEnabled:            true,
+			WhatsAppRemindersEnabled:  true,
 		},
 	}
 
@@ -599,6 +600,7 @@ func (s *authService) GoogleLogin(ctx context.Context, req *model.GoogleLoginReq
 				AllowOnlineBooking:        false,
 				RequireConfirmation:       true,
 				AIAgentEnabled:            true,
+				WhatsAppRemindersEnabled:  true,
 			},
 		}
 

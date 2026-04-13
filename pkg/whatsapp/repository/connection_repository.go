@@ -116,29 +116,47 @@ func (r *whatsAppConnectionRepository) Deactivate(ctx context.Context, clinicID 
 }
 
 // UpsertInstance creates a new connection or updates the instance name for the active connection.
-// If no active connection exists, it creates one with is_active = true.
-// This supports the MVP constraint (1 active connection per clinic).
+// If an inactive row exists for this clinic (user disconnected and is reconnecting),
+// it is reactivated in place — required because `instance` has a unique index that
+// would reject a fresh INSERT with the same generated name.
 func (r *whatsAppConnectionRepository) UpsertInstance(ctx context.Context, clinicID uuid.UUID, instance string) error {
 	existing, err := r.GetActiveByClinicID(ctx, clinicID)
-	if err != nil {
-		// No active connection exists — create one
-		conn := &model.WhatsAppConnection{
-			ClinicID:  clinicID,
-			Instance:  &instance,
-			Connected: false,
-			IsActive:  true,
+	if err == nil {
+		result := r.db.WithContext(ctx).
+			Model(existing).
+			Update("instance", &instance)
+		if result.Error != nil {
+			return errors.ErrInternalInstance.WithError(result.Error)
 		}
-		return r.Create(ctx, conn)
+		return nil
 	}
 
-	// Update the instance name of the existing connection
-	result := r.db.WithContext(ctx).
-		Model(existing).
-		Update("instance", &instance)
-	if result.Error != nil {
-		return errors.ErrInternalInstance.WithError(result.Error)
+	var inactive model.WhatsAppConnection
+	res := r.db.WithContext(ctx).
+		Where("clinic_id = ? AND deleted_at IS NULL", clinicID).
+		Order("updated_at DESC").
+		First(&inactive)
+	if res.Error == nil {
+		upd := r.db.WithContext(ctx).
+			Model(&inactive).
+			Updates(map[string]interface{}{
+				"instance":  &instance,
+				"is_active": true,
+				"connected": false,
+			})
+		if upd.Error != nil {
+			return errors.ErrInternalInstance.WithError(upd.Error)
+		}
+		return nil
 	}
-	return nil
+
+	conn := &model.WhatsAppConnection{
+		ClinicID:  clinicID,
+		Instance:  &instance,
+		Connected: false,
+		IsActive:  true,
+	}
+	return r.Create(ctx, conn)
 }
 
 // CountActiveByClinicID counts active WhatsApp connections belonging to a single clinic
