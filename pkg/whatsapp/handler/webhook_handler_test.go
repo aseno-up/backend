@@ -202,6 +202,7 @@ func (s *stubWhatsAppSvc) SetAudioTranscriber(_ transcriber.AudioTranscriber)   
 func (s *stubWhatsAppSvc) SetPatientAIPreferenceChecker(_ service.PatientAIPreferenceChecker) {}
 func (s *stubWhatsAppSvc) SetPatientEnsurer(_ service.PatientEnsurer)                        {}
 func (s *stubWhatsAppSvc) SetSystemLogService(_ systemlog_service.SystemLogService)           {}
+func (s *stubWhatsAppSvc) SetPlanGateChecker(_ service.PlanGateChecker)                       {}
 
 // newTestRouter cria um router Gin com o handler e clinic_id injetados no contexto.
 func newTestRouter(h WhatsAppHandler, clinicID uuid.UUID) *gin.Engine {

@@ -197,6 +197,10 @@ type WhatsAppService interface {
 	// SetPatientAIPreferenceChecker sets the checker for per-patient AI scheduling preference
 	SetPatientAIPreferenceChecker(checker PatientAIPreferenceChecker)
 
+	// SetPlanGateChecker wires the plan gate that decides if the AI agent is
+	// enabled for the clinic's current subscription/plan.
+	SetPlanGateChecker(checker PlanGateChecker)
+
 	// SetPatientEnsurer sets the patient ensurer for early patient creation on WhatsApp contact
 	SetPatientEnsurer(ensurer PatientEnsurer)
 
@@ -240,6 +244,8 @@ type whatsAppService struct {
 	audioTranscriber transcriber.AudioTranscriber
 	// Patient AI preference checker for per-patient AI toggle
 	patientAIPrefChecker PatientAIPreferenceChecker
+	// Plan gate: blocks AI agent when the clinic's subscription/plan doesn't cover it
+	planGateChecker PlanGateChecker
 	// Patient ensurer: creates patient on first WhatsApp contact
 	patientEnsurer PatientEnsurer
 	// System log service for persistent event logging
@@ -473,6 +479,12 @@ func (s *whatsAppService) SetAudioTranscriber(t transcriber.AudioTranscriber) {
 // SetPatientAIPreferenceChecker sets the checker for per-patient AI scheduling preference
 func (s *whatsAppService) SetPatientAIPreferenceChecker(checker PatientAIPreferenceChecker) {
 	s.patientAIPrefChecker = checker
+}
+
+// SetPlanGateChecker sets the plan gate used to enforce that the clinic's
+// current subscription and plan allow the AI agent to respond.
+func (s *whatsAppService) SetPlanGateChecker(checker PlanGateChecker) {
+	s.planGateChecker = checker
 }
 
 // SetPatientEnsurer sets the patient ensurer for early patient creation on WhatsApp contact
@@ -1147,6 +1159,21 @@ func (s *whatsAppService) handleWithAIAgent(ctx context.Context, clinicID uuid.U
 			logger.Printf("[AI Agent] Warning: failed to fetch clinic settings: %v", err)
 		} else if !clinic.Settings.AIAgentEnabled {
 			logger.Printf("[AI Agent] Clinic %s has AIAgentEnabled=false, AI agent will not respond", clinicID)
+			return nil
+		}
+	}
+
+	// Enforce plan gate: trial accounts (while valid) and subscribers on
+	// Professional/Advanced plans can use the AI agent. Fail-closed on error
+	// to avoid burning AI credits for accounts we cannot verify.
+	if s.planGateChecker != nil && clinic != nil {
+		allowed, err := s.planGateChecker.IsAIAgentAllowed(ctx, clinic)
+		if err != nil {
+			logger.Printf("[AI Agent] Plan gate check failed for clinic %s: %v — skipping", clinicID, err)
+			return nil
+		}
+		if !allowed {
+			logger.Printf("[AI Agent] Clinic %s plan does not include AI agent, skipping", clinicID)
 			return nil
 		}
 	}

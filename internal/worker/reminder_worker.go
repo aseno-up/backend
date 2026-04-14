@@ -15,19 +15,43 @@ import (
 	appointment_repository "github.com/aseno/backend/pkg/appointment/repository"
 )
 
-// ReminderWorker scans for appointments needing reminders and enqueues messages
-type ReminderWorker struct {
-	config          *config.WorkerConfig
-	appointmentRepo appointment_repository.AppointmentRepository
-	queue           queue.Queue
-	stopCh          chan struct{}
+// reminderAppointmentRepo captures the slice of the appointment repository used
+// by the reminder worker. Declared here so tests can stub only what's needed.
+type reminderAppointmentRepo interface {
+	GetPendingReminders(ctx context.Context, reminderType string, windowStart, windowEnd time.Time) ([]*appointment_model.AppointmentWithClinic, error)
+	MarkReminderSent(ctx context.Context, clinicID, id uuid.UUID, reminderType string) error
+	SetConfirmationExpiresAt(ctx context.Context, clinicID, id uuid.UUID, expiresAt time.Time) error
 }
 
-// NewReminderWorker creates a new reminder worker
+// reminderQueue is the slice of queue.Queue used by the reminder worker.
+type reminderQueue interface {
+	Publish(ctx context.Context, job *queue.MessageJob) error
+	QueueLength(ctx context.Context) (int, error)
+}
+
+// ClinicSubscriptionChecker tells the reminder worker whether a clinic has an
+// active subscription (trial-not-expired or paying). When it returns false,
+// the worker skips enqueuing reminders for that clinic so we don't keep
+// messaging patients of clinics whose trial ended or whose subscription was
+// canceled.
+type ClinicSubscriptionChecker interface {
+	IsSubscriptionActive(ctx context.Context, clinicID uuid.UUID) (bool, error)
+}
+
+// ReminderWorker scans for appointments needing reminders and enqueues messages
+type ReminderWorker struct {
+	config              *config.WorkerConfig
+	appointmentRepo     reminderAppointmentRepo
+	queue               reminderQueue
+	subscriptionChecker ClinicSubscriptionChecker
+	stopCh              chan struct{}
+}
+
+// NewReminderWorker creates a new reminder worker.
 func NewReminderWorker(
 	cfg *config.WorkerConfig,
-	appointmentRepo appointment_repository.AppointmentRepository,
-	q queue.Queue,
+	appointmentRepo reminderAppointmentRepo,
+	q reminderQueue,
 ) *ReminderWorker {
 	return &ReminderWorker{
 		config:          cfg,
@@ -35,6 +59,17 @@ func NewReminderWorker(
 		queue:           q,
 		stopCh:          make(chan struct{}),
 	}
+}
+
+// Compile-time check: the concrete appointment repository must satisfy the
+// narrow interface the worker expects.
+var _ reminderAppointmentRepo = (appointment_repository.AppointmentRepository)(nil)
+var _ reminderQueue = (queue.Queue)(nil)
+
+// SetSubscriptionChecker wires a subscription checker so the worker skips
+// reminders for clinics whose subscription is no longer active.
+func (w *ReminderWorker) SetSubscriptionChecker(checker ClinicSubscriptionChecker) {
+	w.subscriptionChecker = checker
 }
 
 // Start starts the reminder worker
@@ -78,8 +113,12 @@ func (w *ReminderWorker) processReminders() {
 	thresholds := w.config.GetReminderThresholds()
 	totalEnqueued := 0
 
+	// Subscription-active lookups are cached for the duration of one run so a
+	// clinic with many pending reminders doesn't trigger N identical queries.
+	subCache := map[uuid.UUID]bool{}
+
 	for _, threshold := range thresholds {
-		count, err := w.processThreshold(ctx, threshold)
+		count, err := w.processThreshold(ctx, threshold, subCache)
 		if err != nil {
 			logger.Printf("Error processing %s reminders: %v", threshold.Name, err)
 			continue
@@ -94,8 +133,9 @@ func (w *ReminderWorker) processReminders() {
 	}
 }
 
-// processThreshold processes a single reminder threshold
-func (w *ReminderWorker) processThreshold(ctx context.Context, threshold config.ReminderThreshold) (int, error) {
+// processThreshold processes a single reminder threshold. subCache memoizes
+// subscription-active lookups within a single run.
+func (w *ReminderWorker) processThreshold(ctx context.Context, threshold config.ReminderThreshold, subCache map[uuid.UUID]bool) (int, error) {
 	now := time.Now()
 
 	// Calculate the window for this threshold
@@ -128,6 +168,13 @@ func (w *ReminderWorker) processThreshold(ctx context.Context, threshold config.
 			if aptLocal.Before(dayAfterTomorrowEnd) {
 				continue
 			}
+		}
+
+		// Skip clinics whose subscription is not active (trial expired, canceled,
+		// etc.). Without this, the worker would keep messaging patients of
+		// clinics that no longer have access.
+		if !w.isClinicSubscriptionActive(ctx, apt.ClinicID, subCache) {
+			continue
 		}
 
 		// Skip if no patient info
@@ -202,6 +249,30 @@ func (w *ReminderWorker) processThreshold(ctx context.Context, threshold config.
 	}
 
 	return enqueued, nil
+}
+
+// isClinicSubscriptionActive returns true when the clinic can receive
+// reminders. Results are cached per run via subCache. When no checker is
+// wired, the worker falls back to the legacy behavior of always enqueuing.
+// Errors fail-closed (skip) so we don't message clinics we can't verify.
+func (w *ReminderWorker) isClinicSubscriptionActive(ctx context.Context, clinicID uuid.UUID, subCache map[uuid.UUID]bool) bool {
+	if w.subscriptionChecker == nil {
+		return true
+	}
+	if cached, ok := subCache[clinicID]; ok {
+		return cached
+	}
+	active, err := w.subscriptionChecker.IsSubscriptionActive(ctx, clinicID)
+	if err != nil {
+		logger.Printf("[Reminder] Subscription check failed for clinic %s: %v — skipping", clinicID, err)
+		subCache[clinicID] = false
+		return false
+	}
+	if !active {
+		logger.Printf("[Reminder] Clinic %s has no active subscription, skipping reminders", clinicID)
+	}
+	subCache[clinicID] = active
+	return active
 }
 
 // isFollowUpReminder checks if this reminder is a follow-up (previous reminder was sent but patient didn't respond)

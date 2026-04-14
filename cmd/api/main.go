@@ -522,6 +522,7 @@ func main() {
 			} else if aiAgentService != nil {
 				whatsappService.SetAIAgentService(aiAgentService)
 				whatsappService.SetClinicRepo(clinicRepo)
+				whatsappService.SetPlanGateChecker(whatsapp_service.NewPlanGateChecker(subscriptionRepo, planRepo))
 				whatsappService.SetScheduledMessageRepo(scheduledMsgRepo)
 				whatsappService.SetPatientAIPreferenceChecker(&patientAIPreferenceAdapter{
 					patientRepo: patientRepo,
@@ -646,10 +647,14 @@ func main() {
 		// Initialize and start Reminder Worker (only if WhatsApp is configured)
 		if whatsappService != nil && workerCfg.ReminderWorkerEnabled {
 			reminderWorker = worker.NewReminderWorker(workerCfg, appointmentRepo, messageQueue)
+			reminderWorker.SetSubscriptionChecker(&clinicSubscriptionCheckerAdapter{clinicRepo: clinicRepo})
 			go reminderWorker.Start()
+
+			subscriptionChecker := &clinicSubscriptionCheckerAdapter{clinicRepo: clinicRepo}
 
 			// Initialize and start Message Sender Worker
 			messageSenderWorker = worker.NewMessageSenderWorker(workerCfg, messageQueue, whatsappService, rateLimiter, clinicRepo)
+			messageSenderWorker.SetSubscriptionChecker(subscriptionChecker)
 			go messageSenderWorker.Start()
 
 			// Initialize and start Scheduled Message Worker (processes messages scheduled for outside business hours)
@@ -660,11 +665,13 @@ func main() {
 				clinicRepo,
 				whatsappService,
 			)
+			scheduledMessageWorker.SetSubscriptionChecker(subscriptionChecker)
 			go scheduledMessageWorker.Start()
 
 			// Initialize and start Timeout Worker (marks no_response when patient doesn't confirm)
 			if workerCfg.TimeoutWorkerEnabled {
 				timeoutWorker := worker.NewTimeoutWorker(workerCfg, appointmentRepo)
+				timeoutWorker.SetSubscriptionChecker(subscriptionChecker)
 				go timeoutWorker.Start()
 			}
 
@@ -1708,6 +1715,26 @@ type patientRiskAdapter struct {
 
 func (a *patientRiskAdapter) CalculateRiskScore(ctx context.Context, patientID, clinicID uuid.UUID) error {
 	return a.patientService.CalculateRiskScore(ctx, patientID, clinicID)
+}
+
+// clinicSubscriptionCheckerAdapter adapts the clinic repository to
+// worker.ClinicSubscriptionChecker. It reads the clinic (with preloaded
+// Account) and delegates to Account.IsSubscriptionActive so the reminder
+// worker stops enqueuing messages for clinics whose trial expired or whose
+// subscription was canceled.
+type clinicSubscriptionCheckerAdapter struct {
+	clinicRepo clinic_repository.ClinicRepository
+}
+
+func (a *clinicSubscriptionCheckerAdapter) IsSubscriptionActive(ctx context.Context, clinicID uuid.UUID) (bool, error) {
+	clinic, err := a.clinicRepo.GetByID(ctx, clinicID)
+	if err != nil {
+		return false, err
+	}
+	if clinic == nil || clinic.Account == nil {
+		return false, nil
+	}
+	return clinic.Account.IsSubscriptionActive(), nil
 }
 
 // appointmentStatusAdapter adapts appointment_service to whatsapp_service.AppointmentStatusUpdater

@@ -106,3 +106,54 @@ func TestScheduledMessageWorker_ProcessSingleMessage(t *testing.T) {
 		assert.False(t, repo.markedAsFailed)
 	})
 }
+
+func TestScheduledMessageWorker_SubscriptionGate(t *testing.T) {
+	t.Run("Inactive subscription drops messages without calling whatsapp", func(t *testing.T) {
+		clinicID := uuid.New()
+		svc := &stubWhatsAppSvc{}
+		repo := &stubScheduledMsgRepo{}
+		w := NewScheduledMessageWorker(&config.WorkerConfig{}, repo, nil, svc)
+		w.SetSubscriptionChecker(&stubSubscriptionChecker{
+			activeByClinic: map[uuid.UUID]bool{clinicID: false},
+		})
+
+		msgs := []*whatsapp_model.ScheduledMessage{{
+			ID:          uuid.New(),
+			ClinicID:    clinicID,
+			Phone:       "5511999999999",
+			MessageType: "outbound",
+			ScheduledAt: time.Now(),
+		}}
+
+		w.processPatientMessages(context.Background(), msgs)
+
+		assert.False(t, svc.aiCalled)
+		assert.False(t, svc.sendCalled)
+		// Marked as sent so they stop being returned by GetPendingMessages.
+		assert.True(t, repo.markedAsSent)
+		assert.True(t, repo.markedAsFailed)
+	})
+
+	t.Run("Active subscription processes normally", func(t *testing.T) {
+		clinicID := uuid.New()
+		svc := &stubWhatsAppSvc{}
+		repo := &stubScheduledMsgRepo{}
+		w := NewScheduledMessageWorker(&config.WorkerConfig{}, repo, nil, svc)
+		w.SetSubscriptionChecker(&stubSubscriptionChecker{
+			activeByClinic: map[uuid.UUID]bool{clinicID: true},
+		})
+
+		msgs := []*whatsapp_model.ScheduledMessage{{
+			ID:          uuid.New(),
+			ClinicID:    clinicID,
+			Phone:       "5511999999999",
+			MessageType: "outbound",
+			ScheduledAt: time.Now(),
+		}}
+
+		w.processPatientMessages(context.Background(), msgs)
+
+		assert.True(t, svc.sendCalled)
+		assert.True(t, repo.markedAsSent)
+	})
+}
