@@ -145,11 +145,13 @@ func (r *stubConnRepo) CountActiveByClinicID(_ context.Context, _ uuid.UUID) (in
 
 // stubWhatsAppSvc implementa service.WhatsAppService completamente.
 type stubWhatsAppSvc struct {
-	statusState string
-	statusErr   error
+	statusState          string
+	statusErr            error
+	createInstanceCalls  []string
 }
 
-func (s *stubWhatsAppSvc) CreateInstance(_ context.Context, _ string) (*whatsapp_model.QRCodeData, error) {
+func (s *stubWhatsAppSvc) CreateInstance(_ context.Context, instance string) (*whatsapp_model.QRCodeData, error) {
+	s.createInstanceCalls = append(s.createInstanceCalls, instance)
 	return &whatsapp_model.QRCodeData{Base64: "stub-qr"}, nil
 }
 func (s *stubWhatsAppSvc) SendTextMessage(_ context.Context, _, _, _ string) (*whatsapp_model.SendMessageResponse, error) {
@@ -438,6 +440,130 @@ func TestDisconnect_GetStatus_RetornaDesconectado(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Testes do Connect
+// ---------------------------------------------------------------------------
+
+// TestConnect_SemConexao_GeraInstance: clinica nova sem whatsapp_connections.
+// Esse e o caminho feliz — GetActiveByClinicID retorna erro, o handler gera
+// um nome descritivo e chama CreateInstance com esse nome (nao vazio).
+func TestConnect_SemConexao_GeraInstance(t *testing.T) {
+	clinicID := uuid.New()
+	clinic := &clinic_model.Clinic{ID: clinicID, Name: "Clinica Teste"}
+
+	connRepo := newStubConnRepo()
+	connRepo.connErr = errors.ErrNotFoundInstance
+
+	svc := &stubWhatsAppSvc{}
+	h := NewWhatsAppHandler(svc, &stubClinicRepo{clinic: clinic}, connRepo, "", "evolution")
+	router := newTestRouter(h, clinicID)
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest(http.MethodPost, "/whatsapp/connect", nil)
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	require.NotEmpty(t, svc.createInstanceCalls, "CreateInstance deveria ter sido chamado")
+	for _, name := range svc.createInstanceCalls {
+		assert.NotEmpty(t, name, "instance enviado a Evolution nao pode ser vazio")
+	}
+}
+
+// TestConnect_ConexaoAtivaSemInstance_GeraNovoNome: REGRESSAO.
+// Bug de producao: existe uma whatsapp_connection ativa para a clinica, mas
+// o campo Instance e NULL (dados legados ou efeito colateral de UpdateProvider).
+// O handler antigo pegava conn.Instance (nil) e mandava string vazia para a
+// Evolution API, que respondia 403 "This name \"\" is already in use.".
+// Fix: tratar Instance nil como "precisa gerar nome novo".
+func TestConnect_ConexaoAtivaSemInstance_GeraNovoNome(t *testing.T) {
+	clinicID := uuid.New()
+	clinic := &clinic_model.Clinic{ID: clinicID, Name: "Clinica Teste"}
+
+	connRepo := newStubConnRepo()
+	connRepo.activeConn = &whatsapp_model.WhatsAppConnection{
+		ID:       uuid.New(),
+		ClinicID: clinicID,
+		Instance: nil,
+		IsActive: true,
+	}
+
+	svc := &stubWhatsAppSvc{}
+	h := NewWhatsAppHandler(svc, &stubClinicRepo{clinic: clinic}, connRepo, "", "evolution")
+	router := newTestRouter(h, clinicID)
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest(http.MethodPost, "/whatsapp/connect", nil)
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	require.NotEmpty(t, svc.createInstanceCalls, "CreateInstance deveria ter sido chamado")
+	for _, name := range svc.createInstanceCalls {
+		assert.NotEmpty(t, name,
+			"instance enviado a Evolution nao pode ser vazio mesmo com conexao ativa sem Instance")
+	}
+	require.NotNil(t, connRepo.activeConn.Instance,
+		"Instance deve ter sido persistida via UpsertInstance")
+	assert.NotEmpty(t, *connRepo.activeConn.Instance)
+}
+
+// TestConnect_ConexaoAtivaInstanceVazia_GeraNovoNome: mesma regressao, mas
+// com Instance apontando para string vazia (outra forma do mesmo estado).
+func TestConnect_ConexaoAtivaInstanceVazia_GeraNovoNome(t *testing.T) {
+	clinicID := uuid.New()
+	clinic := &clinic_model.Clinic{ID: clinicID, Name: "Clinica Teste"}
+
+	connRepo := newStubConnRepo()
+	connRepo.activeConn = &whatsapp_model.WhatsAppConnection{
+		ID:       uuid.New(),
+		ClinicID: clinicID,
+		Instance: ptr(""),
+		IsActive: true,
+	}
+
+	svc := &stubWhatsAppSvc{}
+	h := NewWhatsAppHandler(svc, &stubClinicRepo{clinic: clinic}, connRepo, "", "evolution")
+	router := newTestRouter(h, clinicID)
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest(http.MethodPost, "/whatsapp/connect", nil)
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	require.NotEmpty(t, svc.createInstanceCalls)
+	for _, name := range svc.createInstanceCalls {
+		assert.NotEmpty(t, name,
+			"instance enviado a Evolution nao pode ser vazio quando Instance e string vazia")
+	}
+}
+
+// TestConnect_ConexaoAtivaComInstance_Reutiliza: garante que conexoes validas
+// continuam reutilizando o nome existente (nao regenera por baixo).
+func TestConnect_ConexaoAtivaComInstance_Reutiliza(t *testing.T) {
+	clinicID := uuid.New()
+	clinic := &clinic_model.Clinic{ID: clinicID, Name: "Clinica Teste"}
+
+	connRepo := newStubConnRepo()
+	connRepo.activeConn = &whatsapp_model.WhatsAppConnection{
+		ID:       uuid.New(),
+		ClinicID: clinicID,
+		Instance: ptr("clinica-existente-12345678"),
+		IsActive: true,
+	}
+
+	svc := &stubWhatsAppSvc{}
+	h := NewWhatsAppHandler(svc, &stubClinicRepo{clinic: clinic}, connRepo, "", "evolution")
+	router := newTestRouter(h, clinicID)
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest(http.MethodPost, "/whatsapp/connect", nil)
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	require.NotEmpty(t, svc.createInstanceCalls)
+	assert.Equal(t, "clinica-existente-12345678", svc.createInstanceCalls[0],
+		"nome existente deve ser reutilizado, nao regenerado")
+}
+
+// ---------------------------------------------------------------------------
 // Testes do SendMessage
 // ---------------------------------------------------------------------------
 
@@ -574,6 +700,73 @@ func TestWebhook_ConnectionUpdate_StateClose_MarcaDesconectado(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.False(t, connRepo.activeConn.Connected,
 		"connected deve ser false apos receber connection.update com state=close")
+}
+
+// TestWebhook_ConnectionUpdate_StateConnecting_NaoMexeNoFlag:
+// state="connecting" eh transiente (reconexao momentanea do Baileys) e nao
+// significa desconectado. O handler antigo tratava qualquer state != "open"
+// como connected=false, causando flapping do flag durante reconexoes normais
+// — o que tirava a clinica do reminder_worker no meio do envio.
+// Novo comportamento: apenas "open"/"close" flipam; "connecting" eh ignorado.
+func TestWebhook_ConnectionUpdate_StateConnecting_NaoMexeNoFlag(t *testing.T) {
+	clinicID := uuid.New()
+	instance := "clinica-teste-connecting"
+
+	connRepo := newStubConnRepo()
+	_ = connRepo.UpsertInstance(context.Background(), clinicID, instance)
+	connRepo.activeConn.Connected = true // estava conectado antes
+
+	h := NewWhatsAppHandler(&stubWhatsAppSvc{}, &stubClinicRepo{}, connRepo, "", "evolution")
+
+	payload := map[string]interface{}{
+		"event":    "connection.update",
+		"instance": instance,
+		"data":     map[string]interface{}{"state": "connecting"},
+	}
+	body, _ := json.Marshal(payload)
+
+	router := gin.New()
+	router.POST("/api/v1/whatsapp/webhook/evolution", h.WebhookEvolution)
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest(http.MethodPost, "/api/v1/whatsapp/webhook/evolution", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.True(t, connRepo.activeConn.Connected,
+		"connected deve permanecer true durante state=connecting (transiente)")
+}
+
+// Mesma regra para o inverso: se ja estava desconectado, connecting nao vira true.
+func TestWebhook_ConnectionUpdate_StateConnecting_NaoLigaDoDesconectado(t *testing.T) {
+	clinicID := uuid.New()
+	instance := "clinica-teste-connecting-2"
+
+	connRepo := newStubConnRepo()
+	_ = connRepo.UpsertInstance(context.Background(), clinicID, instance)
+	connRepo.activeConn.Connected = false
+
+	h := NewWhatsAppHandler(&stubWhatsAppSvc{}, &stubClinicRepo{}, connRepo, "", "evolution")
+
+	payload := map[string]interface{}{
+		"event":    "connection.update",
+		"instance": instance,
+		"data":     map[string]interface{}{"state": "connecting"},
+	}
+	body, _ := json.Marshal(payload)
+
+	router := gin.New()
+	router.POST("/api/v1/whatsapp/webhook/evolution", h.WebhookEvolution)
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest(http.MethodPost, "/api/v1/whatsapp/webhook/evolution", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.False(t, connRepo.activeConn.Connected,
+		"connected deve permanecer false durante state=connecting")
 }
 
 // TestWebhook_ConnectionUpdate_InstanceDesconhecida_NaoFalha:

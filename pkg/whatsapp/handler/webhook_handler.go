@@ -154,12 +154,26 @@ func (h *whatsAppHandler) processWebhook(c *gin.Context, provider string) {
 				c.JSON(http.StatusOK, gin.H{"status": "unknown_instance"})
 				return
 			}
-			connected := envelope.Data.State == "open"
-			if err := h.connRepo.UpdateConnected(c.Request.Context(), conn.ClinicID, connected); err != nil {
-				logger.Printf("[Webhook] Failed to update connected for clinic %s: %v", conn.ClinicID, err)
+			// Baileys emits "connecting" during transient reconnects; only
+			// "open" and "close" are terminal states. Flipping on "connecting"
+			// causes the reminder worker to drop the clinic mid-flight.
+			switch envelope.Data.State {
+			case "open":
+				if err := h.connRepo.UpdateConnected(c.Request.Context(), conn.ClinicID, true); err != nil {
+					logger.Printf("[Webhook] Failed to update connected for clinic %s: %v", conn.ClinicID, err)
+				}
+				c.JSON(http.StatusOK, gin.H{"status": "connection_updated", "connected": true})
+				return
+			case "close":
+				if err := h.connRepo.UpdateConnected(c.Request.Context(), conn.ClinicID, false); err != nil {
+					logger.Printf("[Webhook] Failed to update connected for clinic %s: %v", conn.ClinicID, err)
+				}
+				c.JSON(http.StatusOK, gin.H{"status": "connection_updated", "connected": false})
+				return
+			default:
+				c.JSON(http.StatusOK, gin.H{"status": "connection_transient", "state": envelope.Data.State})
+				return
 			}
-			c.JSON(http.StatusOK, gin.H{"status": "connection_updated", "connected": connected})
-			return
 		}
 	}
 
@@ -251,30 +265,22 @@ func (h *whatsAppHandler) Connect(c *gin.Context) {
 		}
 	}
 
-	// Get or create the active WhatsApp connection for this clinic
+	// Get or create the active WhatsApp connection for this clinic.
+	// If the connection row exists but Instance is nil/empty (dados legados ou
+	// efeito colateral de UpdateProvider), tratamos como "precisa gerar nome novo"
+	// — caso contrario enviariamos string vazia para a Evolution API e ela
+	// responderia 403 "This name \"\" is already in use.".
 	conn, connErr := h.connRepo.GetActiveByClinicID(c.Request.Context(), clinic.ID)
 	var instance string
-	if connErr != nil {
-		// No connection exists yet — generate a descriptive instance name
-		reg := regexp.MustCompile(`[^a-z0-9]+`)
-		safeClinicName := strings.ToLower(clinic.Name)
-		safeClinicName = reg.ReplaceAllString(safeClinicName, "-")
-		safeClinicName = strings.Trim(safeClinicName, "-")
-		if len(safeClinicName) > 30 {
-			safeClinicName = safeClinicName[:30]
-		}
-		instance = fmt.Sprintf("%s-%s", safeClinicName, clinic.ID.String()[:8])
-
+	if connErr == nil && conn.Instance != nil && *conn.Instance != "" {
+		instance = *conn.Instance
+	} else {
+		instance = generateInstanceName(clinic)
 		if err := h.connRepo.UpsertInstance(c.Request.Context(), clinic.ID, instance); err != nil {
 			logger.Printf("[Connect Handler] Failed to save new instance name to DB: %v", err)
 			statusCode := errors.GetStatusCode(err)
 			c.JSON(statusCode, errors.ToResponse(err))
 			return
-		}
-	} else {
-		instance = ""
-		if conn.Instance != nil {
-			instance = *conn.Instance
 		}
 	}
 
@@ -397,6 +403,21 @@ func (h *whatsAppHandler) Connect(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, qrCode)
+}
+
+// generateInstanceName builds a deterministic Evolution instance name from the
+// clinic name + short UUID. Kept outside Connect so the same logic is used
+// both on first connection and when recovering from a corrupted row with a
+// nil/empty Instance.
+func generateInstanceName(clinic *clinic_model.Clinic) string {
+	reg := regexp.MustCompile(`[^a-z0-9]+`)
+	safe := strings.ToLower(clinic.Name)
+	safe = reg.ReplaceAllString(safe, "-")
+	safe = strings.Trim(safe, "-")
+	if len(safe) > 30 {
+		safe = safe[:30]
+	}
+	return fmt.Sprintf("%s-%s", safe, clinic.ID.String()[:8])
 }
 
 // ConfigRequest payload for saving WhatsApp config
