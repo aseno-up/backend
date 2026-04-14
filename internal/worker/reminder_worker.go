@@ -232,9 +232,12 @@ func (w *ReminderWorker) processThreshold(ctx context.Context, threshold config.
 			logger.Printf("Failed to mark reminder sent for appointment %s: %v", apt.ID, err)
 		}
 
-		// Set confirmation timeout on first reminder (48h)
-		// This starts the countdown for no_response status
-		if threshold.Type == "reminder_48h" && apt.ConfirmationExpiresAt == nil {
+		// Set confirmation timeout on the first reminder sent, regardless of
+		// which threshold (48h/24h/2h) fired. Appointments booked within 48h
+		// of the start time never fire reminder_48h, so gating on it left them
+		// without a timeout forever — they stayed "pending" past the start and
+		// the timeout worker never marked them as no_response.
+		if apt.ConfirmationExpiresAt == nil {
 			expiresAt := time.Now().Add(w.config.ConfirmationTimeoutDuration)
 			if err := w.appointmentRepo.SetConfirmationExpiresAt(ctx, apt.ClinicID, apt.ID, expiresAt); err != nil {
 				logger.Printf("Failed to set confirmation timeout for appointment %s: %v", apt.ID, err)

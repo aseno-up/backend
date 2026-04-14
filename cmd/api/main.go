@@ -1787,14 +1787,15 @@ func (a *appointmentFinderAdapter) GetPendingByPhone(ctx context.Context, clinic
 	}
 
 	return &whatsapp_service.AppointmentInfo{
-		ID:             apt.ID,
-		PatientID:      apt.PatientID,
-		ProfessionalID: apt.ProfessionalID,
-		PatientName:    patientName,
-		PatientPhone:   patientPhone,
-		Professional:   profName,
-		StartTime:      apt.StartTime,
-		EndTime:        apt.EndTime,
+		ID:                    apt.ID,
+		PatientID:             apt.PatientID,
+		ProfessionalID:        apt.ProfessionalID,
+		PatientName:           patientName,
+		PatientPhone:          patientPhone,
+		Professional:          profName,
+		StartTime:             apt.StartTime,
+		EndTime:               apt.EndTime,
+		ConfirmationExpiresAt: apt.ConfirmationExpiresAt,
 	}, nil
 }
 

@@ -260,14 +260,15 @@ type AppointmentStatusUpdater interface {
 
 // AppointmentInfo represents appointment info for WhatsApp messages
 type AppointmentInfo struct {
-	ID             uuid.UUID
-	PatientID      uuid.UUID
-	ProfessionalID uuid.UUID
-	PatientName    string
-	PatientPhone   string
-	Professional   string
-	StartTime      time.Time
-	EndTime        time.Time
+	ID                    uuid.UUID
+	PatientID             uuid.UUID
+	ProfessionalID        uuid.UUID
+	PatientName           string
+	PatientPhone          string
+	Professional          string
+	StartTime             time.Time
+	EndTime               time.Time
+	ConfirmationExpiresAt *time.Time // non-nil and in the future == patient is "awaiting confirmation"
 }
 
 // SlotSuggester interface for suggesting reschedule slots
@@ -862,16 +863,15 @@ func (s *whatsAppService) HandleIncomingMessage(ctx context.Context, clinicID uu
 		}
 	}
 
-	// Sem IA, apenas respostas por botão são processadas (confirm/cancel/reschedule).
-	// Texto livre é ignorado — sem classificação, sem custo de tokens.
-	if msg.ButtonID == "" {
-		return nil
-	}
-
 	if strings.HasPrefix(msg.ButtonID, "rsch_") {
 		return s.handleRescheduleResponse(ctx, msg)
 	}
 
+	// Determine intent: explicit button first, then (basic plan fallback) the
+	// classifier — but only if the patient is inside the confirmation window
+	// of a pending appointment. This keeps the basic plan reactive-only: we
+	// respond when the patient replies to a reminder we just sent, never
+	// proactively (that is the AI Agent's job on the Pro plan).
 	var intent model.MessageIntent
 	switch msg.ButtonID {
 	case "confirm":
@@ -880,6 +880,13 @@ func (s *whatsAppService) HandleIncomingMessage(ctx context.Context, clinicID uu
 		intent = model.MessageIntentCancel
 	case "reschedule":
 		intent = model.MessageIntentReschedule
+	case "":
+		intent = s.classifyWithinConfirmationWindow(ctx, clinicID, msg)
+		if intent != model.MessageIntentConfirm && intent != model.MessageIntentCancel {
+			// Anything other than confirm/cancel (including Reschedule,
+			// Schedule, Question, Unknown) is ignored in the basic plan.
+			return nil
+		}
 	default:
 		return nil
 	}
@@ -973,6 +980,25 @@ func (s *whatsAppService) HandleIncomingMessage(ctx context.Context, clinicID uu
 	}
 
 	return nil
+}
+
+// classifyWithinConfirmationWindow returns an intent only when the patient
+// is currently awaiting confirmation of a pending appointment (i.e., we sent
+// a reminder and ConfirmationExpiresAt is still in the future). Outside that
+// window — or when no AppointmentFinder is wired — returns Unknown, which
+// the caller treats as "ignore".
+func (s *whatsAppService) classifyWithinConfirmationWindow(ctx context.Context, clinicID uuid.UUID, msg *model.ParsedIncomingMessage) model.MessageIntent {
+	if s.appointmentFinder == nil {
+		return model.MessageIntentUnknown
+	}
+	apt, err := s.appointmentFinder.GetPendingByPhone(ctx, clinicID, msg.Phone)
+	if err != nil || apt == nil {
+		return model.MessageIntentUnknown
+	}
+	if apt.ConfirmationExpiresAt == nil || !apt.ConfirmationExpiresAt.After(time.Now()) {
+		return model.MessageIntentUnknown
+	}
+	return s.ClassifyMessage(msg.Content)
 }
 
 // ClassifyMessage classifies the intent of a message (uses AI with regex fallback)

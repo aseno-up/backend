@@ -162,6 +162,85 @@ func TestReminderWorker_NoChecker_Enqueues(t *testing.T) {
 	}
 }
 
+// TestReminderWorker_SetsConfirmationExpiresAtOn24h: REGRESSAO.
+// Antes, SetConfirmationExpiresAt so era chamado para reminder_48h. Appointments
+// criados com menos de 48h de antecedencia (comum na clinica) nunca recebiam
+// confirmation_expires_at, entao nunca eram pegos pelo timeout_worker e ficavam
+// para sempre como "pending" mesmo apos o horario passar.
+// Fix: o flag e setado no primeiro reminder enviado, seja 48h, 24h ou 2h.
+func TestReminderWorker_SetsConfirmationExpiresAtOn24h(t *testing.T) {
+	clinicID := uuid.New()
+	repo := &stubAppointmentRepo{
+		pending: []*appointment_model.AppointmentWithClinic{buildAppointment(clinicID, 24*time.Hour)},
+	}
+	q := &stubQueue{}
+
+	w := NewReminderWorker(newReminderConfig(), repo, q)
+
+	_, err := w.processThreshold(context.Background(), config.ReminderThreshold{
+		Name:     "24h",
+		Type:     "reminder_24h",
+		Duration: 24 * time.Hour,
+	}, map[uuid.UUID]bool{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(repo.confirmationSetFor) != 1 {
+		t.Errorf("expected SetConfirmationExpiresAt to be called once for reminder_24h, got %d", len(repo.confirmationSetFor))
+	}
+}
+
+// TestReminderWorker_SetsConfirmationExpiresAtOn2h: mesma regressao com 2h.
+func TestReminderWorker_SetsConfirmationExpiresAtOn2h(t *testing.T) {
+	clinicID := uuid.New()
+	repo := &stubAppointmentRepo{
+		pending: []*appointment_model.AppointmentWithClinic{buildAppointment(clinicID, 2*time.Hour)},
+	}
+	q := &stubQueue{}
+
+	w := NewReminderWorker(newReminderConfig(), repo, q)
+
+	_, err := w.processThreshold(context.Background(), config.ReminderThreshold{
+		Name:     "2h",
+		Type:     "reminder_2h",
+		Duration: 2 * time.Hour,
+	}, map[uuid.UUID]bool{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(repo.confirmationSetFor) != 1 {
+		t.Errorf("expected SetConfirmationExpiresAt to be called once for reminder_2h, got %d", len(repo.confirmationSetFor))
+	}
+}
+
+// TestReminderWorker_DoesNotOverwriteExistingConfirmationExpiresAt: se ja foi
+// setado num reminder anterior (ex: 48h), o 24h nao deve reescrever.
+func TestReminderWorker_DoesNotOverwriteExistingConfirmationExpiresAt(t *testing.T) {
+	clinicID := uuid.New()
+	apt := buildAppointment(clinicID, 24*time.Hour)
+	existing := time.Now().Add(10 * time.Hour)
+	apt.ConfirmationExpiresAt = &existing
+
+	repo := &stubAppointmentRepo{
+		pending: []*appointment_model.AppointmentWithClinic{apt},
+	}
+	q := &stubQueue{}
+
+	w := NewReminderWorker(newReminderConfig(), repo, q)
+
+	_, err := w.processThreshold(context.Background(), config.ReminderThreshold{
+		Name:     "24h",
+		Type:     "reminder_24h",
+		Duration: 24 * time.Hour,
+	}, map[uuid.UUID]bool{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(repo.confirmationSetFor) != 0 {
+		t.Errorf("expected SetConfirmationExpiresAt NOT to be called when already set, got %d calls", len(repo.confirmationSetFor))
+	}
+}
+
 func TestReminderWorker_SubscriptionCached_WithinRun(t *testing.T) {
 	clinicID := uuid.New()
 	apt1 := buildAppointment(clinicID, 24*time.Hour)
