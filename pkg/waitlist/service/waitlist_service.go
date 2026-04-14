@@ -58,7 +58,11 @@ type WaitlistService interface {
 
 	// Encaixe operations
 	ProcessCancelledAppointment(ctx context.Context, clinicID, professionalID uuid.UUID, slotTime time.Time, durationMinutes int) error
-	HandlePatientResponse(ctx context.Context, clinicID uuid.UUID, phone string, accepted bool) error
+	// HandlePatientResponse returns handled=true when the response consumed a
+	// waitlist entry. handled=false means "no entry for this phone, caller
+	// should try other paths (appointment confirm/cancel)". err signals real
+	// failures (DB, downstream), not "entry not found".
+	HandlePatientResponse(ctx context.Context, clinicID uuid.UUID, phone string, accepted bool) (bool, error)
 }
 
 // waitlistService implements WaitlistService
@@ -331,17 +335,19 @@ func (s *waitlistService) ProcessCancelledAppointment(ctx context.Context, clini
 	return nil
 }
 
-// HandlePatientResponse processes the patient's response to a slot offer
-func (s *waitlistService) HandlePatientResponse(ctx context.Context, clinicID uuid.UUID, phone string, accepted bool) error {
+// HandlePatientResponse processes the patient's response to a slot offer.
+// Returns handled=false when this phone has no pending waitlist entry, so the
+// caller can fall through to the regular appointment confirmation path.
+func (s *waitlistService) HandlePatientResponse(ctx context.Context, clinicID uuid.UUID, phone string, accepted bool) (bool, error) {
 	// Find the pending waitlist entry for this patient
 	entry, err := s.repo.GetPendingByPatientPhone(ctx, clinicID, phone)
 	if err != nil {
-		return err
+		return false, err
 	}
 
 	if entry == nil {
 		logger.Printf("[Waitlist] No pending entry found for phone %s", phone)
-		return nil
+		return false, nil
 	}
 
 	if accepted {
@@ -403,7 +409,7 @@ func (s *waitlistService) HandlePatientResponse(ctx context.Context, clinicID uu
 		// Patient declined - mark as declined and offer to next patient
 		err = s.repo.UpdateStatus(ctx, entry.ID, model.WaitlistStatusDeclined, nil, nil, nil)
 		if err != nil {
-			return err
+			return true, err
 		}
 
 		logger.Printf("[Waitlist] Patient %s declined slot, looking for next patient", entry.PatientID)
@@ -420,7 +426,7 @@ func (s *waitlistService) HandlePatientResponse(ctx context.Context, clinicID uu
 		}
 	}
 
-	return nil
+	return true, nil
 }
 
 // buildSlotOfferMessage creates the WhatsApp message for a slot offer

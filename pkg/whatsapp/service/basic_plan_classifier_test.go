@@ -70,6 +70,54 @@ func newPendingApt(future time.Duration) *AppointmentInfo {
 	}
 }
 
+// stubWaitlistHandler simula a presenca (ou nao) de uma entry na waitlist.
+type stubWaitlistHandler struct {
+	handled bool
+	err     error
+}
+
+func (s *stubWaitlistHandler) HandlePatientResponse(_ context.Context, _ uuid.UUID, _ string, _ bool) (bool, error) {
+	return s.handled, s.err
+}
+
+// TestBasicPlan_WaitlistSemEntry_ConfirmaAppointment: REGRESSAO do bug em que
+// o waitlistService retornava nil error quando nao havia entry, fazendo o
+// caller tratar como "waitlist tratou" e nunca confirmar o appointment nem
+// enviar feedback. A nova assinatura (handled, err) deixa explicito que
+// "no entry" == "nao era waitlist, continue".
+func TestBasicPlan_WaitlistSemEntry_ConfirmaAppointment(t *testing.T) {
+	finder := &stubAppointmentFinder{apt: newPendingApt(24 * time.Hour)}
+	updater := &stubAppointmentUpdater{}
+	svc := newBasicPlanService(finder, updater)
+	svc.waitlistHandler = &stubWaitlistHandler{handled: false} // sem entry
+
+	err := svc.HandleIncomingMessage(context.Background(), uuid.New(), newMsg("+5511988887777", "sim"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if updater.confirmCount() != 1 {
+		t.Errorf("sem entry na waitlist, deveria confirmar o appointment: got %d", updater.confirmCount())
+	}
+}
+
+// TestBasicPlan_WaitlistComEntry_NaoConfirmaAppointment: se a waitlist pegou
+// (handled=true), a gente nao confirma um appointment diferente — waitlist e
+// appointment sao mutualmente exclusivos nessa resposta.
+func TestBasicPlan_WaitlistComEntry_NaoConfirmaAppointment(t *testing.T) {
+	finder := &stubAppointmentFinder{apt: newPendingApt(24 * time.Hour)}
+	updater := &stubAppointmentUpdater{}
+	svc := newBasicPlanService(finder, updater)
+	svc.waitlistHandler = &stubWaitlistHandler{handled: true} // tratou
+
+	err := svc.HandleIncomingMessage(context.Background(), uuid.New(), newMsg("+5511988887777", "sim"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if updater.confirmCount() != 0 {
+		t.Errorf("waitlist tratou, appointment NAO deve ser confirmado: got %d", updater.confirmCount())
+	}
+}
+
 // TestBasicPlan_ConfirmationWindow_SimConfirma: no plano basico (sem AI agent),
 // quando o paciente esta na janela de confirmacao e responde "sim", o
 // appointment e confirmado via classifier (regex fallback). Diferenciacao com

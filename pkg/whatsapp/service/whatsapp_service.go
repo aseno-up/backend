@@ -447,9 +447,13 @@ type AppointmentFinder interface {
 	GetPendingByPhone(ctx context.Context, clinicID uuid.UUID, phone string) (*AppointmentInfo, error)
 }
 
-// WaitlistResponseHandler interface for handling waitlist responses
+// WaitlistResponseHandler interface for handling waitlist responses.
+// handled=true means the response consumed an existing waitlist entry and no
+// further processing is needed; handled=false means the phone is not on the
+// waitlist and the caller should try the regular appointment path. err only
+// signals actual failures (DB errors, etc.), never "entry not found".
 type WaitlistResponseHandler interface {
-	HandlePatientResponse(ctx context.Context, clinicID uuid.UUID, phone string, accepted bool) error
+	HandlePatientResponse(ctx context.Context, clinicID uuid.UUID, phone string, accepted bool) (bool, error)
 }
 
 // NewWhatsAppService creates a new WhatsApp service
@@ -924,8 +928,11 @@ func (s *whatsAppService) handleReactiveIntent(ctx context.Context, clinicID uui
 	case model.MessageIntentConfirm:
 		// First check if this is a waitlist response
 		if s.waitlistHandler != nil {
-			if err := s.waitlistHandler.HandlePatientResponse(ctx, clinicID, msg.Phone, true); err == nil {
-				// Waitlist response handled successfully
+			handled, err := s.waitlistHandler.HandlePatientResponse(ctx, clinicID, msg.Phone, true)
+			if err != nil {
+				logger.Printf("[Waitlist] Error handling confirm response for %s: %v", msg.Phone, err)
+			}
+			if handled {
 				return nil
 			}
 		}
@@ -945,8 +952,11 @@ func (s *whatsAppService) handleReactiveIntent(ctx context.Context, clinicID uui
 	case model.MessageIntentCancel:
 		// First check if this is a waitlist response (declining a slot offer)
 		if s.waitlistHandler != nil {
-			if err := s.waitlistHandler.HandlePatientResponse(ctx, clinicID, msg.Phone, false); err == nil {
-				// Waitlist response handled successfully
+			handled, err := s.waitlistHandler.HandlePatientResponse(ctx, clinicID, msg.Phone, false)
+			if err != nil {
+				logger.Printf("[Waitlist] Error handling cancel response for %s: %v", msg.Phone, err)
+			}
+			if handled {
 				return nil
 			}
 		}
