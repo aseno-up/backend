@@ -1795,6 +1795,7 @@ func (a *appointmentFinderAdapter) GetPendingByPhone(ctx context.Context, clinic
 		Professional:          profName,
 		StartTime:             apt.StartTime,
 		EndTime:               apt.EndTime,
+		Status:                string(apt.Status),
 		ConfirmationExpiresAt: apt.ConfirmationExpiresAt,
 	}, nil
 }

@@ -238,7 +238,11 @@ func (w *ReminderWorker) processThreshold(ctx context.Context, threshold config.
 		// without a timeout forever — they stayed "pending" past the start and
 		// the timeout worker never marked them as no_response.
 		if apt.ConfirmationExpiresAt == nil {
-			expiresAt := time.Now().Add(w.config.ConfirmationTimeoutDuration)
+			// Expiration is proportional to the reminder threshold: the patient
+			// gets half of the remaining antecedence to reply before we give up.
+			// 48h reminder → 24h window, 24h → 12h, 2h → 1h. A fixed 16h default
+			// could run past the appointment's own start_time for short thresholds.
+			expiresAt := time.Now().Add(threshold.Duration / 2)
 			if err := w.appointmentRepo.SetConfirmationExpiresAt(ctx, apt.ClinicID, apt.ID, expiresAt); err != nil {
 				logger.Printf("Failed to set confirmation timeout for appointment %s: %v", apt.ID, err)
 			}

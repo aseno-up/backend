@@ -65,6 +65,7 @@ func newPendingApt(future time.Duration) *AppointmentInfo {
 		ID:                    uuid.New(),
 		StartTime:             time.Now().Add(2 * time.Hour),
 		EndTime:               time.Now().Add(3 * time.Hour),
+		Status:                "pending",
 		ConfirmationExpiresAt: &expires,
 	}
 }
@@ -176,6 +177,93 @@ func TestBasicPlan_ConfirmationNilExpiresAt_Ignora(t *testing.T) {
 	}
 }
 
+// TestBasicPlan_AIAgentEnabledFalse_NaoClassifica: clinica optou por desligar
+// IA (AIAgentEnabled=false). Nesse caso NADA de IA roda — nem o classifier
+// reativo, porque ClassifyMessage usa um provider AI (regex e apenas
+// fallback). A clinica paga plano basico apenas pelo envio automatico de
+// lembretes; entrada do paciente e totalmente ignorada.
+func TestBasicPlan_AIAgentEnabledFalse_NaoClassifica(t *testing.T) {
+	finder := &stubAppointmentFinder{apt: newPendingApt(24 * time.Hour)}
+	updater := &stubAppointmentUpdater{}
+	svc := newBasicPlanService(finder, updater)
+
+	// Clinic com AI desligada.
+	disabledClinic := aiEnabledClinic()
+	disabledClinic.Settings.AIAgentEnabled = false
+	svc.clinicRepo = &stubClinicRepo{clinic: disabledClinic}
+
+	err := svc.HandleIncomingMessage(context.Background(), uuid.New(), newMsg("+5511988887777", "sim"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if updater.confirmCount() != 0 || updater.cancelCount() != 0 {
+		t.Errorf("AIAgentEnabled=false deve ignorar texto livre: confirm=%d cancel=%d",
+			updater.confirmCount(), updater.cancelCount())
+	}
+}
+
+// TestBasicPlan_AIAgentEnabledFalse_ButtonAindaFunciona: botoes (deterministicos,
+// sem IA) continuam funcionando mesmo com AIAgentEnabled=false. A setting
+// desliga IA, nao desliga confirmacao por UI.
+func TestBasicPlan_AIAgentEnabledFalse_ButtonAindaFunciona(t *testing.T) {
+	finder := &stubAppointmentFinder{apt: newPendingApt(24 * time.Hour)}
+	updater := &stubAppointmentUpdater{}
+	svc := newBasicPlanService(finder, updater)
+
+	disabledClinic := aiEnabledClinic()
+	disabledClinic.Settings.AIAgentEnabled = false
+	svc.clinicRepo = &stubClinicRepo{clinic: disabledClinic}
+
+	msg := newMsg("+5511988887777", "")
+	msg.ButtonID = "confirm"
+	err := svc.HandleIncomingMessage(context.Background(), uuid.New(), msg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if updater.confirmCount() != 1 {
+		t.Errorf("botao confirm deve funcionar mesmo com AIAgentEnabled=false, got %d", updater.confirmCount())
+	}
+}
+
+// TestBasicPlan_StatusConfirmed_Ignora: apos o paciente confirmar, a janela
+// fecha — novas mensagens de texto livre nao devem reprocessar. Sem isso, um
+// "obrigado" posterior poderia trigar o classifier de novo (e no pior caso,
+// um "cancelar" desfaz uma confirmacao do paciente sem ele pretender).
+func TestBasicPlan_StatusConfirmed_Ignora(t *testing.T) {
+	apt := newPendingApt(24 * time.Hour)
+	apt.Status = "confirmed" // ja confirmou antes
+	finder := &stubAppointmentFinder{apt: apt}
+	updater := &stubAppointmentUpdater{}
+	svc := newBasicPlanService(finder, updater)
+
+	err := svc.HandleIncomingMessage(context.Background(), uuid.New(), newMsg("+5511988887777", "sim"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if updater.confirmCount() != 0 || updater.cancelCount() != 0 {
+		t.Errorf("status=confirmed deve fechar a janela: confirm=%d cancel=%d",
+			updater.confirmCount(), updater.cancelCount())
+	}
+}
+
+// TestBasicPlan_StatusNoResponse_ContinuaAceitando: timeout marcou o appt como
+// no_response — o paciente ainda pode confirmar ou cancelar tardiamente.
+func TestBasicPlan_StatusNoResponse_ContinuaAceitando(t *testing.T) {
+	apt := newPendingApt(24 * time.Hour)
+	apt.Status = "no_response"
+	finder := &stubAppointmentFinder{apt: apt}
+	updater := &stubAppointmentUpdater{}
+	svc := newBasicPlanService(finder, updater)
+
+	err := svc.HandleIncomingMessage(context.Background(), uuid.New(), newMsg("+5511988887777", "sim"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if updater.confirmCount() != 1 {
+		t.Errorf("status=no_response ainda aceita confirmacao tardia, got %d confirm", updater.confirmCount())
+	}
+}
+
 // TestBasicPlan_IntentSchedule_Ignora: mesmo com paciente em aguardo, se a
 // mensagem for "quero marcar", isso e tarefa do AI Agent (Pro) — ignora no
 // basico para preservar a fronteira de plano.
@@ -238,26 +326,88 @@ func TestBasicPlan_ButtonID_ContinuaFuncionando(t *testing.T) {
 	}
 }
 
-// Sanity: a classificacao nao roda no caminho Pro (com aiAgentService); nesse
-// caso o HandleIncomingMessage delega ao debouncer. Garantimos que o caminho
-// novo nao vaza para o Pro — se ha aiAgent, o classificador da janela nao e
-// consultado.
-func TestBasicPlan_ClassifierNaoRodaQuandoAIAgentAtivo(t *testing.T) {
+// TestBasicPlan_PlanGateAllows_UsaAIAgentPeloDebouncer: quando o plan gate
+// permite (Pro), o debouncer dispara o AI Agent. O classifier reativo NAO
+// roda porque o AI Agent cuida de toda a conversa.
+func TestBasicPlan_PlanGateAllows_UsaAIAgentPeloDebouncer(t *testing.T) {
 	finder := &stubAppointmentFinder{apt: newPendingApt(24 * time.Hour)}
 	updater := &stubAppointmentUpdater{}
 	ai := &stubAIAgentService{}
+	gate := &stubPlanGate{allowed: true}
 	svc := newBasicPlanService(finder, updater)
 	svc.aiAgentService = ai
 	svc.clinicRepo = &stubClinicRepo{clinic: aiEnabledClinic()}
-	svc.debounceDelay = 0
+	svc.planGateChecker = gate
+	svc.debounceDelay = 30 * time.Millisecond
 
 	err := svc.HandleIncomingMessage(context.Background(), uuid.New(), newMsg("+5511988887777", "sim"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	// O caminho Pro debouncou a mensagem em vez de classificar reativamente.
+
+	// Aguarda o debouncer disparar.
+	time.Sleep(100 * time.Millisecond)
+
+	if ai.callCount() != 1 {
+		t.Errorf("plan gate permite — AI Agent deve ser chamado: got %d calls", ai.callCount())
+	}
 	if updater.confirmCount() != 0 {
-		t.Errorf("no plano Pro o classifier reativo nao deve disparar — AI Agent cuida: confirm=%d",
-			updater.confirmCount())
+		t.Errorf("classifier reativo NAO deve rodar quando AI Agent e chamado: got %d", updater.confirmCount())
+	}
+}
+
+// TestBasicPlan_PlanGateDenies_UsaClassifierReativoPeloDebouncer: quando o
+// plan gate nega (basico), o debouncer dispara o classifier reativo em vez do
+// AI Agent. Mensagens rapidas ainda sao coalescidas pelo debouncer.
+func TestBasicPlan_PlanGateDenies_UsaClassifierReativoPeloDebouncer(t *testing.T) {
+	finder := &stubAppointmentFinder{apt: newPendingApt(24 * time.Hour)}
+	updater := &stubAppointmentUpdater{}
+	ai := &stubAIAgentService{}
+	gate := &stubPlanGate{allowed: false}
+	svc := newBasicPlanService(finder, updater)
+	svc.aiAgentService = ai
+	svc.clinicRepo = &stubClinicRepo{clinic: aiEnabledClinic()}
+	svc.planGateChecker = gate
+	svc.debounceDelay = 30 * time.Millisecond
+
+	err := svc.HandleIncomingMessage(context.Background(), uuid.New(), newMsg("+5511988887777", "sim"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Aguarda o debouncer disparar.
+	time.Sleep(100 * time.Millisecond)
+
+	if ai.callCount() != 0 {
+		t.Errorf("plan gate nega — AI Agent NAO deve ser chamado: got %d calls", ai.callCount())
+	}
+	if updater.confirmCount() != 1 {
+		t.Errorf("classifier reativo deve confirmar quando plan gate nega + janela aberta: got %d", updater.confirmCount())
+	}
+}
+
+// TestBasicPlan_PlanGateDenies_AlemDaJanelaIgnora: plan gate nega + mensagem
+// fora de janela. Classifier nao dispara nada (mantem boundary do plano).
+func TestBasicPlan_PlanGateDenies_AlemDaJanelaIgnora(t *testing.T) {
+	finder := &stubAppointmentFinder{apt: nil}
+	updater := &stubAppointmentUpdater{}
+	ai := &stubAIAgentService{}
+	gate := &stubPlanGate{allowed: false}
+	svc := newBasicPlanService(finder, updater)
+	svc.aiAgentService = ai
+	svc.clinicRepo = &stubClinicRepo{clinic: aiEnabledClinic()}
+	svc.planGateChecker = gate
+	svc.debounceDelay = 30 * time.Millisecond
+
+	err := svc.HandleIncomingMessage(context.Background(), uuid.New(), newMsg("+5511988887777", "quero marcar"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	time.Sleep(100 * time.Millisecond)
+
+	if ai.callCount() != 0 || updater.confirmCount() != 0 || updater.cancelCount() != 0 {
+		t.Errorf("sem janela, plano basico ignora texto livre: ai=%d confirm=%d cancel=%d",
+			ai.callCount(), updater.confirmCount(), updater.cancelCount())
 	}
 }

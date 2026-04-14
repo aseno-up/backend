@@ -268,6 +268,7 @@ type AppointmentInfo struct {
 	Professional          string
 	StartTime             time.Time
 	EndTime               time.Time
+	Status                string     // pending, confirmed, no_response, canceled, etc.
 	ConfirmationExpiresAt *time.Time // non-nil and in the future == patient is "awaiting confirmation"
 }
 
@@ -827,25 +828,44 @@ func (s *whatsAppService) HandleIncomingMessage(ctx context.Context, clinicID uu
 		}
 	}
 
-	// Se o AI Agent está habilitado E a clínica permite IA, debounce antes de processar.
-	// Evita respostas instantâneas que podem acionar bloqueio pelo WhatsApp.
+	// Debounce + dispatch. Debouncing is done for BOTH paths (Pro AI Agent and
+	// basic reactive classifier) because WhatsApp clients split long replies
+	// into several rapid messages; coalescing them into one processing event
+	// keeps us from firing multiple confirmations in a row.
+	//
+	// Plan gate is resolved here — before scheduling — so the debounced
+	// callback does not need to re-query. Pro (gate allows) runs the full
+	// AI Agent; basic (gate denies) runs the reactive classifier.
 	if s.aiAgentService != nil {
-		// Verificar se a clínica tem IA habilitada antes de entrar no debouncer.
-		// Sem esta verificação, o fluxo tradicional era pulado para todas as clínicas.
 		aiEnabled := true
+		var clinic *clinic_model.Clinic
 		if s.clinicRepo != nil {
-			clinic, err := s.clinicRepo.GetByID(ctx, clinicID)
+			c, err := s.clinicRepo.GetByID(ctx, clinicID)
 			if err != nil {
 				logger.Printf("[AI Agent] Warning: failed to fetch clinic settings: %v", err)
-			} else if !clinic.Settings.AIAgentEnabled {
+			} else if !c.Settings.AIAgentEnabled {
 				aiEnabled = false
-				logger.Printf("[AI Agent] Clinic %s has AIAgentEnabled=false, falling through to traditional flow", clinicID)
+				logger.Printf("[AI Agent] Clinic %s has AIAgentEnabled=false, using reactive flow", clinicID)
+			} else {
+				clinic = c
 			}
 		} else {
-			logger.Printf("[AI Agent] Clinic %s not found, falling through to traditional flow", clinicID)
+			logger.Printf("[AI Agent] Clinic %s not found, using reactive flow", clinicID)
 		}
 
 		if aiEnabled {
+			useAIAgent := true
+			if s.planGateChecker != nil && clinic != nil {
+				allowed, err := s.planGateChecker.IsAIAgentAllowed(ctx, clinic)
+				if err != nil {
+					useAIAgent = false
+					logger.Printf("[AI Agent] Plan gate error for clinic %s: %v — using reactive flow", clinicID, err)
+				} else if !allowed {
+					useAIAgent = false
+					logger.Printf("[AI Agent] Clinic %s plan does not include AI agent, using reactive flow", clinicID)
+				}
+			}
+
 			logger.Printf("[Debounce] Message from %s received — waiting %v idle before processing",
 				msg.Phone, s.debounceDelay)
 
@@ -853,25 +873,36 @@ func (s *whatsAppService) HandleIncomingMessage(ctx context.Context, clinicID uu
 			capClinicID := clinicID
 
 			s.debouncer.schedule(clinicID, msg, s.debounceDelay, func(lastMsg *model.ParsedIncomingMessage) {
-				logger.Printf("[Debounce] Idle window elapsed for %s — processing with AI Agent: %q",
-					lastMsg.Phone, lastMsg.Content)
-				if err := s.handleWithAIAgent(bgCtx, capClinicID, lastMsg); err != nil {
-					logger.Printf("[Debounce] Error handling AI Agent message from %s: %v", lastMsg.Phone, err)
+				if useAIAgent {
+					logger.Printf("[Debounce] Idle window elapsed for %s — processing with AI Agent: %q",
+						lastMsg.Phone, lastMsg.Content)
+					if err := s.handleWithAIAgent(bgCtx, capClinicID, lastMsg); err != nil {
+						logger.Printf("[Debounce] Error handling AI Agent message from %s: %v", lastMsg.Phone, err)
+					}
+				} else {
+					logger.Printf("[Debounce] Idle window elapsed for %s — processing with reactive classifier: %q",
+						lastMsg.Phone, lastMsg.Content)
+					if err := s.handleReactiveIntent(bgCtx, capClinicID, lastMsg); err != nil {
+						logger.Printf("[Debounce] Error handling reactive message from %s: %v", lastMsg.Phone, err)
+					}
 				}
 			})
 			return nil
 		}
 	}
 
+	// AI agent service not wired (test/dev) — go straight to reactive flow.
+	return s.handleReactiveIntent(ctx, clinicID, msg)
+}
+
+// handleReactiveIntent processes a message without invoking the full AI Agent:
+// button-based intents map directly, and free text only acts if the patient is
+// inside a confirmation window (Confirm/Cancel). Anything else is ignored.
+func (s *whatsAppService) handleReactiveIntent(ctx context.Context, clinicID uuid.UUID, msg *model.ParsedIncomingMessage) error {
 	if strings.HasPrefix(msg.ButtonID, "rsch_") {
 		return s.handleRescheduleResponse(ctx, msg)
 	}
 
-	// Determine intent: explicit button first, then (basic plan fallback) the
-	// classifier — but only if the patient is inside the confirmation window
-	// of a pending appointment. This keeps the basic plan reactive-only: we
-	// respond when the patient replies to a reminder we just sent, never
-	// proactively (that is the AI Agent's job on the Pro plan).
 	var intent model.MessageIntent
 	switch msg.ButtonID {
 	case "confirm":
@@ -883,15 +914,12 @@ func (s *whatsAppService) HandleIncomingMessage(ctx context.Context, clinicID uu
 	case "":
 		intent = s.classifyWithinConfirmationWindow(ctx, clinicID, msg)
 		if intent != model.MessageIntentConfirm && intent != model.MessageIntentCancel {
-			// Anything other than confirm/cancel (including Reschedule,
-			// Schedule, Question, Unknown) is ignored in the basic plan.
 			return nil
 		}
 	default:
 		return nil
 	}
 
-	// Handle the response based on intent
 	switch intent {
 	case model.MessageIntentConfirm:
 		// First check if this is a waitlist response
@@ -983,10 +1011,15 @@ func (s *whatsAppService) HandleIncomingMessage(ctx context.Context, clinicID uu
 }
 
 // classifyWithinConfirmationWindow returns an intent only when the patient
-// is currently awaiting confirmation of a pending appointment (i.e., we sent
-// a reminder and ConfirmationExpiresAt is still in the future). Outside that
-// window — or when no AppointmentFinder is wired — returns Unknown, which
-// the caller treats as "ignore".
+// is currently awaiting confirmation of a pending appointment AND the clinic
+// has AI enabled. Returns Unknown (caller treats as "ignore") when:
+//   - no AppointmentFinder is wired
+//   - there is no pending appointment for this phone
+//   - the confirmation window is closed (expired or never opened)
+//   - the appointment status already resolved (confirmed/canceled)
+//   - the clinic disabled AIAgentEnabled — ClassifyMessage uses an AI provider
+//     (regex is only a fallback), so a clinic that opted out of AI should not
+//     consume any AI tokens for incoming messages.
 func (s *whatsAppService) classifyWithinConfirmationWindow(ctx context.Context, clinicID uuid.UUID, msg *model.ParsedIncomingMessage) model.MessageIntent {
 	if s.appointmentFinder == nil {
 		return model.MessageIntentUnknown
@@ -997,6 +1030,15 @@ func (s *whatsAppService) classifyWithinConfirmationWindow(ctx context.Context, 
 	}
 	if apt.ConfirmationExpiresAt == nil || !apt.ConfirmationExpiresAt.After(time.Now()) {
 		return model.MessageIntentUnknown
+	}
+	if apt.Status != "pending" && apt.Status != "no_response" {
+		return model.MessageIntentUnknown
+	}
+	if s.clinicRepo != nil {
+		clinic, err := s.clinicRepo.GetByID(ctx, clinicID)
+		if err == nil && !clinic.Settings.AIAgentEnabled {
+			return model.MessageIntentUnknown
+		}
 	}
 	return s.ClassifyMessage(msg.Content)
 }

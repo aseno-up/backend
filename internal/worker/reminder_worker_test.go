@@ -13,9 +13,10 @@ import (
 )
 
 type stubAppointmentRepo struct {
-	pending             []*appointment_model.AppointmentWithClinic
-	markedReminders     []uuid.UUID
-	confirmationSetFor  []uuid.UUID
+	pending                []*appointment_model.AppointmentWithClinic
+	markedReminders        []uuid.UUID
+	confirmationSetFor     []uuid.UUID
+	confirmationTimestamps []time.Time
 }
 
 func (r *stubAppointmentRepo) GetPendingReminders(_ context.Context, _ string, _ time.Time, _ time.Time) ([]*appointment_model.AppointmentWithClinic, error) {
@@ -27,8 +28,9 @@ func (r *stubAppointmentRepo) MarkReminderSent(_ context.Context, _ uuid.UUID, i
 	return nil
 }
 
-func (r *stubAppointmentRepo) SetConfirmationExpiresAt(_ context.Context, _ uuid.UUID, id uuid.UUID, _ time.Time) error {
+func (r *stubAppointmentRepo) SetConfirmationExpiresAt(_ context.Context, _ uuid.UUID, id uuid.UUID, expiresAt time.Time) error {
 	r.confirmationSetFor = append(r.confirmationSetFor, id)
+	r.confirmationTimestamps = append(r.confirmationTimestamps, expiresAt)
 	return nil
 }
 
@@ -210,6 +212,54 @@ func TestReminderWorker_SetsConfirmationExpiresAtOn2h(t *testing.T) {
 	}
 	if len(repo.confirmationSetFor) != 1 {
 		t.Errorf("expected SetConfirmationExpiresAt to be called once for reminder_2h, got %d", len(repo.confirmationSetFor))
+	}
+}
+
+// TestReminderWorker_ExpirationIsProportionalToThreshold: o timeout da janela
+// de confirmacao deve ser metade da antecedencia do reminder — 48h→24h, 24h→12h,
+// 2h→1h. Antes era fixo em ConfirmationTimeoutDuration (16h default), o que
+// fazia a janela expirar DEPOIS do horario do proprio appointment em reminders
+// curtos (2h reminder + 16h timeout = expira 14h depois do start_time).
+func TestReminderWorker_ExpirationIsProportionalToThreshold(t *testing.T) {
+	cases := []struct {
+		name     string
+		duration time.Duration
+		want     time.Duration
+	}{
+		{"2h", 2 * time.Hour, 1 * time.Hour},
+		{"24h", 24 * time.Hour, 12 * time.Hour},
+		// 48h case is skipped by the "within 3 days" guard in processThreshold
+		// and is not worth contorting the test setup for — the halving logic
+		// is the same.
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			clinicID := uuid.New()
+			repo := &stubAppointmentRepo{
+				pending: []*appointment_model.AppointmentWithClinic{buildAppointment(clinicID, tc.duration)},
+			}
+			q := &stubQueue{}
+
+			w := NewReminderWorker(newReminderConfig(), repo, q)
+
+			before := time.Now()
+			_, err := w.processThreshold(context.Background(), config.ReminderThreshold{
+				Name:     tc.name,
+				Type:     "reminder_" + tc.name,
+				Duration: tc.duration,
+			}, map[uuid.UUID]bool{})
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if len(repo.confirmationTimestamps) != 1 {
+				t.Fatalf("expected SetConfirmationExpiresAt called once, got %d", len(repo.confirmationTimestamps))
+			}
+			got := repo.confirmationTimestamps[0].Sub(before)
+			tolerance := 2 * time.Second
+			if got < tc.want-tolerance || got > tc.want+tolerance {
+				t.Errorf("reminder_%s should expire in %v, got %v after now", tc.name, tc.want, got)
+			}
+		})
 	}
 }
 
