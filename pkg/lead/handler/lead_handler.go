@@ -230,9 +230,17 @@ func (h *leadHandler) Dashboard(c *gin.Context) {
 			COALESCE(p.name, '') as plan_name,
 			COALESCE(a.subscription_status, '') as subscription_status,
 			COALESCE(
-				(SELECT pc.price_brl / CASE WHEN pc.cycle_type = 'yearly' THEN 12 ELSE 1 END
-				 FROM plan_cycles pc WHERE pc.plan_id = p.id AND pc.deleted_at IS NULL
-				 ORDER BY CASE WHEN pc.cycle_type = 'monthly' THEN 0 ELSE 1 END
+				(SELECT s.value / CASE s.cycle
+						WHEN 'WEEKLY' THEN 0.25
+						WHEN 'BIWEEKLY' THEN 0.5
+						WHEN 'MONTHLY' THEN 1
+						WHEN 'QUARTERLY' THEN 3
+						WHEN 'SEMIANNUALLY' THEN 6
+						WHEN 'YEARLY' THEN 12
+						ELSE 1 END
+				 FROM subscriptions s
+				 WHERE s.account_id = a.id AND s.deleted_at IS NULL AND s.status = 'ACTIVE'
+				 ORDER BY s.created_at DESC
 				 LIMIT 1),
 				0
 			) as mrr,
@@ -261,23 +269,23 @@ func (h *leadHandler) Dashboard(c *gin.Context) {
 		ORDER BY count DESC
 	`).Scan(&clinicsPerPlan)
 
-	// Total MRR from all clinics
+	// Total MRR from active subscriptions (trial and unsubscribed accounts are excluded)
 	var totalClinicMRR float64
 	h.db.Raw(`
 		SELECT COALESCE(SUM(
-			COALESCE(
-				(SELECT pc.price_brl / CASE WHEN pc.cycle_type = 'yearly' THEN 12 ELSE 1 END
-				 FROM plan_cycles pc WHERE pc.plan_id = p.id AND pc.deleted_at IS NULL
-				 ORDER BY CASE WHEN pc.cycle_type = 'monthly' THEN 0 ELSE 1 END
-				 LIMIT 1),
-				0
-			)
+			s.value / CASE s.cycle
+				WHEN 'WEEKLY' THEN 0.25
+				WHEN 'BIWEEKLY' THEN 0.5
+				WHEN 'MONTHLY' THEN 1
+				WHEN 'QUARTERLY' THEN 3
+				WHEN 'SEMIANNUALLY' THEN 6
+				WHEN 'YEARLY' THEN 12
+				ELSE 1 END
 		), 0)
 		FROM clinics c
-		LEFT JOIN accounts a ON a.id = c.account_id AND a.deleted_at IS NULL
-		LEFT JOIN plans p ON p.id = a.plan_id AND p.deleted_at IS NULL
+		JOIN accounts a ON a.id = c.account_id AND a.deleted_at IS NULL
+		JOIN subscriptions s ON s.account_id = a.id AND s.deleted_at IS NULL AND s.status = 'ACTIVE'
 		WHERE c.deleted_at IS NULL AND c.type != 'dev'
-		AND a.subscription_status = 'active'
 	`).Scan(&totalClinicMRR)
 
 	c.JSON(http.StatusOK, gin.H{
