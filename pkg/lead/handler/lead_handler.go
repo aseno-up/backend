@@ -277,7 +277,7 @@ func (h *leadHandler) Dashboard(c *gin.Context) {
 		LEFT JOIN accounts a ON a.id = c.account_id AND a.deleted_at IS NULL
 		LEFT JOIN plans p ON p.id = a.plan_id AND p.deleted_at IS NULL
 		WHERE c.deleted_at IS NULL AND c.type != 'dev'
-		AND a.subscription_status IN ('active', 'trial')
+		AND a.subscription_status = 'active'
 	`).Scan(&totalClinicMRR)
 
 	c.JSON(http.StatusOK, gin.H{
