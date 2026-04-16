@@ -36,7 +36,7 @@ type AuthService interface {
 	GoogleLogin(ctx context.Context, req *model.GoogleLoginRequest) (*model.AuthResponse, error)
 	RefreshToken(ctx context.Context, refreshToken string) (*model.AuthResponse, error)
 	Logout(ctx context.Context, userID uuid.UUID) error
-	GetCurrentUser(ctx context.Context, userID uuid.UUID) (*model.CurrentUserResponse, error)
+	GetCurrentUser(ctx context.Context, userID, currentClinicID uuid.UUID) (*model.CurrentUserResponse, error)
 	SwitchClinic(ctx context.Context, userID, clinicID uuid.UUID) (*model.AuthResponse, error)
 	ChangePassword(ctx context.Context, userID uuid.UUID, req *model.ChangePasswordRequest) error
 	RequestPasswordReset(ctx context.Context, req *model.RequestPasswordResetRequest) error
@@ -763,8 +763,14 @@ func (s *authService) RefreshToken(ctx context.Context, refreshToken string) (*m
 		return nil, errors.ErrTokenInvalidInstance.WithMessage("Token has been revoked")
 	}
 
-	// Build token context — use clinic from the refresh token claims
-	refreshClinicID := s.getDefaultClinicID(ctx, user)
+	// Build token context using the clinic_id from the refresh token claims so
+	// that users who have switched clinics keep the active clinic after a
+	// refresh. Falls back to the default if the refresh token predates this
+	// (claims.ClinicID == uuid.Nil).
+	refreshClinicID := claims.ClinicID
+	if refreshClinicID == uuid.Nil {
+		refreshClinicID = s.getDefaultClinicID(ctx, user)
+	}
 	tc := s.buildTokenContext(ctx, user, refreshClinicID)
 	tokenPair, err := s.jwtService.GenerateTokenPair(tc)
 	if err != nil {
@@ -777,7 +783,7 @@ func (s *authService) RefreshToken(ctx context.Context, refreshToken string) (*m
 	}
 
 	// Get clinic for response
-	clinic, err := s.clinicRepo.GetByID(ctx, user.ClinicID)
+	clinic, err := s.clinicRepo.GetByID(ctx, refreshClinicID)
 	if err != nil {
 		return nil, err
 	}
@@ -796,15 +802,24 @@ func (s *authService) Logout(ctx context.Context, userID uuid.UUID) error {
 	return s.userRepo.UpdateRefreshToken(ctx, userID, "")
 }
 
-// GetCurrentUser retrieves the current user's data with clinic info
-func (s *authService) GetCurrentUser(ctx context.Context, userID uuid.UUID) (*model.CurrentUserResponse, error) {
+// GetCurrentUser retrieves the current user's data with clinic info.
+// currentClinicID is the clinic_id from the JWT (set by the auth middleware).
+// Pass uuid.Nil to fall back to the user's default clinic — this keeps callers
+// that don't know the JWT context (legacy paths) working, but the HTTP handler
+// MUST pass the JWT clinic_id so that /auth/me reflects the currently active
+// clinic after a SwitchClinic. Without this, a page reload after switching
+// reverts the frontend back to the user's owned clinic.
+func (s *authService) GetCurrentUser(ctx context.Context, userID, currentClinicID uuid.UUID) (*model.CurrentUserResponse, error) {
 	user, err := s.userRepo.GetByIDNoTenant(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
 
-	// Load professional ID via buildTokenContext
-	currentClinicID := s.getDefaultClinicID(ctx, user)
+	if currentClinicID == uuid.Nil {
+		currentClinicID = s.getDefaultClinicID(ctx, user)
+	}
+
+	// Load professional ID into user via buildTokenContext side effect
 	s.buildTokenContext(ctx, user, currentClinicID)
 
 	clinic, err := s.clinicRepo.GetByID(ctx, currentClinicID)

@@ -244,7 +244,18 @@ func (h *authHandler) GetCurrentUser(c *gin.Context) {
 		return
 	}
 
-	user, err := h.authService.GetCurrentUser(c.Request.Context(), userID.(uuid.UUID))
+	// Pass the clinic_id from the JWT (set by auth middleware) so that after
+	// SwitchClinic the active clinic — not the user's owned clinic — is
+	// returned. Falls back to uuid.Nil (default) if the middleware didn't set
+	// it for some reason.
+	var currentClinicID uuid.UUID
+	if v, ok := c.Get("clinic_id"); ok {
+		if cid, ok := v.(uuid.UUID); ok {
+			currentClinicID = cid
+		}
+	}
+
+	user, err := h.authService.GetCurrentUser(c.Request.Context(), userID.(uuid.UUID), currentClinicID)
 	if err != nil {
 		statusCode := errors.GetStatusCode(err)
 		c.JSON(statusCode, errors.ToResponse(err))

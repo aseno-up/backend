@@ -153,6 +153,15 @@ func (m *MockJWTService) GenerateTokenPair(tc *TokenContext) (*model.TokenPair, 
 	return args.Get(0).(*model.TokenPair), args.Error(1)
 }
 
+func (m *MockJWTService) ValidateRefreshToken(tokenString string) (*model.JWTClaims, error) {
+	args := m.Called(tokenString)
+	var claims *model.JWTClaims
+	if args.Get(0) != nil {
+		claims = args.Get(0).(*model.JWTClaims)
+	}
+	return claims, args.Error(1)
+}
+
 // MockEmailService
 type MockEmailService struct {
 	email_service.EmailService
@@ -743,4 +752,190 @@ func TestAuthService_Register_DefaultsWhatsAppRemindersEnabled(t *testing.T) {
 	assert.NotNil(t, createdClinic)
 	assert.True(t, createdClinic.Settings.WhatsAppRemindersEnabled,
 		"clinica nova deve vir com WhatsAppRemindersEnabled=true por padrao — sem isso o reminder_worker filtra o appointment fora")
+}
+
+// TestAuthService_GetCurrentUser_UsesProvidedClinicID garante que, quando o
+// handler passa o clinic_id extraido do JWT, o service retorna os dados da
+// clinica ATIVA (a que esta no token), nao a clinica "dona" do usuario. Sem
+// isso, apos alternar de clinica o reload chama /auth/me, recebe a clinica
+// padrao e o frontend "reverte" para a clinica de origem.
+func TestAuthService_GetCurrentUser_UsesProvidedClinicID(t *testing.T) {
+	mockUserRepo := new(MockUserRepository)
+	mockClinicRepo := new(MockClinicRepository)
+	mockAccountRepo := new(MockAccountRepository)
+	mockJWTService := new(MockJWTService)
+	mockEmailService := new(MockEmailService)
+	mockEmailVerifRepo := new(MockEmailVerificationRepository)
+	mockPassResetRepo := new(MockPasswordResetRepository)
+	mockPlanRepo := new(MockPlanRepository)
+
+	svc := NewAuthService(
+		mockUserRepo,
+		mockClinicRepo,
+		mockAccountRepo,
+		mockPassResetRepo,
+		mockEmailVerifRepo,
+		mockPlanRepo,
+		nil, // professionalRepo
+		nil, // clinicMemberRepo — forca fallback para user.ClinicID
+		mockJWTService,
+		mockEmailService,
+		"http://localhost:3000",
+	).(*authService)
+
+	ctx := context.Background()
+	userID := uuid.New()
+	ownedClinicID := uuid.New()   // clinica dona do usuario
+	currentClinicID := uuid.New() // clinica ativa no JWT (alvo do switch)
+
+	mockUserRepo.On("GetByIDNoTenant", ctx, userID).Return(&user_model.User{
+		ID:       userID,
+		Email:    "user@example.com",
+		Name:     "User",
+		ClinicID: ownedClinicID,
+	}, nil)
+
+	mockClinicRepo.On("GetByID", ctx, currentClinicID).Return(&clinic_model.Clinic{
+		ID:   currentClinicID,
+		Name: "Clinica Ativa",
+	}, nil)
+
+	resp, err := svc.GetCurrentUser(ctx, userID, currentClinicID)
+
+	assert.NoError(t, err)
+	assert.NotNil(t, resp)
+	assert.Equal(t, currentClinicID, resp.Clinic.ID,
+		"GetCurrentUser deve retornar a clinica do clinic_id passado (do JWT), nao a clinica dona do usuario")
+
+	mockClinicRepo.AssertExpectations(t)
+}
+
+// TestAuthService_GetCurrentUser_FallsBackToDefaultWhenClinicIDIsNil garante
+// compatibilidade com chamadas legadas: quando o clinic_id nao vem do JWT
+// (uuid.Nil), o service usa o default (primeira clinica do clinic_members
+// ou user.ClinicID).
+func TestAuthService_GetCurrentUser_FallsBackToDefaultWhenClinicIDIsNil(t *testing.T) {
+	mockUserRepo := new(MockUserRepository)
+	mockClinicRepo := new(MockClinicRepository)
+	mockAccountRepo := new(MockAccountRepository)
+	mockJWTService := new(MockJWTService)
+	mockEmailService := new(MockEmailService)
+	mockEmailVerifRepo := new(MockEmailVerificationRepository)
+	mockPassResetRepo := new(MockPasswordResetRepository)
+	mockPlanRepo := new(MockPlanRepository)
+
+	svc := NewAuthService(
+		mockUserRepo,
+		mockClinicRepo,
+		mockAccountRepo,
+		mockPassResetRepo,
+		mockEmailVerifRepo,
+		mockPlanRepo,
+		nil,
+		nil,
+		mockJWTService,
+		mockEmailService,
+		"http://localhost:3000",
+	).(*authService)
+
+	ctx := context.Background()
+	userID := uuid.New()
+	ownedClinicID := uuid.New()
+
+	mockUserRepo.On("GetByIDNoTenant", ctx, userID).Return(&user_model.User{
+		ID:       userID,
+		Email:    "user@example.com",
+		Name:     "User",
+		ClinicID: ownedClinicID,
+	}, nil)
+	mockClinicRepo.On("GetByID", ctx, ownedClinicID).Return(&clinic_model.Clinic{
+		ID:   ownedClinicID,
+		Name: "Clinica Dona",
+	}, nil)
+
+	resp, err := svc.GetCurrentUser(ctx, userID, uuid.Nil)
+
+	assert.NoError(t, err)
+	assert.NotNil(t, resp)
+	assert.Equal(t, ownedClinicID, resp.Clinic.ID,
+		"Com clinic_id nil, GetCurrentUser deve cair no default (user.ClinicID)")
+}
+
+// TestAuthService_RefreshToken_ReturnsClinicFromClaims garante que o refresh
+// preserva a clinica ativa embutida no refresh token. Sem isso, o proximo
+// refresh "reverte" o usuario para a clinica dona e a sessao deixa de apontar
+// para a clinica alternada.
+func TestAuthService_RefreshToken_ReturnsClinicFromClaims(t *testing.T) {
+	mockUserRepo := new(MockUserRepository)
+	mockClinicRepo := new(MockClinicRepository)
+	mockAccountRepo := new(MockAccountRepository)
+	mockJWTService := new(MockJWTService)
+	mockEmailService := new(MockEmailService)
+	mockEmailVerifRepo := new(MockEmailVerificationRepository)
+	mockPassResetRepo := new(MockPasswordResetRepository)
+	mockPlanRepo := new(MockPlanRepository)
+
+	svc := NewAuthService(
+		mockUserRepo,
+		mockClinicRepo,
+		mockAccountRepo,
+		mockPassResetRepo,
+		mockEmailVerifRepo,
+		mockPlanRepo,
+		nil,
+		nil,
+		mockJWTService,
+		mockEmailService,
+		"http://localhost:3000",
+	).(*authService)
+
+	ctx := context.Background()
+	userID := uuid.New()
+	ownedClinicID := uuid.New()
+	activeClinicID := uuid.New() // clinica gravada no refresh token (apos switch)
+	refreshTokenStr := "valid-refresh-token"
+
+	mockJWTService.On("ValidateRefreshToken", refreshTokenStr).Return(&model.JWTClaims{
+		UserID:   userID,
+		ClinicID: activeClinicID,
+		Email:    "user@example.com",
+		Type:     model.TokenTypeRefresh,
+	}, nil)
+
+	mockUserRepo.On("GetByIDNoTenant", ctx, userID).Return(&user_model.User{
+		ID:           userID,
+		Email:        "user@example.com",
+		Name:         "User",
+		ClinicID:     ownedClinicID,
+		IsActive:     true,
+		RefreshToken: refreshTokenStr,
+	}, nil)
+
+	// token gerado deve usar activeClinicID
+	var receivedTC *TokenContext
+	mockJWTService.On("GenerateTokenPair", mock.MatchedBy(func(tc *TokenContext) bool {
+		receivedTC = tc
+		return tc.ClinicID == activeClinicID
+	})).Return(&model.TokenPair{
+		AccessToken:  "new-access",
+		RefreshToken: "new-refresh",
+		ExpiresIn:    3600,
+	}, nil)
+
+	mockUserRepo.On("UpdateRefreshToken", ctx, userID, "new-refresh").Return(nil)
+
+	mockClinicRepo.On("GetByID", ctx, activeClinicID).Return(&clinic_model.Clinic{
+		ID:   activeClinicID,
+		Name: "Clinica Ativa",
+	}, nil)
+
+	resp, err := svc.RefreshToken(ctx, refreshTokenStr)
+
+	assert.NoError(t, err)
+	assert.NotNil(t, resp)
+	assert.Equal(t, activeClinicID, resp.Clinic.ID,
+		"RefreshToken deve retornar a clinica do claims.ClinicID do refresh token, nao a clinica dona")
+	assert.NotNil(t, receivedTC)
+	assert.Equal(t, activeClinicID, receivedTC.ClinicID,
+		"o novo TokenContext deve preservar a clinic_id do refresh token")
 }
