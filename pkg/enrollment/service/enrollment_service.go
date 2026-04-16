@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 
 	"github.com/aseno/backend/internal/errors"
 	"github.com/aseno/backend/pkg/enrollment/model"
@@ -55,14 +56,25 @@ func (s *enrollmentService) Enroll(ctx context.Context, clinicID, sessionPlanID 
 		return nil, errors.ErrValidationInstance.WithMessage("Plan is not active")
 	}
 
-	// Check capacity
+	// Validate week_days: required and each day must be 0..6
+	if len(req.WeekDays) == 0 {
+		return nil, errors.ErrValidationInstance.WithMessage("week_days is required for group enrollments")
+	}
+	weekDays, err := normalizeWeekDays(req.WeekDays)
+	if err != nil {
+		return nil, err
+	}
+
+	// Check per-day capacity: for each requested day, count active enrollments on that day.
 	if plan.Capacity != nil {
-		activeCount, err := s.repo.CountActiveByPlan(ctx, clinicID, sessionPlanID)
-		if err != nil {
-			return nil, err
-		}
-		if int(activeCount) >= *plan.Capacity {
-			return nil, errors.ErrValidationInstance.WithMessage("Plan has reached maximum capacity")
+		for _, day := range weekDays {
+			count, err := s.repo.CountActiveByPlanAndWeekDay(ctx, clinicID, sessionPlanID, int(day))
+			if err != nil {
+				return nil, err
+			}
+			if int(count) >= *plan.Capacity {
+				return nil, errors.ErrValidationInstance.WithMessage("Plan has reached maximum capacity for the selected day")
+			}
 		}
 	}
 
@@ -79,6 +91,7 @@ func (s *enrollmentService) Enroll(ctx context.Context, clinicID, sessionPlanID 
 	if existing != nil && existing.Status == model.EnrollmentStatusCancelled {
 		existing.Status = model.EnrollmentStatusActive
 		existing.LeftAt = nil
+		existing.WeekDays = weekDays
 		if req.TotalSessions != nil {
 			existing.TotalSessions = req.TotalSessions
 		}
@@ -104,6 +117,7 @@ func (s *enrollmentService) Enroll(ctx context.Context, clinicID, sessionPlanID 
 		SessionPlanID: sessionPlanID,
 		PatientID:     req.PatientID,
 		Status:        model.EnrollmentStatusActive,
+		WeekDays:      weekDays,
 		TotalSessions: req.TotalSessions,
 		SessionsDone:  0,
 		PaymentMode:   paymentMode,
@@ -117,6 +131,27 @@ func (s *enrollmentService) Enroll(ctx context.Context, clinicID, sessionPlanID 
 	}
 
 	return s.repo.GetByID(ctx, clinicID, enrollment.ID)
+}
+
+// normalizeWeekDays validates each weekday is in [0,6] and returns a deduplicated
+// pq.Int64Array ready for persistence.
+func normalizeWeekDays(days []int) (pq.Int64Array, error) {
+	if len(days) == 0 {
+		return nil, nil
+	}
+	seen := make(map[int]bool, len(days))
+	out := make(pq.Int64Array, 0, len(days))
+	for _, d := range days {
+		if d < 0 || d > 6 {
+			return nil, errors.ErrValidationInstance.WithMessage("week_days must contain values between 0 and 6")
+		}
+		if seen[d] {
+			continue
+		}
+		seen[d] = true
+		out = append(out, int64(d))
+	}
+	return out, nil
 }
 
 // Suspend suspends an enrollment

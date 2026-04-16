@@ -214,6 +214,9 @@ func (m *mockEnrollmentRepo) GetActiveByPlan(_ context.Context, _, _ uuid.UUID) 
 func (m *mockEnrollmentRepo) CountActiveByPlan(_ context.Context, _, _ uuid.UUID) (int64, error) {
 	return 0, nil
 }
+func (m *mockEnrollmentRepo) CountActiveByPlanAndWeekDay(_ context.Context, _, _ uuid.UUID, _ int) (int64, error) {
+	return 0, nil
+}
 func (m *mockEnrollmentRepo) Update(_ context.Context, _ *enrollment_model.SessionPlanEnrollment) error {
 	return nil
 }

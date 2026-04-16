@@ -72,7 +72,7 @@ func (s *planPaymentService) CreatePlanPayment(ctx context.Context, clinicID, se
 		Discount:        req.Discount,
 		Installments:    installments,
 		Notes:           req.Notes,
-		PaidAt:          time.Now(),
+		PaidAt:          resolvePaidAt(req.PaidAt),
 	}
 
 	if err := s.paymentRepo.Create(ctx, payment); err != nil {
@@ -80,6 +80,14 @@ func (s *planPaymentService) CreatePlanPayment(ctx context.Context, clinicID, se
 	}
 
 	return payment, nil
+}
+
+// resolvePaidAt returns the caller-supplied payment timestamp or the current server time.
+func resolvePaidAt(paidAt *time.Time) time.Time {
+	if paidAt != nil && !paidAt.IsZero() {
+		return *paidAt
+	}
+	return time.Now()
 }
 
 // GetPlanPayments retrieves all payments for a plan.
@@ -187,7 +195,7 @@ func (s *planPaymentService) CreateEnrollmentPayment(ctx context.Context, clinic
 		ReferenceMonth:  req.ReferenceMonth,
 		SessionDate:     req.SessionDate,
 		Notes:           req.Notes,
-		PaidAt:          time.Now(),
+		PaidAt:          resolvePaidAt(req.PaidAt),
 	}
 
 	if err := s.paymentRepo.Create(ctx, payment); err != nil {

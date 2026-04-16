@@ -9,6 +9,7 @@ import (
 
 	appointment_model "github.com/aseno/backend/pkg/appointment/model"
 	appointment_repository "github.com/aseno/backend/pkg/appointment/repository"
+	enrollmentModel "github.com/aseno/backend/pkg/enrollment/model"
 	enrollment_repository "github.com/aseno/backend/pkg/enrollment/repository"
 	"github.com/aseno/backend/pkg/sessionplan/model"
 	"github.com/aseno/backend/pkg/sessionplan/repository"
@@ -111,11 +112,10 @@ func (f *calendarFacade) GetCalendarEvents(ctx context.Context, clinicID uuid.UU
 			continue // Skip plans with invalid RRULEs
 		}
 
-		// For group plans, get enrolled count once
-		var enrolledCount int
+		// For group plans, load active enrollments once so we can compute per-day counts.
+		var groupEnrollments []*enrollmentModel.SessionPlanEnrollment
 		if plan.Type == model.PlanTypeGroup {
-			count, _ := f.enrollmentRepo.CountActiveByPlan(ctx, clinicID, plan.ID)
-			enrolledCount = int(count)
+			groupEnrollments, _ = f.enrollmentRepo.GetActiveByPlan(ctx, clinicID, plan.ID)
 		}
 
 		// For each occurrence, check if already materialized
@@ -127,7 +127,16 @@ func (f *calendarFacade) GetCalendarEvents(ctx context.Context, clinicID uuid.UU
 			}
 
 			event := virtualOccurrenceToEvent(plan, occ)
-			event.EnrolledCount = enrolledCount
+			if plan.Type == model.PlanTypeGroup {
+				dow := int(occ.Weekday())
+				count := 0
+				for _, e := range groupEnrollments {
+					if e.HasWeekDay(dow) {
+						count++
+					}
+				}
+				event.EnrolledCount = count
+			}
 			events = append(events, event)
 		}
 	}

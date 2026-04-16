@@ -41,13 +41,14 @@ func (SessionPlanPayment) TableName() string {
 
 // CreatePlanPaymentRequest represents the request to create a plan payment
 type CreatePlanPaymentRequest struct {
-	PaymentMethodID uuid.UUID `json:"payment_method_id" binding:"required"`
-	Amount          float64   `json:"amount" binding:"required,min=0.01"`
-	Discount        float64   `json:"discount"`
-	Installments    int       `json:"installments"`
-	ReferenceMonth  string    `json:"reference_month"`  // YYYY-MM for monthly
-	SessionDate     string    `json:"session_date"`     // YYYY-MM-DD for per_session group
-	Notes           string    `json:"notes"`
+	PaymentMethodID uuid.UUID  `json:"payment_method_id" binding:"required"`
+	Amount          float64    `json:"amount" binding:"required,min=0.01"`
+	Discount        float64    `json:"discount"`
+	Installments    int        `json:"installments"`
+	ReferenceMonth  string     `json:"reference_month"` // YYYY-MM for monthly
+	SessionDate     string     `json:"session_date"`    // YYYY-MM-DD for per_session group
+	Notes           string     `json:"notes"`
+	PaidAt          *time.Time `json:"paid_at"` // Optional — when omitted, defaults to server time
 }
 
 // PlanPaymentResponse represents the API response

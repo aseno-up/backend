@@ -123,10 +123,22 @@ func (m *mockCalendarAppointmentRepo) GetByDateRangeWithExceptions(_ context.Con
 	return m.appointments, nil
 }
 
-type mockCalendarEnrollmentRepo struct{}
+type mockCalendarEnrollmentRepo struct {
+	active []*enrollment_model.SessionPlanEnrollment
+}
 
 func (m *mockCalendarEnrollmentRepo) CountActiveByPlan(_ context.Context, _, _ uuid.UUID) (int64, error) {
-	return 0, nil
+	return int64(len(m.active)), nil
+}
+
+func (m *mockCalendarEnrollmentRepo) CountActiveByPlanAndWeekDay(_ context.Context, _, _ uuid.UUID, weekDay int) (int64, error) {
+	var count int64
+	for _, e := range m.active {
+		if e.HasWeekDay(weekDay) {
+			count++
+		}
+	}
+	return count, nil
 }
 
 // Stubs
@@ -140,7 +152,7 @@ func (m *mockCalendarEnrollmentRepo) GetByPlan(_ context.Context, _, _ uuid.UUID
 	return nil, nil
 }
 func (m *mockCalendarEnrollmentRepo) GetActiveByPlan(_ context.Context, _, _ uuid.UUID) ([]*enrollment_model.SessionPlanEnrollment, error) {
-	return nil, nil
+	return m.active, nil
 }
 func (m *mockCalendarEnrollmentRepo) GetByPatientAndPlan(_ context.Context, _, _, _ uuid.UUID) (*enrollment_model.SessionPlanEnrollment, error) {
 	return nil, nil
@@ -289,4 +301,57 @@ func TestCalendarFacade_DayTimesProducesDifferentTimesPerDay(t *testing.T) {
 
 	assert.Equal(t, 8, moEvent.StartTime.Hour(), "Monday should be at 08:00")
 	assert.Equal(t, 14, weEvent.StartTime.Hour(), "Wednesday should be at 14:00")
+}
+
+func TestCalendarFacade_GroupPlanEnrolledCountIsPerDay(t *testing.T) {
+	clinicID := uuid.New()
+	profID := uuid.New()
+	planID := uuid.New()
+
+	// Monday 2026-04-06 — plan runs Mon/Wed/Fri
+	monday := time.Date(2026, 4, 6, 18, 30, 0, 0, time.UTC)
+
+	plan := &model.SessionPlan{
+		ID:             planID,
+		ClinicID:       clinicID,
+		Status:         model.PlanStatusActive,
+		Type:           model.PlanTypeGroup,
+		TotalSessions:  -1,
+		ProfessionalID: &profID,
+		RRule:          "FREQ=WEEKLY;BYDAY=MO,WE,FR",
+		DtStart:        &monday,
+		DurationMins:   50,
+		Title:          "Pilates Grupo",
+	}
+
+	// 3 enrollments:
+	//  A: Mon only          → counts on Mon
+	//  B: Mon + Wed         → counts on Mon and Wed
+	//  C: Fri only          → counts on Fri
+	// Expected per-day: Mon=2, Wed=1, Fri=1
+	enrollments := []*enrollment_model.SessionPlanEnrollment{
+		{ID: uuid.New(), ClinicID: clinicID, SessionPlanID: planID, Status: enrollment_model.EnrollmentStatusActive, WeekDays: []int64{1}},
+		{ID: uuid.New(), ClinicID: clinicID, SessionPlanID: planID, Status: enrollment_model.EnrollmentStatusActive, WeekDays: []int64{1, 3}},
+		{ID: uuid.New(), ClinicID: clinicID, SessionPlanID: planID, Status: enrollment_model.EnrollmentStatusActive, WeekDays: []int64{5}},
+	}
+
+	planRepo := &mockCalendarPlanRepo{plans: []*model.SessionPlan{plan}}
+	aptRepo := &mockCalendarAppointmentRepo{appointments: nil}
+	enrollRepo := &mockCalendarEnrollmentRepo{active: enrollments}
+
+	facade := NewCalendarFacade(planRepo, aptRepo, enrollRepo)
+
+	events, err := facade.GetCalendarEvents(context.Background(), clinicID, &profID, monday, monday.AddDate(0, 0, 6))
+	require.NoError(t, err)
+
+	countsByDow := map[time.Weekday]int{}
+	for _, e := range events {
+		if e.IsVirtual {
+			countsByDow[e.StartTime.Weekday()] = e.EnrolledCount
+		}
+	}
+
+	assert.Equal(t, 2, countsByDow[time.Monday], "Monday should count A+B")
+	assert.Equal(t, 1, countsByDow[time.Wednesday], "Wednesday should count B only")
+	assert.Equal(t, 1, countsByDow[time.Friday], "Friday should count C only")
 }

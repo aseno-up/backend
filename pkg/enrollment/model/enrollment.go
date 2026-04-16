@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 	"gorm.io/gorm"
 )
 
@@ -32,6 +33,10 @@ type SessionPlanEnrollment struct {
 	SessionPlanID uuid.UUID        `json:"session_plan_id" gorm:"type:uuid;not null;index"`
 	PatientID     uuid.UUID        `json:"patient_id" gorm:"type:uuid;not null;index"`
 	Status        EnrollmentStatus `json:"status" gorm:"size:20;not null;default:'active'"`
+
+	// Which weekdays this patient attends (0=Sunday ... 6=Saturday).
+	// Must be a subset of the plan's available days.
+	WeekDays pq.Int64Array `json:"week_days" gorm:"type:integer[]"`
 
 	// Individual package within the group
 	TotalSessions *int `json:"total_sessions"` // null = indeterminate (follows plan)
@@ -76,6 +81,7 @@ func (e *SessionPlanEnrollment) Progress() float64 {
 // EnrollRequest represents the request to enroll a patient
 type EnrollRequest struct {
 	PatientID     uuid.UUID   `json:"patient_id" binding:"required"`
+	WeekDays      []int       `json:"week_days"`
 	TotalSessions *int        `json:"total_sessions"`
 	PaymentMode   PaymentMode `json:"payment_mode"`
 	MonthlyAmount *float64    `json:"monthly_amount"`
@@ -88,6 +94,7 @@ type EnrollmentResponse struct {
 	SessionPlanID uuid.UUID        `json:"session_plan_id"`
 	PatientID     uuid.UUID        `json:"patient_id"`
 	Status        EnrollmentStatus `json:"status"`
+	WeekDays      []int            `json:"week_days"`
 	TotalSessions *int             `json:"total_sessions"`
 	SessionsDone  int              `json:"sessions_done"`
 	Progress      float64          `json:"progress"`
@@ -101,11 +108,16 @@ type EnrollmentResponse struct {
 
 // ToResponse converts to API response
 func (e *SessionPlanEnrollment) ToResponse() *EnrollmentResponse {
+	weekDays := make([]int, len(e.WeekDays))
+	for i, d := range e.WeekDays {
+		weekDays[i] = int(d)
+	}
 	return &EnrollmentResponse{
 		ID:            e.ID,
 		SessionPlanID: e.SessionPlanID,
 		PatientID:     e.PatientID,
 		Status:        e.Status,
+		WeekDays:      weekDays,
 		TotalSessions: e.TotalSessions,
 		SessionsDone:  e.SessionsDone,
 		Progress:      e.Progress(),
@@ -116,4 +128,14 @@ func (e *SessionPlanEnrollment) ToResponse() *EnrollmentResponse {
 		LeftAt:        e.LeftAt,
 		PatientName:   e.PatientName,
 	}
+}
+
+// HasWeekDay returns true if this enrollment attends the given weekday (0=Sun..6=Sat).
+func (e *SessionPlanEnrollment) HasWeekDay(day int) bool {
+	for _, d := range e.WeekDays {
+		if int(d) == day {
+			return true
+		}
+	}
+	return false
 }

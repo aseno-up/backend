@@ -19,6 +19,7 @@ type EnrollmentRepository interface {
 	GetActiveByPlan(ctx context.Context, clinicID, sessionPlanID uuid.UUID) ([]*model.SessionPlanEnrollment, error)
 	GetByPatientAndPlan(ctx context.Context, clinicID, patientID, sessionPlanID uuid.UUID) (*model.SessionPlanEnrollment, error)
 	CountActiveByPlan(ctx context.Context, clinicID, sessionPlanID uuid.UUID) (int64, error)
+	CountActiveByPlanAndWeekDay(ctx context.Context, clinicID, sessionPlanID uuid.UUID, weekDay int) (int64, error)
 	UpdateStatus(ctx context.Context, clinicID, id uuid.UUID, status model.EnrollmentStatus) error
 	IncrementSessionsDone(ctx context.Context, clinicID, id uuid.UUID) error
 	Update(ctx context.Context, enrollment *model.SessionPlanEnrollment) error
@@ -113,6 +114,20 @@ func (r *enrollmentRepository) CountActiveByPlan(ctx context.Context, clinicID, 
 	err := r.db.WithContext(ctx).
 		Model(&model.SessionPlanEnrollment{}).
 		Where("clinic_id = ? AND session_plan_id = ? AND status = ?", clinicID, sessionPlanID, model.EnrollmentStatusActive).
+		Count(&count).Error
+
+	if err != nil {
+		return 0, errors.ErrInternalInstance.WithError(err)
+	}
+	return count, nil
+}
+
+func (r *enrollmentRepository) CountActiveByPlanAndWeekDay(ctx context.Context, clinicID, sessionPlanID uuid.UUID, weekDay int) (int64, error) {
+	var count int64
+	err := r.db.WithContext(ctx).
+		Model(&model.SessionPlanEnrollment{}).
+		Where("clinic_id = ? AND session_plan_id = ? AND status = ? AND ? = ANY(week_days)",
+			clinicID, sessionPlanID, model.EnrollmentStatusActive, weekDay).
 		Count(&count).Error
 
 	if err != nil {
