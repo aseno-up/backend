@@ -146,7 +146,9 @@ func (a *geminiAgent) generateWithModel(ctx context.Context, req *AgentRequest, 
 		req.ClinicName,
 		req.ConversationContext.PatientName,
 		req.ConversationContext,
-	)
+	).
+		WithBusinessInfo(req.ClinicBusinessInfo).
+		WithFAQ(req.ClinicFAQ)
 	systemPrompt := promptBuilder.Build()
 
 	// Build user prompt with conversation history

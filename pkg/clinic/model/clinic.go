@@ -31,6 +31,9 @@ type Clinic struct {
 	City         string     `json:"city"`
 	State        string     `json:"state"`
 	ZipCode      string     `json:"zip_code"`
+	Instagram    string     `json:"instagram"`
+	BusinessInfo string     `json:"business_info" gorm:"type:text"`
+	FAQ          string     `json:"faq" gorm:"type:text"`
 	LogoURL      string     `json:"logo_url"`
 	PrimaryColor string     `json:"primary_color" gorm:"default:'#7C3AED'"`
 	AccountID    uuid.UUID  `json:"account_id" gorm:"type:uuid;index"`
@@ -99,9 +102,14 @@ type ClinicResponse struct {
 	Type              ClinicType                     `json:"type"`
 	Email             string                         `json:"email"`
 	Phone             string                         `json:"phone"`
+	Document          string                         `json:"document"`
 	Address           string                         `json:"address"`
 	City              string                         `json:"city"`
 	State             string                         `json:"state"`
+	ZipCode           string                         `json:"zip_code"`
+	Instagram         string                         `json:"instagram"`
+	BusinessInfo      string                         `json:"business_info"`
+	FAQ               string                         `json:"faq"`
 	LogoURL           string                         `json:"logo_url"`
 	PrimaryColor      string                         `json:"primary_color"`
 	AccountID         uuid.UUID                      `json:"account_id"`
@@ -126,9 +134,14 @@ func (c *Clinic) ToResponse() *ClinicResponse {
 		Type:              c.Type,
 		Email:             c.Email,
 		Phone:             c.Phone,
+		Document:          c.Document,
 		Address:           c.Address,
 		City:              c.City,
 		State:             c.State,
+		ZipCode:           c.ZipCode,
+		Instagram:         c.Instagram,
+		BusinessInfo:      c.BusinessInfo,
+		FAQ:               c.FAQ,
 		LogoURL:           c.LogoURL,
 		PrimaryColor:      c.PrimaryColor,
 		AccountID:         c.AccountID,
@@ -186,10 +199,14 @@ type UpdateClinicSettingsRequest struct {
 type UpdateClinicRequest struct {
 	Name         string                       `json:"name" binding:"omitempty,min=2,max=100"`
 	Phone        string                       `json:"phone"`
+	Document     *string                      `json:"document,omitempty"`
 	Address      string                       `json:"address"`
 	City         string                       `json:"city"`
 	State        string                       `json:"state"`
 	ZipCode      string                       `json:"zip_code"`
+	Instagram    *string                      `json:"instagram,omitempty"`
+	BusinessInfo *string                      `json:"business_info,omitempty"`
+	FAQ          *string                      `json:"faq,omitempty"`
 	LogoURL      string                       `json:"logo_url"`
 	PrimaryColor string                       `json:"primary_color"`
 	Settings     *UpdateClinicSettingsRequest `json:"settings"`

@@ -75,6 +75,18 @@ func (s *clinicService) Update(ctx context.Context, id uuid.UUID, req *model.Upd
 	if req.ZipCode != "" {
 		clinic.ZipCode = req.ZipCode
 	}
+	if req.Document != nil {
+		clinic.Document = *req.Document
+	}
+	if req.Instagram != nil {
+		clinic.Instagram = *req.Instagram
+	}
+	if req.BusinessInfo != nil {
+		clinic.BusinessInfo = *req.BusinessInfo
+	}
+	if req.FAQ != nil {
+		clinic.FAQ = *req.FAQ
+	}
 	if req.LogoURL != "" {
 		clinic.LogoURL = req.LogoURL
 	}

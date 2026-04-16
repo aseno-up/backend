@@ -175,6 +175,13 @@ func (s *aiAgentService) ProcessMessage(ctx context.Context, req *MessageRequest
 		MaxTokens:           2048,
 		Temperature:         0.7,
 	}
+	if clinic != nil {
+		if agentReq.ClinicName == "" {
+			agentReq.ClinicName = clinic.Name
+		}
+		agentReq.ClinicBusinessInfo = clinic.BusinessInfo
+		agentReq.ClinicFAQ = clinic.FAQ
+	}
 
 	// Generate AI response
 	agentResp, err := s.agent.Generate(ctx, agentReq)

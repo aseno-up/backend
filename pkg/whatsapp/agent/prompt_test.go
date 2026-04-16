@@ -65,3 +65,55 @@ func TestCorePersonality_ContainsNoPrefixInstruction(t *testing.T) {
 		t.Error("System prompt should contain explicit instruction to never use role prefixes like 'Paciente:' or 'Você:'")
 	}
 }
+
+func TestBuild_IncludesBusinessInfoWhenSet(t *testing.T) {
+	builder := NewSystemPromptBuilder("Clínica Teste", "João", nil).
+		WithBusinessInfo("Atendemos só particular. Aceitamos Pix e cartão.")
+	prompt := builder.Build()
+
+	if !strings.Contains(prompt, "Informações da clínica") {
+		t.Error("Expected prompt to contain 'Informações da clínica' header when BusinessInfo is set")
+	}
+	if !strings.Contains(prompt, "Atendemos só particular. Aceitamos Pix e cartão.") {
+		t.Error("Expected prompt to contain the business info content")
+	}
+}
+
+func TestBuild_IncludesFAQWhenSet(t *testing.T) {
+	builder := NewSystemPromptBuilder("Clínica Teste", "João", nil).
+		WithFAQ("Q: Quanto tempo dura a sessão? A: 50 minutos.")
+	prompt := builder.Build()
+
+	if !strings.Contains(prompt, "Dúvidas frequentes") {
+		t.Error("Expected prompt to contain 'Dúvidas frequentes' header when FAQ is set")
+	}
+	if !strings.Contains(prompt, "Quanto tempo dura a sessão") {
+		t.Error("Expected prompt to contain the FAQ content")
+	}
+}
+
+func TestBuild_OmitsSectionsWhenEmpty(t *testing.T) {
+	builder := NewSystemPromptBuilder("Clínica Teste", "João", nil)
+	prompt := builder.Build()
+
+	if strings.Contains(prompt, "Informações da clínica") {
+		t.Error("Prompt should NOT contain 'Informações da clínica' header when BusinessInfo is empty")
+	}
+	if strings.Contains(prompt, "Dúvidas frequentes") {
+		t.Error("Prompt should NOT contain 'Dúvidas frequentes' header when FAQ is empty")
+	}
+}
+
+func TestBuild_EmptyStringsAreTreatedAsUnset(t *testing.T) {
+	builder := NewSystemPromptBuilder("Clínica Teste", "João", nil).
+		WithBusinessInfo("   ").
+		WithFAQ("")
+	prompt := builder.Build()
+
+	if strings.Contains(prompt, "Informações da clínica") {
+		t.Error("Whitespace-only BusinessInfo should not emit section header")
+	}
+	if strings.Contains(prompt, "Dúvidas frequentes") {
+		t.Error("Empty FAQ should not emit section header")
+	}
+}

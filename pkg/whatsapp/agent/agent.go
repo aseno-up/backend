@@ -12,6 +12,8 @@ type AgentRequest struct {
 	ConversationContext *conversation.ConversationContext
 	UserMessage         string
 	ClinicName          string
+	ClinicBusinessInfo  string
+	ClinicFAQ           string
 	MaxTokens           int
 	Temperature         float32
 }

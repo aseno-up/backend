@@ -178,7 +178,9 @@ func (a *openRouterAgent) generateWithModel(ctx context.Context, req *AgentReque
 		req.ClinicName,
 		req.ConversationContext.PatientName,
 		req.ConversationContext,
-	)
+	).
+		WithBusinessInfo(req.ClinicBusinessInfo).
+		WithFAQ(req.ClinicFAQ)
 	systemPrompt := promptBuilder.Build()
 
 	// Build user prompt with conversation history

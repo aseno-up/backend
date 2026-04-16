@@ -10,9 +10,11 @@ import (
 
 // SystemPromptBuilder builds system prompts for the AI agent
 type SystemPromptBuilder struct {
-	clinicName  string
-	patientName string
-	context     *conversation.ConversationContext
+	clinicName   string
+	patientName  string
+	businessInfo string
+	faq          string
+	context      *conversation.ConversationContext
 }
 
 // NewSystemPromptBuilder creates a new system prompt builder
@@ -24,6 +26,20 @@ func NewSystemPromptBuilder(clinicName, patientName string, ctx *conversation.Co
 	}
 }
 
+// WithBusinessInfo sets the clinic's business/operational information to be
+// injected into the system prompt. Empty/whitespace values are ignored.
+func (b *SystemPromptBuilder) WithBusinessInfo(info string) *SystemPromptBuilder {
+	b.businessInfo = info
+	return b
+}
+
+// WithFAQ sets the clinic's FAQ content to be injected into the system prompt.
+// Empty/whitespace values are ignored.
+func (b *SystemPromptBuilder) WithFAQ(faq string) *SystemPromptBuilder {
+	b.faq = faq
+	return b
+}
+
 // Build builds the complete system prompt
 func (b *SystemPromptBuilder) Build() string {
 	var prompt strings.Builder
@@ -31,6 +47,12 @@ func (b *SystemPromptBuilder) Build() string {
 	// Core personality and guidelines
 	prompt.WriteString(b.corePersonality())
 	prompt.WriteString("\n\n")
+
+	// Clinic-specific knowledge (business info + FAQ) — only when configured
+	if knowledge := b.clinicKnowledge(); knowledge != "" {
+		prompt.WriteString(knowledge)
+		prompt.WriteString("\n\n")
+	}
 
 	// Add context-specific instructions
 	if b.context != nil {
@@ -50,6 +72,30 @@ func (b *SystemPromptBuilder) Build() string {
 	prompt.WriteString(b.formattingGuidelines())
 
 	return prompt.String()
+}
+
+func (b *SystemPromptBuilder) clinicKnowledge() string {
+	info := strings.TrimSpace(b.businessInfo)
+	faq := strings.TrimSpace(b.faq)
+	if info == "" && faq == "" {
+		return ""
+	}
+
+	var sb strings.Builder
+	if info != "" {
+		sb.WriteString("**Informações da clínica** (use para responder perguntas sobre a clínica):\n")
+		sb.WriteString(info)
+		sb.WriteString("\n")
+	}
+	if faq != "" {
+		if info != "" {
+			sb.WriteString("\n")
+		}
+		sb.WriteString("**Dúvidas frequentes** (use como base para responder perguntas recorrentes):\n")
+		sb.WriteString(faq)
+		sb.WriteString("\n")
+	}
+	return sb.String()
 }
 
 func (b *SystemPromptBuilder) corePersonality() string {

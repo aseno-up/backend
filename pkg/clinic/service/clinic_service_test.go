@@ -70,7 +70,8 @@ func (e *notFoundErr) Error() string { return "not found" }
 
 // --- Helper ---
 
-func boolPtr(b bool) *bool { return &b }
+func boolPtr(b bool) *bool      { return &b }
+func strPtr(s string) *string   { return &s }
 
 func createTestClinic(repo *mockClinicRepo) *model.Clinic {
 	clinic := &model.Clinic{
@@ -146,6 +147,70 @@ func TestUpdate_RequirePaymentBeforeBooking_NilDoesNotChange(t *testing.T) {
 	assert.True(t, result.Settings.RequirePaymentBeforeBooking)
 	// AllowOnlineBooking should be updated
 	assert.False(t, result.Settings.AllowOnlineBooking)
+}
+
+func TestUpdate_BusinessInfoFAQInstagramDocument(t *testing.T) {
+	repo := newMockClinicRepo()
+	svc := NewClinicService(repo, "http://localhost:3000")
+	clinic := createTestClinic(repo)
+
+	info := "Atendemos só particular. Aceitamos Pix."
+	faq := "Q: Quanto custa? A: Consulte na recepção."
+	insta := "@clinica_teste"
+	doc := "12.345.678/0001-99"
+
+	result, err := svc.Update(context.Background(), clinic.ID, &model.UpdateClinicRequest{
+		Document:     &doc,
+		Instagram:    &insta,
+		BusinessInfo: &info,
+		FAQ:          &faq,
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, doc, result.Document)
+	assert.Equal(t, insta, result.Instagram)
+	assert.Equal(t, info, result.BusinessInfo)
+	assert.Equal(t, faq, result.FAQ)
+
+	stored := repo.clinics[clinic.ID]
+	assert.Equal(t, doc, stored.Document)
+	assert.Equal(t, insta, stored.Instagram)
+	assert.Equal(t, info, stored.BusinessInfo)
+	assert.Equal(t, faq, stored.FAQ)
+}
+
+func TestUpdate_BusinessInfoFAQ_NilDoesNotChange(t *testing.T) {
+	repo := newMockClinicRepo()
+	svc := NewClinicService(repo, "http://localhost:3000")
+	clinic := createTestClinic(repo)
+	clinic.BusinessInfo = "existing info"
+	clinic.FAQ = "existing faq"
+
+	result, err := svc.Update(context.Background(), clinic.ID, &model.UpdateClinicRequest{
+		Name: "Other Name",
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, "existing info", result.BusinessInfo)
+	assert.Equal(t, "existing faq", result.FAQ)
+}
+
+func TestUpdate_BusinessInfoFAQ_EmptyStringClears(t *testing.T) {
+	repo := newMockClinicRepo()
+	svc := NewClinicService(repo, "http://localhost:3000")
+	clinic := createTestClinic(repo)
+	clinic.BusinessInfo = "existing info"
+	clinic.FAQ = "existing faq"
+
+	empty := ""
+	result, err := svc.Update(context.Background(), clinic.ID, &model.UpdateClinicRequest{
+		BusinessInfo: &empty,
+		FAQ:          &empty,
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, "", result.BusinessInfo)
+	assert.Equal(t, "", result.FAQ)
 }
 
 func TestUpdate_SettingsNil_DoesNotCrash(t *testing.T) {
