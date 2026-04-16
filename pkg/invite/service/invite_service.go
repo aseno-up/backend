@@ -140,8 +140,11 @@ func (s *inviteService) CreateInvite(ctx context.Context, clinicID, invitedByID 
 		return nil, err
 	}
 
-	// Get inviter for email
-	inviter, err := s.userRepo.GetByID(ctx, invitedByID, clinicID)
+	// Get inviter for email — lookup without tenant filter because the inviter's
+	// users.clinic_id (home clinic) may differ from the active clinic when the
+	// user belongs to multiple clinics via clinic_members. Authorization to act
+	// on this clinic is already enforced by the auth middleware.
+	inviter, err := s.userRepo.GetByIDNoTenant(ctx, invitedByID)
 	if err != nil {
 		return nil, err
 	}
@@ -393,8 +396,8 @@ func (s *inviteService) GetInviteByToken(ctx context.Context, token string) (*mo
 		return nil, err
 	}
 
-	// Get inviter name
-	inviter, err := s.userRepo.GetByID(ctx, invite.InvitedBy, invite.ClinicID)
+	// Get inviter name — see CreateInvite for rationale on GetByIDNoTenant.
+	inviter, err := s.userRepo.GetByIDNoTenant(ctx, invite.InvitedBy)
 	if err != nil {
 		return nil, err
 	}
@@ -524,7 +527,8 @@ func (s *inviteService) ResendInvite(ctx context.Context, inviteID, clinicID uui
 		return err
 	}
 
-	resender, err := s.userRepo.GetByID(ctx, resenderID, clinicID)
+	// Lookup without tenant filter — see CreateInvite for rationale.
+	resender, err := s.userRepo.GetByIDNoTenant(ctx, resenderID)
 	if err != nil {
 		return err
 	}
