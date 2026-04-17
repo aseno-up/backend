@@ -19,6 +19,7 @@ type ExecutionContext struct {
 
 	// Service dependencies (injected from WhatsApp service)
 	ProfessionalLister       ProfessionalLister
+	ProcedureLister          ProcedureLister
 	SlotFinder               SlotFinder
 	AppointmentCreator       AppointmentCreator
 	AppointmentFinder        AppointmentFinder
@@ -39,10 +40,47 @@ type ProfessionalLister interface {
 }
 
 type ProfessionalInfo struct {
-	ID          uuid.UUID `json:"id"`
-	Name        string    `json:"name"`
-	Specialty   string    `json:"specialty"`
-	IsAvailable bool      `json:"is_available"`
+	ID           uuid.UUID      `json:"id"`
+	Name         string         `json:"name"`
+	Specialty    string         `json:"specialty,omitempty"` // legacy single-value fallback, populated with the first specialty name when available
+	Specialties  []SpecialtyRef `json:"specialties,omitempty"`
+	WorkingHours *WorkingHours  `json:"working_hours,omitempty"`
+	IsAvailable  bool           `json:"is_available"`
+}
+
+type SpecialtyRef struct {
+	ID   uuid.UUID `json:"id"`
+	Name string    `json:"name"`
+}
+
+// WorkingHours mirrors the professional model's weekly recurring schedule so
+// the AI can answer questions like "when does Dr. X usually work?" without an
+// extra tool call.
+type WorkingHours struct {
+	Monday    []TimeSlot `json:"monday,omitempty"`
+	Tuesday   []TimeSlot `json:"tuesday,omitempty"`
+	Wednesday []TimeSlot `json:"wednesday,omitempty"`
+	Thursday  []TimeSlot `json:"thursday,omitempty"`
+	Friday    []TimeSlot `json:"friday,omitempty"`
+	Saturday  []TimeSlot `json:"saturday,omitempty"`
+	Sunday    []TimeSlot `json:"sunday,omitempty"`
+}
+
+type TimeSlot struct {
+	Start string `json:"start"`
+	End   string `json:"end"`
+}
+
+type ProcedureLister interface {
+	ListProcedures(ctx context.Context, clinicID uuid.UUID, specialty string) ([]*ProcedureInfo, error)
+}
+
+type ProcedureInfo struct {
+	ID              uuid.UUID `json:"id"`
+	Name            string    `json:"name"`
+	Price           float64   `json:"price"`
+	DurationMinutes int       `json:"duration_minutes"`
+	SpecialtyName   string    `json:"specialty_name,omitempty"`
 }
 
 type SlotFinder interface {
@@ -155,6 +193,8 @@ func (e *Executor) Execute(execCtx *ExecutionContext, toolName string, params ma
 	switch toolName {
 	case "get_available_professionals":
 		return e.getAvailableProfessionals(execCtx, params)
+	case "list_procedures":
+		return e.listProcedures(execCtx, params)
 	case "get_available_slots":
 		return e.getAvailableSlots(execCtx, params)
 	case "create_appointment":
@@ -204,6 +244,24 @@ func (e *Executor) getAvailableProfessionals(execCtx *ExecutionContext, params m
 	}
 
 	return professionals, nil
+}
+
+func (e *Executor) listProcedures(execCtx *ExecutionContext, params map[string]interface{}) (interface{}, error) {
+	specialty := ""
+	if s, ok := params["specialty"].(string); ok {
+		specialty = s
+	}
+
+	if execCtx.ProcedureLister == nil {
+		return nil, fmt.Errorf("ProcedureLister not configured")
+	}
+
+	procedures, err := execCtx.ProcedureLister.ListProcedures(execCtx.Context, execCtx.ClinicID, specialty)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list procedures: %w", err)
+	}
+
+	return procedures, nil
 }
 
 func (e *Executor) getAvailableSlots(execCtx *ExecutionContext, params map[string]interface{}) (interface{}, error) {

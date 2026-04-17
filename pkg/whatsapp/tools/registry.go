@@ -30,6 +30,7 @@ func NewRegistry() *Registry {
 	r.registerSlotManagementTools()
 	r.registerAppointmentManagementTools()
 	r.registerInformationTools()
+	r.registerCatalogTools()
 
 	return r
 }
@@ -169,13 +170,13 @@ func (r *Registry) registerSlotManagementTools() {
 	// get_available_professionals
 	r.register(&Tool{
 		Name:        "get_available_professionals",
-		Description: "Lista profissionais disponíveis da clínica, opcionalmente filtrando por especialidade (fisioterapia, psicologia, nutrição, etc)",
+		Description: "Lista profissionais ativos da clínica com suas especialidades e horário de trabalho semanal (working_hours). Use para responder perguntas como 'vocês têm fisioterapeuta?', 'quando a Thaiane atende?' ou 'quem atende segunda de manhã?'. Retorna array com: id, name, specialties[{id,name}], working_hours{monday,tuesday,...}. Filtra por specialty opcional (case-insensitive, bate contra qualquer specialty do profissional).",
 		Parameters: &genai.Schema{
 			Type: genai.TypeObject,
 			Properties: map[string]*genai.Schema{
 				"specialty": {
 					Type:        genai.TypeString,
-					Description: "Filtrar por especialidade (opcional). Exemplos: fisioterapia, psicologia, nutrição",
+					Description: "Filtrar por especialidade (opcional). Exemplos: fisioterapia, psicologia, pilates, nutrição. Case-insensitive.",
 				},
 			},
 		},
@@ -395,6 +396,25 @@ func (r *Registry) registerInformationTools() {
 				"new_name": {
 					Type:        genai.TypeString,
 					Description: "O nome correto do paciente, conforme informado por ele.",
+				},
+			},
+		},
+	})
+}
+
+// registerCatalogTools registers tools that expose the clinic catalog
+// (procedures with prices and duration) so the AI can answer pricing questions.
+func (r *Registry) registerCatalogTools() {
+	// list_procedures
+	r.register(&Tool{
+		Name:        "list_procedures",
+		Description: "Lista os procedimentos/serviços oferecidos pela clínica com preço e duração. Use para responder perguntas como 'quanto custa uma massoterapia?', 'quais serviços vocês oferecem?', 'qual o valor da consulta de X?'. Retorna array com: id, name, price (em reais), duration_minutes, specialty_name. Filtra por specialty opcional.",
+		Parameters: &genai.Schema{
+			Type: genai.TypeObject,
+			Properties: map[string]*genai.Schema{
+				"specialty": {
+					Type:        genai.TypeString,
+					Description: "Filtrar procedimentos por nome da especialidade (opcional). Ex: 'Fisioterapia', 'Pilates'. Case-insensitive.",
 				},
 			},
 		},

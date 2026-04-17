@@ -9,6 +9,34 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// --- mocks for the new tools ---
+
+type stubProfessionalLister struct {
+	result []*ProfessionalInfo
+	err    error
+	called struct {
+		specialty string
+	}
+}
+
+func (s *stubProfessionalLister) ListAvailable(_ context.Context, _ uuid.UUID, specialty string) ([]*ProfessionalInfo, error) {
+	s.called.specialty = specialty
+	return s.result, s.err
+}
+
+type stubProcedureLister struct {
+	result []*ProcedureInfo
+	err    error
+	called struct {
+		specialty string
+	}
+}
+
+func (s *stubProcedureLister) ListProcedures(_ context.Context, _ uuid.UUID, specialty string) ([]*ProcedureInfo, error) {
+	s.called.specialty = specialty
+	return s.result, s.err
+}
+
 type mockPatientNameUpdater struct {
 	calledWith struct {
 		clinicID  uuid.UUID
@@ -99,4 +127,141 @@ func TestUpdatePatientName_Success(t *testing.T) {
 	assert.Equal(t, clinicID, mock.calledWith.clinicID)
 	assert.Equal(t, patientID, mock.calledWith.patientID)
 	assert.Equal(t, "Renato", mock.calledWith.name)
+}
+
+// --- get_available_professionals with enriched payload ---
+
+func TestGetAvailableProfessionals_ReturnsSpecialtiesArrayAndWorkingHours(t *testing.T) {
+	registry := NewRegistry()
+	executor := NewExecutor(registry)
+
+	thaianeID := uuid.New()
+	fisio := uuid.New()
+	pilates := uuid.New()
+
+	lister := &stubProfessionalLister{
+		result: []*ProfessionalInfo{
+			{
+				ID:   thaianeID,
+				Name: "Thaiane Simões",
+				Specialties: []SpecialtyRef{
+					{ID: fisio, Name: "Fisioterapia"},
+					{ID: pilates, Name: "Pilates"},
+				},
+				WorkingHours: &WorkingHours{
+					Monday: []TimeSlot{{Start: "08:00", End: "14:10"}},
+					Tuesday: []TimeSlot{{Start: "09:00", End: "18:00"}},
+				},
+				IsAvailable: true,
+			},
+		},
+	}
+
+	execCtx := &ExecutionContext{
+		Context:            context.Background(),
+		ClinicID:           uuid.New(),
+		ProfessionalLister: lister,
+	}
+
+	result, err := executor.Execute(execCtx, "get_available_professionals", map[string]interface{}{})
+	require.NoError(t, err)
+
+	list, ok := result.([]*ProfessionalInfo)
+	require.True(t, ok, "expected []*ProfessionalInfo, got %T", result)
+	require.Len(t, list, 1)
+
+	p := list[0]
+	assert.Equal(t, "Thaiane Simões", p.Name)
+	assert.Len(t, p.Specialties, 2)
+	assert.Equal(t, "Fisioterapia", p.Specialties[0].Name)
+	require.NotNil(t, p.WorkingHours)
+	assert.Equal(t, "08:00", p.WorkingHours.Monday[0].Start)
+	assert.Equal(t, "14:10", p.WorkingHours.Monday[0].End)
+}
+
+func TestGetAvailableProfessionals_PassesSpecialtyFilter(t *testing.T) {
+	registry := NewRegistry()
+	executor := NewExecutor(registry)
+
+	lister := &stubProfessionalLister{result: []*ProfessionalInfo{}}
+	execCtx := &ExecutionContext{
+		Context:            context.Background(),
+		ClinicID:           uuid.New(),
+		ProfessionalLister: lister,
+	}
+
+	_, err := executor.Execute(execCtx, "get_available_professionals", map[string]interface{}{
+		"specialty": "fisioterapia",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "fisioterapia", lister.called.specialty)
+}
+
+// --- list_procedures tool ---
+
+func TestListProcedures_Registered(t *testing.T) {
+	registry := NewRegistry()
+	tool, exists := registry.GetTool("list_procedures")
+	require.True(t, exists, "list_procedures tool should be registered")
+	assert.NotEmpty(t, tool.Description)
+}
+
+func TestListProcedures_ReturnsNamePriceDurationSpecialty(t *testing.T) {
+	registry := NewRegistry()
+	executor := NewExecutor(registry)
+
+	lister := &stubProcedureLister{
+		result: []*ProcedureInfo{
+			{ID: uuid.New(), Name: "Liberação Miofascial", Price: 150.00, DurationMinutes: 60, SpecialtyName: "Fisioterapia"},
+			{ID: uuid.New(), Name: "Massoterapia", Price: 190.00, DurationMinutes: 50, SpecialtyName: "Fisioterapia"},
+		},
+	}
+	execCtx := &ExecutionContext{
+		Context:         context.Background(),
+		ClinicID:        uuid.New(),
+		ProcedureLister: lister,
+	}
+
+	result, err := executor.Execute(execCtx, "list_procedures", map[string]interface{}{})
+	require.NoError(t, err)
+
+	list, ok := result.([]*ProcedureInfo)
+	require.True(t, ok)
+	require.Len(t, list, 2)
+	assert.Equal(t, "Liberação Miofascial", list[0].Name)
+	assert.Equal(t, 150.00, list[0].Price)
+	assert.Equal(t, 60, list[0].DurationMinutes)
+	assert.Equal(t, "Fisioterapia", list[0].SpecialtyName)
+}
+
+func TestListProcedures_PassesSpecialtyFilter(t *testing.T) {
+	registry := NewRegistry()
+	executor := NewExecutor(registry)
+
+	lister := &stubProcedureLister{result: []*ProcedureInfo{}}
+	execCtx := &ExecutionContext{
+		Context:         context.Background(),
+		ClinicID:        uuid.New(),
+		ProcedureLister: lister,
+	}
+
+	_, err := executor.Execute(execCtx, "list_procedures", map[string]interface{}{
+		"specialty": "Pilates",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "Pilates", lister.called.specialty)
+}
+
+func TestListProcedures_NotConfigured_ReturnsError(t *testing.T) {
+	registry := NewRegistry()
+	executor := NewExecutor(registry)
+
+	execCtx := &ExecutionContext{
+		Context:         context.Background(),
+		ClinicID:        uuid.New(),
+		ProcedureLister: nil,
+	}
+
+	_, err := executor.Execute(execCtx, "list_procedures", map[string]interface{}{})
+	assert.Error(t, err)
 }

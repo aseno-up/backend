@@ -261,6 +261,8 @@ func (b *SystemPromptBuilder) conversationFlowGuidelines() string {
 5. **Perguntas (question):**
    - Use get_clinic_info para informações da clínica
    - Use get_professional_info para informações de profissionais
+   - **Para perguntas sobre preços, duração ou catálogo de serviços** (ex: "quanto custa massoterapia?", "quais serviços vocês oferecem?"), use list_procedures. NUNCA invente preços. Se o procedimento não aparecer no retorno, diga que não está no catálogo e ofereça falar com a recepção.
+   - **Para perguntas sobre horário fixo de trabalho de um profissional** (ex: "quando a Thaiane atende?", "quem atende segunda de manhã?"), use get_available_professionals e leia o campo working_hours do profissional (não confunda com agenda livre — working_hours é o horário em que ele trabalha toda semana; horário livre para marcar é get_available_slots).
    - Responda de forma clara e objetiva
    - Ofereça ajuda adicional se apropriado
 

@@ -511,6 +511,8 @@ func main() {
 				appointmentService,
 				patientService,
 				clinicService,
+				procedureService,
+				specialtyRepo,
 				patientRepo,
 				bookingSvc,
 				clinicRepo,
@@ -2092,6 +2094,8 @@ func initializeAIAgent(
 	appointmentService appointment_service.AppointmentService,
 	patientService patient_service.PatientService,
 	clinicService clinic_service.ClinicService,
+	procedureService procedure_service.ProcedureService,
+	specialtyRepo specialty_repository.SpecialtyRepository,
 	patientRepo patient_repository.PatientRepository,
 	bookingService booking_service.BookingService,
 	clinicRepo clinic_repository.ClinicRepository,
@@ -2130,6 +2134,7 @@ func initializeAIAgent(
 	execContext := &tools.ExecutionContext{
 		// Service dependencies - wrapped with adapters
 		ProfessionalLister:       &aiAgentProfessionalListerAdapter{professionalService: professionalService},
+		ProcedureLister:          &aiAgentProcedureListerAdapter{procedureService: procedureService, specialtyRepo: specialtyRepo},
 		SlotFinder:               &aiAgentSlotFinderAdapter{appointmentService: appointmentService, clinicRepo: clinicRepo, professionalRepo: professionalRepo},
 		AppointmentCreator:       &aiAgentAppointmentCreatorAdapter{appointmentService: appointmentService},
 		AppointmentFinder:        &aiAgentAppointmentFinderAdapter{appointmentService: appointmentService},
@@ -2222,25 +2227,20 @@ type aiAgentProfessionalListerAdapter struct {
 }
 
 func (a *aiAgentProfessionalListerAdapter) ListAvailable(ctx context.Context, clinicID uuid.UUID, specialty string) ([]*tools.ProfessionalInfo, error) {
-	// Use List method with activeOnly=true to get available professionals
 	listResp, err := a.professionalService.List(ctx, clinicID, pagination.Filter{Status: "active", Page: 1, Limit: 100})
 	if err != nil {
 		return nil, err
 	}
 
+	specialtyLower := strings.ToLower(strings.TrimSpace(specialty))
+
 	var result []*tools.ProfessionalInfo
 	for _, p := range listResp.Data {
-		// Build specialty string from N:N specialties
-		actualSpecialty := "Geral"
-		if len(p.Specialties) > 0 {
-			actualSpecialty = p.Specialties[0].Name
-		}
-
-		// Filter by specialty if provided
-		if specialty != "" {
+		// Case-insensitive match against any of the professional's specialties.
+		if specialtyLower != "" {
 			matched := false
 			for _, sp := range p.Specialties {
-				if sp.Name == specialty {
+				if strings.Contains(strings.ToLower(sp.Name), specialtyLower) {
 					matched = true
 					break
 				}
@@ -2250,11 +2250,103 @@ func (a *aiAgentProfessionalListerAdapter) ListAvailable(ctx context.Context, cl
 			}
 		}
 
+		refs := make([]tools.SpecialtyRef, 0, len(p.Specialties))
+		legacy := ""
+		for _, sp := range p.Specialties {
+			refs = append(refs, tools.SpecialtyRef{ID: sp.ID, Name: sp.Name})
+			if legacy == "" {
+				legacy = sp.Name
+			}
+		}
+		if legacy == "" {
+			legacy = "Geral"
+		}
+
 		result = append(result, &tools.ProfessionalInfo{
-			ID:          p.ID,
-			Name:        p.Name,
-			Specialty:   actualSpecialty,
-			IsAvailable: p.IsActive,
+			ID:           p.ID,
+			Name:         p.Name,
+			Specialty:    legacy,
+			Specialties:  refs,
+			WorkingHours: convertWorkingHours(p.WorkingHours),
+			IsAvailable:  p.IsActive,
+		})
+	}
+
+	return result, nil
+}
+
+// convertWorkingHours copies a professional model's weekly schedule into the
+// tools package's DTO so the AI agent receives the same shape regardless of
+// model-layer changes.
+func convertWorkingHours(src professional_model.WorkingHours) *tools.WorkingHours {
+	toSlots := func(in []professional_model.TimeSlot) []tools.TimeSlot {
+		if len(in) == 0 {
+			return nil
+		}
+		out := make([]tools.TimeSlot, len(in))
+		for i, s := range in {
+			out[i] = tools.TimeSlot{Start: s.Start, End: s.End}
+		}
+		return out
+	}
+	wh := &tools.WorkingHours{
+		Monday:    toSlots(src.Monday),
+		Tuesday:   toSlots(src.Tuesday),
+		Wednesday: toSlots(src.Wednesday),
+		Thursday:  toSlots(src.Thursday),
+		Friday:    toSlots(src.Friday),
+		Saturday:  toSlots(src.Saturday),
+		Sunday:    toSlots(src.Sunday),
+	}
+	if wh.Monday == nil && wh.Tuesday == nil && wh.Wednesday == nil &&
+		wh.Thursday == nil && wh.Friday == nil && wh.Saturday == nil && wh.Sunday == nil {
+		return nil
+	}
+	return wh
+}
+
+type aiAgentProcedureListerAdapter struct {
+	procedureService procedure_service.ProcedureService
+	specialtyRepo    specialty_repository.SpecialtyRepository
+}
+
+func (a *aiAgentProcedureListerAdapter) ListProcedures(ctx context.Context, clinicID uuid.UUID, specialty string) ([]*tools.ProcedureInfo, error) {
+	listResp, err := a.procedureService.List(ctx, clinicID, pagination.Filter{Page: 1, Limit: 200})
+	if err != nil {
+		return nil, err
+	}
+
+	// Build specialtyID → name lookup once so we can enrich each procedure
+	// without N+1 round trips (the response only carries specialty_id).
+	names := map[uuid.UUID]string{}
+	if a.specialtyRepo != nil {
+		specs, _ := a.specialtyRepo.ListByClinic(clinicID)
+		for _, s := range specs {
+			names[s.ID] = s.Name
+		}
+	}
+
+	specialtyLower := strings.ToLower(strings.TrimSpace(specialty))
+
+	var result []*tools.ProcedureInfo
+	for _, p := range listResp.Data {
+		spName := ""
+		if p.SpecialtyID != nil {
+			spName = names[*p.SpecialtyID]
+		}
+
+		if specialtyLower != "" {
+			if !strings.Contains(strings.ToLower(spName), specialtyLower) {
+				continue
+			}
+		}
+
+		result = append(result, &tools.ProcedureInfo{
+			ID:              p.ID,
+			Name:            p.Name,
+			Price:           p.Price,
+			DurationMinutes: p.DurationMinutes,
+			SpecialtyName:   spName,
 		})
 	}
 
