@@ -13,6 +13,7 @@ import (
 	"github.com/aseno/backend/pkg/pagination"
 	"github.com/aseno/backend/pkg/professional/model"
 	"github.com/aseno/backend/pkg/professional/repository"
+	specialty_repository "github.com/aseno/backend/pkg/specialty/repository"
 	user_model "github.com/aseno/backend/pkg/user/model"
 	user_repository "github.com/aseno/backend/pkg/user/repository"
 )
@@ -34,15 +35,17 @@ type professionalService struct {
 	clinicRepo      clinic_repository.ClinicRepository
 	appointmentRepo appointment_repository.AppointmentRepository
 	userRepo        user_repository.UserRepository
+	specialtyRepo   specialty_repository.SpecialtyRepository
 }
 
 // NewProfessionalService creates a new professional service
-func NewProfessionalService(repo repository.ProfessionalRepository, clinicRepo clinic_repository.ClinicRepository, appointmentRepo appointment_repository.AppointmentRepository, userRepo user_repository.UserRepository) ProfessionalService {
+func NewProfessionalService(repo repository.ProfessionalRepository, clinicRepo clinic_repository.ClinicRepository, appointmentRepo appointment_repository.AppointmentRepository, userRepo user_repository.UserRepository, specialtyRepo specialty_repository.SpecialtyRepository) ProfessionalService {
 	return &professionalService{
 		repo:            repo,
 		clinicRepo:      clinicRepo,
 		appointmentRepo: appointmentRepo,
 		userRepo:        userRepo,
+		specialtyRepo:   specialtyRepo,
 	}
 }
 
@@ -102,7 +105,51 @@ func (s *professionalService) Create(ctx context.Context, clinicID uuid.UUID, re
 		return nil, err
 	}
 
-	return professional.ToResponse(), nil
+	if len(req.SpecialtyIDs) > 0 {
+		if err := s.syncSpecialties(professional.ID, clinicID, req.SpecialtyIDs); err != nil {
+			return nil, err
+		}
+	}
+
+	return s.buildResponse(professional), nil
+}
+
+// syncSpecialties validates that every specialty belongs to the clinic and
+// replaces the professional's specialty set. Passing an empty slice clears all
+// specialties; callers that want "no change" must skip this call entirely.
+func (s *professionalService) syncSpecialties(professionalID, clinicID uuid.UUID, specialtyIDs []uuid.UUID) error {
+	if s.specialtyRepo == nil {
+		return nil
+	}
+	for _, sid := range specialtyIDs {
+		if _, err := s.specialtyRepo.GetByID(sid, clinicID); err != nil {
+			return errors.ErrValidationInstance.WithMessage(
+				fmt.Sprintf("specialty %s does not belong to this clinic", sid))
+		}
+	}
+	if err := s.specialtyRepo.SetProfessionalSpecialties(professionalID, clinicID, specialtyIDs); err != nil {
+		return errors.ErrInternalInstance.WithError(err)
+	}
+	return nil
+}
+
+// buildResponse converts a Professional to a response populating the
+// Specialties field from the repository, since ToResponse leaves it empty.
+func (s *professionalService) buildResponse(p *model.Professional) *model.ProfessionalResponse {
+	resp := p.ToResponse()
+	if s.specialtyRepo == nil {
+		return resp
+	}
+	specs, err := s.specialtyRepo.GetByProfessionalID(p.ID)
+	if err != nil || len(specs) == 0 {
+		return resp
+	}
+	infos := make([]model.SpecialtyInfo, 0, len(specs))
+	for _, sp := range specs {
+		infos = append(infos, model.SpecialtyInfo{ID: sp.ID, Name: sp.Name})
+	}
+	resp.Specialties = infos
+	return resp
 }
 
 // CreateForExistingUser creates a professional linked to an existing user (owner or admin)
@@ -178,7 +225,7 @@ func (s *professionalService) GetByID(ctx context.Context, id, clinicID uuid.UUI
 	if err != nil {
 		return nil, err
 	}
-	return professional.ToResponse(), nil
+	return s.buildResponse(professional), nil
 }
 
 // List retrieves a paginated list of professionals
@@ -189,8 +236,32 @@ func (s *professionalService) List(ctx context.Context, clinicID uuid.UUID, filt
 	}
 
 	data := make([]*model.ProfessionalResponse, len(professionals))
+	specialtiesByProf := map[uuid.UUID][]*model.SpecialtyInfo{}
+	if s.specialtyRepo != nil && len(professionals) > 0 {
+		ids := make([]uuid.UUID, len(professionals))
+		for i, p := range professionals {
+			ids[i] = p.ID
+		}
+		if specs, err := s.specialtyRepo.GetByProfessionalIDs(ids); err == nil {
+			for profID, list := range specs {
+				infos := make([]*model.SpecialtyInfo, 0, len(list))
+				for _, sp := range list {
+					infos = append(infos, &model.SpecialtyInfo{ID: sp.ID, Name: sp.Name})
+				}
+				specialtiesByProf[profID] = infos
+			}
+		}
+	}
+
 	for i, p := range professionals {
-		data[i] = p.ToResponse()
+		resp := p.ToResponse()
+		if infos, ok := specialtiesByProf[p.ID]; ok {
+			resp.Specialties = make([]model.SpecialtyInfo, len(infos))
+			for j, info := range infos {
+				resp.Specialties[j] = *info
+			}
+		}
+		data[i] = resp
 	}
 
 	return pagination.Response[*model.ProfessionalResponse]{
@@ -239,7 +310,13 @@ func (s *professionalService) Update(ctx context.Context, id, clinicID uuid.UUID
 		return nil, err
 	}
 
-	return professional.ToResponse(), nil
+	if req.SpecialtyIDs != nil {
+		if err := s.syncSpecialties(professional.ID, clinicID, *req.SpecialtyIDs); err != nil {
+			return nil, err
+		}
+	}
+
+	return s.buildResponse(professional), nil
 }
 
 // Delete deletes a professional (blocked if has appointments or linked user)

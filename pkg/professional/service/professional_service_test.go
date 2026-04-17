@@ -16,6 +16,8 @@ import (
 	"github.com/aseno/backend/pkg/pagination"
 	"github.com/aseno/backend/pkg/professional/model"
 	"github.com/aseno/backend/pkg/professional/repository"
+	specialty_model "github.com/aseno/backend/pkg/specialty/model"
+	specialty_repository "github.com/aseno/backend/pkg/specialty/repository"
 	user_model "github.com/aseno/backend/pkg/user/model"
 	user_repository "github.com/aseno/backend/pkg/user/repository"
 )
@@ -105,6 +107,43 @@ func (m *MockUserRepository) GetByID(ctx context.Context, id, clinicID uuid.UUID
 	return user, args.Error(1)
 }
 
+// MockSpecialtyRepo
+type MockSpecialtyRepo struct {
+	specialty_repository.SpecialtyRepository
+	mock.Mock
+}
+
+func (m *MockSpecialtyRepo) GetByID(id, clinicID uuid.UUID) (*specialty_model.Specialty, error) {
+	args := m.Called(id, clinicID)
+	var sp *specialty_model.Specialty
+	if args.Get(0) != nil {
+		sp = args.Get(0).(*specialty_model.Specialty)
+	}
+	return sp, args.Error(1)
+}
+
+func (m *MockSpecialtyRepo) SetProfessionalSpecialties(professionalID, clinicID uuid.UUID, specialtyIDs []uuid.UUID) error {
+	return m.Called(professionalID, clinicID, specialtyIDs).Error(0)
+}
+
+func (m *MockSpecialtyRepo) GetByProfessionalID(professionalID uuid.UUID) ([]*specialty_model.Specialty, error) {
+	args := m.Called(professionalID)
+	var specs []*specialty_model.Specialty
+	if args.Get(0) != nil {
+		specs = args.Get(0).([]*specialty_model.Specialty)
+	}
+	return specs, args.Error(1)
+}
+
+func (m *MockSpecialtyRepo) GetByProfessionalIDs(professionalIDs []uuid.UUID) (map[uuid.UUID][]*specialty_model.Specialty, error) {
+	args := m.Called(professionalIDs)
+	var m2 map[uuid.UUID][]*specialty_model.Specialty
+	if args.Get(0) != nil {
+		m2 = args.Get(0).(map[uuid.UUID][]*specialty_model.Specialty)
+	}
+	return m2, args.Error(1)
+}
+
 // --- Tests ---
 
 func TestCreateForExistingUser_Success(t *testing.T) {
@@ -113,7 +152,8 @@ func TestCreateForExistingUser_Success(t *testing.T) {
 	mockAppointmentRepo := new(MockAppointmentRepository)
 	mockUserRepo := new(MockUserRepository)
 
-	svc := NewProfessionalService(mockRepo, mockClinicRepo, mockAppointmentRepo, mockUserRepo)
+	mockSpecialtyRepo := new(MockSpecialtyRepo)
+	svc := NewProfessionalService(mockRepo, mockClinicRepo, mockAppointmentRepo, mockUserRepo, mockSpecialtyRepo)
 
 	ctx := context.Background()
 	clinicID := uuid.New()
@@ -165,7 +205,8 @@ func TestCreateForExistingUser_UserAlreadyHasProfessional(t *testing.T) {
 	mockAppointmentRepo := new(MockAppointmentRepository)
 	mockUserRepo := new(MockUserRepository)
 
-	svc := NewProfessionalService(mockRepo, mockClinicRepo, mockAppointmentRepo, mockUserRepo)
+	mockSpecialtyRepo := new(MockSpecialtyRepo)
+	svc := NewProfessionalService(mockRepo, mockClinicRepo, mockAppointmentRepo, mockUserRepo, mockSpecialtyRepo)
 
 	ctx := context.Background()
 	clinicID := uuid.New()
@@ -198,7 +239,8 @@ func TestCreateForExistingUser_InvalidRole(t *testing.T) {
 	mockAppointmentRepo := new(MockAppointmentRepository)
 	mockUserRepo := new(MockUserRepository)
 
-	svc := NewProfessionalService(mockRepo, mockClinicRepo, mockAppointmentRepo, mockUserRepo)
+	mockSpecialtyRepo := new(MockSpecialtyRepo)
+	svc := NewProfessionalService(mockRepo, mockClinicRepo, mockAppointmentRepo, mockUserRepo, mockSpecialtyRepo)
 
 	ctx := context.Background()
 	clinicID := uuid.New()
@@ -226,7 +268,8 @@ func TestCreateForExistingUser_PlanLimit(t *testing.T) {
 	mockAppointmentRepo := new(MockAppointmentRepository)
 	mockUserRepo := new(MockUserRepository)
 
-	svc := NewProfessionalService(mockRepo, mockClinicRepo, mockAppointmentRepo, mockUserRepo)
+	mockSpecialtyRepo := new(MockSpecialtyRepo)
+	svc := NewProfessionalService(mockRepo, mockClinicRepo, mockAppointmentRepo, mockUserRepo, mockSpecialtyRepo)
 
 	ctx := context.Background()
 	clinicID := uuid.New()
@@ -267,7 +310,8 @@ func TestCreate_LimitIsPerClinic_NotAcrossAccount(t *testing.T) {
 	mockAppointmentRepo := new(MockAppointmentRepository)
 	mockUserRepo := new(MockUserRepository)
 
-	svc := NewProfessionalService(mockRepo, mockClinicRepo, mockAppointmentRepo, mockUserRepo)
+	mockSpecialtyRepo := new(MockSpecialtyRepo)
+	svc := NewProfessionalService(mockRepo, mockClinicRepo, mockAppointmentRepo, mockUserRepo, mockSpecialtyRepo)
 
 	ctx := context.Background()
 	clinicBID := uuid.New()
@@ -281,6 +325,8 @@ func TestCreate_LimitIsPerClinic_NotAcrossAccount(t *testing.T) {
 	}, nil)
 	mockRepo.On("CountActiveByClinicID", ctx, clinicBID).Return(int64(0), nil)
 	mockRepo.On("Create", ctx, mock.AnythingOfType("*model.Professional")).Return(nil)
+	// Create always goes through buildResponse, which queries specialties of the new pro.
+	mockSpecialtyRepo.On("GetByProfessionalID", mock.AnythingOfType("uuid.UUID")).Return([]*specialty_model.Specialty{}, nil)
 
 	resp, err := svc.Create(ctx, clinicBID, &model.CreateProfessionalRequest{
 		Name:  "Prof B1",
@@ -292,4 +338,156 @@ func TestCreate_LimitIsPerClinic_NotAcrossAccount(t *testing.T) {
 	assert.NotNil(t, resp)
 	// Confirms the service queried by clinic, not by account
 	mockRepo.AssertCalled(t, "CountActiveByClinicID", ctx, clinicBID)
+}
+
+// --- Specialty sync on Update ---
+
+func TestUpdate_SpecialtyIDs_Nil_DoesNotTouchSpecialties(t *testing.T) {
+	mockRepo := new(MockProfessionalRepository)
+	mockClinicRepo := new(MockClinicRepository)
+	mockAppointmentRepo := new(MockAppointmentRepository)
+	mockUserRepo := new(MockUserRepository)
+	mockSpecialtyRepo := new(MockSpecialtyRepo)
+	svc := NewProfessionalService(mockRepo, mockClinicRepo, mockAppointmentRepo, mockUserRepo, mockSpecialtyRepo)
+
+	ctx := context.Background()
+	clinicID := uuid.New()
+	profID := uuid.New()
+
+	mockRepo.On("GetByID", ctx, profID, clinicID).Return(&model.Professional{ID: profID, ClinicID: clinicID, Name: "Old"}, nil)
+	mockRepo.On("Update", ctx, mock.AnythingOfType("*model.Professional")).Return(nil)
+	// buildResponse call
+	mockSpecialtyRepo.On("GetByProfessionalID", profID).Return([]*specialty_model.Specialty{}, nil)
+
+	_, err := svc.Update(ctx, profID, clinicID, &model.UpdateProfessionalRequest{Name: "New"})
+
+	assert.NoError(t, err)
+	// Specialty sync functions must NOT have been called when SpecialtyIDs is nil
+	mockSpecialtyRepo.AssertNotCalled(t, "SetProfessionalSpecialties", mock.Anything, mock.Anything, mock.Anything)
+	mockSpecialtyRepo.AssertNotCalled(t, "GetByID", mock.Anything, mock.Anything)
+}
+
+func TestUpdate_SpecialtyIDs_Empty_RemovesAll(t *testing.T) {
+	mockRepo := new(MockProfessionalRepository)
+	mockClinicRepo := new(MockClinicRepository)
+	mockAppointmentRepo := new(MockAppointmentRepository)
+	mockUserRepo := new(MockUserRepository)
+	mockSpecialtyRepo := new(MockSpecialtyRepo)
+	svc := NewProfessionalService(mockRepo, mockClinicRepo, mockAppointmentRepo, mockUserRepo, mockSpecialtyRepo)
+
+	ctx := context.Background()
+	clinicID := uuid.New()
+	profID := uuid.New()
+
+	mockRepo.On("GetByID", ctx, profID, clinicID).Return(&model.Professional{ID: profID, ClinicID: clinicID}, nil)
+	mockRepo.On("Update", ctx, mock.AnythingOfType("*model.Professional")).Return(nil)
+	mockSpecialtyRepo.On("SetProfessionalSpecialties", profID, clinicID, []uuid.UUID{}).Return(nil)
+	mockSpecialtyRepo.On("GetByProfessionalID", profID).Return([]*specialty_model.Specialty{}, nil)
+
+	emptyIDs := []uuid.UUID{}
+	_, err := svc.Update(ctx, profID, clinicID, &model.UpdateProfessionalRequest{SpecialtyIDs: &emptyIDs})
+
+	assert.NoError(t, err)
+	mockSpecialtyRepo.AssertCalled(t, "SetProfessionalSpecialties", profID, clinicID, []uuid.UUID{})
+}
+
+func TestUpdate_SpecialtyIDs_Replaces(t *testing.T) {
+	mockRepo := new(MockProfessionalRepository)
+	mockClinicRepo := new(MockClinicRepository)
+	mockAppointmentRepo := new(MockAppointmentRepository)
+	mockUserRepo := new(MockUserRepository)
+	mockSpecialtyRepo := new(MockSpecialtyRepo)
+	svc := NewProfessionalService(mockRepo, mockClinicRepo, mockAppointmentRepo, mockUserRepo, mockSpecialtyRepo)
+
+	ctx := context.Background()
+	clinicID := uuid.New()
+	profID := uuid.New()
+	specA := uuid.New()
+	specB := uuid.New()
+
+	mockRepo.On("GetByID", ctx, profID, clinicID).Return(&model.Professional{ID: profID, ClinicID: clinicID}, nil)
+	mockRepo.On("Update", ctx, mock.AnythingOfType("*model.Professional")).Return(nil)
+	mockSpecialtyRepo.On("GetByID", specA, clinicID).Return(&specialty_model.Specialty{ID: specA, ClinicID: clinicID, Name: "Fisioterapia"}, nil)
+	mockSpecialtyRepo.On("GetByID", specB, clinicID).Return(&specialty_model.Specialty{ID: specB, ClinicID: clinicID, Name: "Pilates"}, nil)
+	mockSpecialtyRepo.On("SetProfessionalSpecialties", profID, clinicID, []uuid.UUID{specA, specB}).Return(nil)
+	mockSpecialtyRepo.On("GetByProfessionalID", profID).Return([]*specialty_model.Specialty{
+		{ID: specA, Name: "Fisioterapia"},
+		{ID: specB, Name: "Pilates"},
+	}, nil)
+
+	ids := []uuid.UUID{specA, specB}
+	resp, err := svc.Update(ctx, profID, clinicID, &model.UpdateProfessionalRequest{SpecialtyIDs: &ids})
+
+	assert.NoError(t, err)
+	assert.Len(t, resp.Specialties, 2)
+	assert.Equal(t, "Fisioterapia", resp.Specialties[0].Name)
+	mockSpecialtyRepo.AssertCalled(t, "SetProfessionalSpecialties", profID, clinicID, []uuid.UUID{specA, specB})
+}
+
+func TestUpdate_SpecialtyIDs_FromAnotherClinic_Rejects(t *testing.T) {
+	mockRepo := new(MockProfessionalRepository)
+	mockClinicRepo := new(MockClinicRepository)
+	mockAppointmentRepo := new(MockAppointmentRepository)
+	mockUserRepo := new(MockUserRepository)
+	mockSpecialtyRepo := new(MockSpecialtyRepo)
+	svc := NewProfessionalService(mockRepo, mockClinicRepo, mockAppointmentRepo, mockUserRepo, mockSpecialtyRepo)
+
+	ctx := context.Background()
+	clinicID := uuid.New()
+	profID := uuid.New()
+	foreignSpec := uuid.New()
+
+	mockRepo.On("GetByID", ctx, profID, clinicID).Return(&model.Professional{ID: profID, ClinicID: clinicID}, nil)
+	mockRepo.On("Update", ctx, mock.AnythingOfType("*model.Professional")).Return(nil)
+	// Specialty doesn't belong to this clinic
+	mockSpecialtyRepo.On("GetByID", foreignSpec, clinicID).Return(nil, assert.AnError)
+
+	ids := []uuid.UUID{foreignSpec}
+	resp, err := svc.Update(ctx, profID, clinicID, &model.UpdateProfessionalRequest{SpecialtyIDs: &ids})
+
+	assert.Error(t, err)
+	assert.Nil(t, resp)
+	assert.Contains(t, err.Error(), "does not belong")
+	mockSpecialtyRepo.AssertNotCalled(t, "SetProfessionalSpecialties", mock.Anything, mock.Anything, mock.Anything)
+}
+
+func TestCreate_WithSpecialtyIDs_Persists(t *testing.T) {
+	mockRepo := new(MockProfessionalRepository)
+	mockClinicRepo := new(MockClinicRepository)
+	mockAppointmentRepo := new(MockAppointmentRepository)
+	mockUserRepo := new(MockUserRepository)
+	mockSpecialtyRepo := new(MockSpecialtyRepo)
+	svc := NewProfessionalService(mockRepo, mockClinicRepo, mockAppointmentRepo, mockUserRepo, mockSpecialtyRepo)
+
+	ctx := context.Background()
+	clinicID := uuid.New()
+	accountID := uuid.New()
+	specA := uuid.New()
+
+	mockClinicRepo.On("GetByID", ctx, clinicID).Return(&clinic_model.Clinic{
+		AccountID: accountID,
+		Account:   &account_model.Account{MaxProfessionals: -1},
+	}, nil)
+	mockRepo.On("Create", ctx, mock.MatchedBy(func(p *model.Professional) bool {
+		if p.ID == uuid.Nil {
+			// Simulate GORM assigning an ID after Create
+			p.ID = uuid.New()
+		}
+		return p.Name == "Dr. Thaiane"
+	})).Return(nil)
+	mockSpecialtyRepo.On("GetByID", specA, clinicID).Return(&specialty_model.Specialty{ID: specA, ClinicID: clinicID, Name: "Fisioterapia"}, nil)
+	mockSpecialtyRepo.On("SetProfessionalSpecialties", mock.AnythingOfType("uuid.UUID"), clinicID, []uuid.UUID{specA}).Return(nil)
+	mockSpecialtyRepo.On("GetByProfessionalID", mock.AnythingOfType("uuid.UUID")).Return([]*specialty_model.Specialty{
+		{ID: specA, Name: "Fisioterapia"},
+	}, nil)
+
+	resp, err := svc.Create(ctx, clinicID, &model.CreateProfessionalRequest{
+		Name:         "Dr. Thaiane",
+		SpecialtyIDs: []uuid.UUID{specA},
+	})
+
+	assert.NoError(t, err)
+	assert.NotNil(t, resp)
+	assert.Len(t, resp.Specialties, 1)
+	assert.Equal(t, "Fisioterapia", resp.Specialties[0].Name)
 }

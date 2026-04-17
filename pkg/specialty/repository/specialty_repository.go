@@ -19,7 +19,7 @@ type SpecialtyRepository interface {
 	// N:N professional-specialty methods
 	GetByProfessionalID(professionalID uuid.UUID) ([]*model.Specialty, error)
 	GetByProfessionalIDs(professionalIDs []uuid.UUID) (map[uuid.UUID][]*model.Specialty, error)
-	SetProfessionalSpecialties(professionalID uuid.UUID, specialtyIDs []uuid.UUID) error
+	SetProfessionalSpecialties(professionalID, clinicID uuid.UUID, specialtyIDs []uuid.UUID) error
 }
 
 type specialtyRepository struct {
@@ -113,22 +113,25 @@ func (r *specialtyRepository) GetByProfessionalIDs(professionalIDs []uuid.UUID) 
 	return result, nil
 }
 
-// SetProfessionalSpecialties replaces all specialties for a professional
-func (r *specialtyRepository) SetProfessionalSpecialties(professionalID uuid.UUID, specialtyIDs []uuid.UUID) error {
+// SetProfessionalSpecialties replaces all specialties for a professional.
+// ClinicID scopes the join rows to the tenant and is set on every new row so
+// the join table stays consistent with the tenant of the professional.
+func (r *specialtyRepository) SetProfessionalSpecialties(professionalID, clinicID uuid.UUID, specialtyIDs []uuid.UUID) error {
 	return r.db.Transaction(func(tx *gorm.DB) error {
 		// Delete existing
 		if err := tx.Where("professional_id = ?", professionalID).Delete(&professional_model.ProfessionalSpecialty{}).Error; err != nil {
 			return err
 		}
-		// Insert new
 		if len(specialtyIDs) == 0 {
 			return nil
 		}
 		records := make([]professional_model.ProfessionalSpecialty, len(specialtyIDs))
 		for i, sid := range specialtyIDs {
 			records[i] = professional_model.ProfessionalSpecialty{
+				ClinicID:       clinicID,
 				ProfessionalID: professionalID,
 				SpecialtyID:    sid,
+				IsActive:       true,
 			}
 		}
 		return tx.Create(&records).Error

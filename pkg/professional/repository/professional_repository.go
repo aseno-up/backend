@@ -112,9 +112,11 @@ func (r *professionalRepository) List(ctx context.Context, clinicID uuid.UUID, f
 	return professionals, total, nil
 }
 
-// Update updates a professional
+// Update updates a professional. Specialty associations are managed separately
+// via SpecialtyRepository.SetProfessionalSpecialties, so we omit them here to
+// keep GORM from cascading an upsert into professional_specialties.
 func (r *professionalRepository) Update(ctx context.Context, professional *model.Professional) error {
-	result := r.db.WithContext(ctx).Save(professional)
+	result := r.db.WithContext(ctx).Omit("Specialties").Save(professional)
 	if result.Error != nil {
 		return errors.ErrInternalInstance.WithError(result.Error)
 	}

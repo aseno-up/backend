@@ -394,7 +394,7 @@ func main() {
 	} else {
 		authService = auth_service.NewAuthService(userRepo, clinicRepo, accountRepo, passwordResetRepo, emailVerificationRepo, planRepo, professionalRepo, clinicMemberRepo, jwtService, emailSvc, cfg.GetFrontendURL())
 	}
-	professionalService := professional_service.NewProfessionalService(professionalRepo, clinicRepo, appointmentRepo, userRepo)
+	professionalService := professional_service.NewProfessionalService(professionalRepo, clinicRepo, appointmentRepo, userRepo, specialtyRepo)
 	professionalProcedureService := professional_service.NewProfessionalProcedureService(professionalProcedureRepo, professionalRepo, procedureRepo)
 	commissionSvc := commission_service.NewCommissionService(commissionRepo, professionalProcedureRepo, appointmentRepo)
 	patientService := patient_service.NewPatientService(patientRepo, clinicRepo)

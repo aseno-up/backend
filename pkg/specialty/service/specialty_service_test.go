@@ -68,8 +68,8 @@ func (m *mockSpecialtyRepo) GetByProfessionalIDs(professionalIDs []uuid.UUID) (m
 	return args.Get(0).(map[uuid.UUID][]*model.Specialty), args.Error(1)
 }
 
-func (m *mockSpecialtyRepo) SetProfessionalSpecialties(professionalID uuid.UUID, specialtyIDs []uuid.UUID) error {
-	return m.Called(professionalID, specialtyIDs).Error(0)
+func (m *mockSpecialtyRepo) SetProfessionalSpecialties(professionalID, clinicID uuid.UUID, specialtyIDs []uuid.UUID) error {
+	return m.Called(professionalID, clinicID, specialtyIDs).Error(0)
 }
 
 func TestSpecialtyService_Create(t *testing.T) {
