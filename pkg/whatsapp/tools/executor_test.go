@@ -37,6 +37,15 @@ func (s *stubProcedureLister) ListProcedures(_ context.Context, _ uuid.UUID, spe
 	return s.result, s.err
 }
 
+type stubSpecialtyLister struct {
+	result []*SpecialtyRef
+	err    error
+}
+
+func (s *stubSpecialtyLister) ListSpecialties(_ context.Context, _ uuid.UUID) ([]*SpecialtyRef, error) {
+	return s.result, s.err
+}
+
 type mockPatientNameUpdater struct {
 	calledWith struct {
 		clinicID  uuid.UUID
@@ -264,4 +273,77 @@ func TestListProcedures_NotConfigured_ReturnsError(t *testing.T) {
 
 	_, err := executor.Execute(execCtx, "list_procedures", map[string]interface{}{})
 	assert.Error(t, err)
+}
+
+// --- list_specialties tool ---
+
+func TestListSpecialties_Registered(t *testing.T) {
+	registry := NewRegistry()
+	tool, exists := registry.GetTool("list_specialties")
+	require.True(t, exists, "list_specialties tool should be registered")
+	assert.NotEmpty(t, tool.Description)
+}
+
+func TestListSpecialties_ReturnsIDAndName(t *testing.T) {
+	registry := NewRegistry()
+	executor := NewExecutor(registry)
+
+	fisioID := uuid.New()
+	nutriID := uuid.New()
+	lister := &stubSpecialtyLister{
+		result: []*SpecialtyRef{
+			{ID: fisioID, Name: "Fisioterapeuta"},
+			{ID: nutriID, Name: "Nutricionista"},
+		},
+	}
+	execCtx := &ExecutionContext{
+		Context:         context.Background(),
+		ClinicID:        uuid.New(),
+		SpecialtyLister: lister,
+	}
+
+	result, err := executor.Execute(execCtx, "list_specialties", map[string]interface{}{})
+	require.NoError(t, err)
+
+	list, ok := result.([]*SpecialtyRef)
+	require.True(t, ok)
+	require.Len(t, list, 2)
+	assert.Equal(t, "Fisioterapeuta", list[0].Name)
+	assert.Equal(t, fisioID, list[0].ID)
+}
+
+func TestListSpecialties_NotConfigured_ReturnsError(t *testing.T) {
+	registry := NewRegistry()
+	executor := NewExecutor(registry)
+
+	execCtx := &ExecutionContext{
+		Context:         context.Background(),
+		ClinicID:        uuid.New(),
+		SpecialtyLister: nil,
+	}
+
+	_, err := executor.Execute(execCtx, "list_specialties", map[string]interface{}{})
+	assert.Error(t, err)
+}
+
+// --- Regression: specialty filter must be exact case-insensitive only (no substring) ---
+
+func TestGetAvailableProfessionals_FilterIsCaseInsensitiveExact(t *testing.T) {
+	// The adapter (main.go) is what filters; here we verify the executor passes
+	// the raw specialty through so the adapter can apply exact matching.
+	registry := NewRegistry()
+	executor := NewExecutor(registry)
+
+	lister := &stubProfessionalLister{result: []*ProfessionalInfo{}}
+	execCtx := &ExecutionContext{
+		Context:            context.Background(),
+		ClinicID:           uuid.New(),
+		ProfessionalLister: lister,
+	}
+
+	_, err := executor.Execute(execCtx, "get_available_professionals", map[string]interface{}{
+		"specialty": "Fisioterapeuta",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "Fisioterapeuta", lister.called.specialty)
 }

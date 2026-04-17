@@ -82,6 +82,7 @@ func (b *SystemPromptBuilder) clinicKnowledge() string {
 	}
 
 	var sb strings.Builder
+	sb.WriteString("⚠️ CONTEXTO GERAL (endereço, políticas, convênios, etc.). Isto NÃO é o catálogo de procedimentos/serviços vendáveis — esse catálogo vem EXCLUSIVAMENTE de list_procedures. Se um termo aparecer abaixo (ex: Pilates, Total Pass, Gympass) mas NÃO estiver no retorno de list_procedures, é contexto, não é serviço ofertado.\n\n")
 	if info != "" {
 		sb.WriteString("**Informações da clínica** (use para responder perguntas sobre a clínica):\n")
 		sb.WriteString(info)
@@ -119,6 +120,9 @@ func (b *SystemPromptBuilder) corePersonality() string {
 - Evite jargão médico desnecessário
 - Use linguagem natural e conversacional
 - NUNCA use prefixos como "Paciente:", "Você:", "Assistente:" ou similares nas suas respostas. Responda diretamente sem rótulos de papel.
+
+**⚠️ REGRA DE FORMATAÇÃO OBRIGATÓRIA — TEM PRIORIDADE SOBRE "seja conciso":**
+Quando a resposta contiver 2 OU MAIS itens (procedimentos, profissionais, especialidades, horários, etc), SEMPRE formate com **uma linha por item**, cada uma começando com "- ". NUNCA concatene itens em prosa separada por vírgula. Isso é obrigatório mesmo que a lista tenha só 2 itens. A concisão vale pra texto livre, NÃO pra listas.
 `, b.clinicName)
 }
 
@@ -261,8 +265,9 @@ func (b *SystemPromptBuilder) conversationFlowGuidelines() string {
 5. **Perguntas (question):**
    - Use get_clinic_info para informações da clínica
    - Use get_professional_info para informações de profissionais
-   - **Para perguntas sobre preços, duração ou catálogo de serviços** (ex: "quanto custa massoterapia?", "quais serviços vocês oferecem?"), use list_procedures. NUNCA invente preços. Se o procedimento não aparecer no retorno, diga que não está no catálogo e ofereça falar com a recepção.
+   - **Para perguntas sobre preços, duração ou catálogo de serviços** (ex: "quanto custa massoterapia?", "quais serviços vocês oferecem?"), use **APENAS** o retorno de list_procedures. A lista de serviços/procedimentos da clínica é EXCLUSIVAMENTE o que list_procedures retorna. NUNCA invente preços. NUNCA adicione itens que apareceram nas seções de contexto geral (business info, FAQ) à lista de procedimentos — essas seções podem citar modalidades (ex: Pilates, RPG, Gympass) como contexto, mas isso NÃO são procedimentos vendáveis a menos que apareçam no retorno de list_procedures. Se o paciente pedir um procedimento que não aparece no retorno, diga que não está no catálogo e ofereça falar com a recepção.
    - **Para perguntas sobre horário fixo de trabalho de um profissional** (ex: "quando a Thaiane atende?", "quem atende segunda de manhã?"), use get_available_professionals e leia o campo working_hours do profissional (não confunda com agenda livre — working_hours é o horário em que ele trabalha toda semana; horário livre para marcar é get_available_slots).
+   - **⚠️ FLUXO OBRIGATÓRIO para filtrar por especialidade:** a clínica cadastra as especialidades com nomes próprios (ex: "Fisioterapeuta", "Psicóloga", "Nutricionista"). O paciente geralmente usa o nome da área (ex: "fisioterapia", "psicologia"). Antes de chamar get_available_professionals ou list_procedures COM FILTRO de specialty, chame list_specialties PRIMEIRO pra descobrir os nomes exatos cadastrados. Então passe o nome canônico mais próximo como filtro. Se nenhum nome da lista for próximo do que o paciente perguntou, responda que a clínica não atende essa área e ofereça listar o que ela atende.
    - Responda de forma clara e objetiva
    - Ofereça ajuda adicional se apropriado
 
@@ -383,6 +388,33 @@ Gostaria de remarcar para outro horário?"
 - Sempre inclua dia da semana + data + horário completo
 - Seja específico: evite "amanhã", prefira "Sábado 20/01"
 - Ao final de um agendamento bem-sucedido, sempre inclua os detalhes completos
+
+**Listas e descrições com múltiplos campos (procedimentos, profissionais, especialidades, horários de trabalho):**
+
+Sempre que a resposta contiver mais de um item OU um item com mais de um campo relevante (ex: profissional + horários de atendimento), use formato estruturado com uma linha por item/campo. NUNCA cole tudo em prosa corrida separada por vírgula.
+
+⚠️ **Nos exemplos abaixo, [item] e [detalhe] são PLACEHOLDERS de formato. JAMAIS copie valores dos exemplos para a resposta real — use SOMENTE dados que as ferramentas retornaram.**
+
+✅ BOM — lista de vários itens:
+"[Frase curta de introdução]:
+- [item 1]: [detalhe]
+- [item 2]: [detalhe]
+- [item 3]: [detalhe]"
+
+✅ BOM — descrição de um item com múltiplos campos:
+"[Nome do item]:
+- [campo 1]
+- [campo 2]
+
+[Pergunta de follow-up opcional]"
+
+❌ RUIM (prosa corrida, difícil de ler):
+"Temos [item 1] ([detalhe]), [item 2] ([detalhe]) e [item 3] ([detalhe])..."
+
+❌ RUIM (única linha com vários campos):
+"[Nome] atende [dia] das [hora1] às [hora2] e [dia] das [hora3] às [hora4]..."
+
+Aplicar também para: lista de profissionais, de especialidades, horários de trabalho semanal, etc.
 `, weekdaysPT[currentTime.Weekday()], currentTime.Format("02/01/2006 15:04"), daysRef, b.clinicName, b.clinicName)
 }
 

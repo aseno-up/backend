@@ -2135,6 +2135,7 @@ func initializeAIAgent(
 		// Service dependencies - wrapped with adapters
 		ProfessionalLister:       &aiAgentProfessionalListerAdapter{professionalService: professionalService},
 		ProcedureLister:          &aiAgentProcedureListerAdapter{procedureService: procedureService, specialtyRepo: specialtyRepo},
+		SpecialtyLister:          &aiAgentSpecialtyListerAdapter{specialtyRepo: specialtyRepo},
 		SlotFinder:               &aiAgentSlotFinderAdapter{appointmentService: appointmentService, clinicRepo: clinicRepo, professionalRepo: professionalRepo},
 		AppointmentCreator:       &aiAgentAppointmentCreatorAdapter{appointmentService: appointmentService},
 		AppointmentFinder:        &aiAgentAppointmentFinderAdapter{appointmentService: appointmentService},
@@ -2236,11 +2237,13 @@ func (a *aiAgentProfessionalListerAdapter) ListAvailable(ctx context.Context, cl
 
 	var result []*tools.ProfessionalInfo
 	for _, p := range listResp.Data {
-		// Case-insensitive match against any of the professional's specialties.
+		// Exact case-insensitive match against any of the professional's
+		// specialties. The AI is expected to resolve approximate terms via
+		// list_specialties before calling this tool, so we do not fuzzy-match.
 		if specialtyLower != "" {
 			matched := false
 			for _, sp := range p.Specialties {
-				if strings.Contains(strings.ToLower(sp.Name), specialtyLower) {
+				if strings.ToLower(sp.Name) == specialtyLower {
 					matched = true
 					break
 				}
@@ -2305,6 +2308,22 @@ func convertWorkingHours(src professional_model.WorkingHours) *tools.WorkingHour
 	return wh
 }
 
+type aiAgentSpecialtyListerAdapter struct {
+	specialtyRepo specialty_repository.SpecialtyRepository
+}
+
+func (a *aiAgentSpecialtyListerAdapter) ListSpecialties(_ context.Context, clinicID uuid.UUID) ([]*tools.SpecialtyRef, error) {
+	specs, err := a.specialtyRepo.ListActiveByClinic(clinicID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*tools.SpecialtyRef, 0, len(specs))
+	for _, s := range specs {
+		out = append(out, &tools.SpecialtyRef{ID: s.ID, Name: s.Name})
+	}
+	return out, nil
+}
+
 type aiAgentProcedureListerAdapter struct {
 	procedureService procedure_service.ProcedureService
 	specialtyRepo    specialty_repository.SpecialtyRepository
@@ -2336,7 +2355,7 @@ func (a *aiAgentProcedureListerAdapter) ListProcedures(ctx context.Context, clin
 		}
 
 		if specialtyLower != "" {
-			if !strings.Contains(strings.ToLower(spName), specialtyLower) {
+			if strings.ToLower(spName) != specialtyLower {
 				continue
 			}
 		}

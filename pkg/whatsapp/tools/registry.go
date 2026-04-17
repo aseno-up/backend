@@ -170,13 +170,13 @@ func (r *Registry) registerSlotManagementTools() {
 	// get_available_professionals
 	r.register(&Tool{
 		Name:        "get_available_professionals",
-		Description: "Lista profissionais ativos da clínica com suas especialidades e horário de trabalho semanal (working_hours). Use para responder perguntas como 'vocês têm fisioterapeuta?', 'quando a Thaiane atende?' ou 'quem atende segunda de manhã?'. Retorna array com: id, name, specialties[{id,name}], working_hours{monday,tuesday,...}. Filtra por specialty opcional (case-insensitive, bate contra qualquer specialty do profissional).",
+		Description: "Lista profissionais ativos da clínica com suas especialidades e horário de trabalho semanal (working_hours). Use para responder perguntas como 'vocês têm fisioterapeuta?', 'quando a Thaiane atende?' ou 'quem atende segunda de manhã?'. Retorna array com: id, name, specialties[{id,name}], working_hours{monday,tuesday,...}. Para filtrar por specialty, passe o NOME EXATO retornado por list_specialties (case-insensitive). NUNCA passe termos aproximados sem consultar list_specialties antes — o filtro é estrito.",
 		Parameters: &genai.Schema{
 			Type: genai.TypeObject,
 			Properties: map[string]*genai.Schema{
 				"specialty": {
 					Type:        genai.TypeString,
-					Description: "Filtrar por especialidade (opcional). Exemplos: fisioterapia, psicologia, pilates, nutrição. Case-insensitive.",
+					Description: "Filtrar por nome EXATO da especialidade (opcional), conforme retornado por list_specialties. Case-insensitive. Se o paciente usar termo aproximado (ex: 'fisioterapia'), descubra o nome canônico via list_specialties (ex: 'Fisioterapeuta') primeiro.",
 				},
 			},
 		},
@@ -403,18 +403,29 @@ func (r *Registry) registerInformationTools() {
 }
 
 // registerCatalogTools registers tools that expose the clinic catalog
-// (procedures with prices and duration) so the AI can answer pricing questions.
+// (specialties, procedures with prices and duration) so the AI can answer
+// pricing questions and discover the clinic's taxonomy at runtime.
 func (r *Registry) registerCatalogTools() {
+	// list_specialties
+	r.register(&Tool{
+		Name:        "list_specialties",
+		Description: "Lista as especialidades ATIVAS cadastradas na clínica com id e nome exato. Use SEMPRE ANTES de chamar get_available_professionals ou list_procedures com filtro de specialty — os nomes retornados aqui são os únicos que o filtro dessas tools reconhece. Se o paciente falar um termo aproximado (ex: 'fisioterapia'), encontre a specialty mais próxima neste retorno (ex: 'Fisioterapeuta') e use esse nome exato no filtro.",
+		Parameters: &genai.Schema{
+			Type:       genai.TypeObject,
+			Properties: map[string]*genai.Schema{},
+		},
+	})
+
 	// list_procedures
 	r.register(&Tool{
 		Name:        "list_procedures",
-		Description: "Lista os procedimentos/serviços oferecidos pela clínica com preço e duração. Use para responder perguntas como 'quanto custa uma massoterapia?', 'quais serviços vocês oferecem?', 'qual o valor da consulta de X?'. Retorna array com: id, name, price (em reais), duration_minutes, specialty_name. Filtra por specialty opcional.",
+		Description: "Lista os procedimentos/serviços oferecidos pela clínica com preço e duração. Use para responder perguntas como 'quanto custa uma massoterapia?', 'quais serviços vocês oferecem?', 'qual o valor da consulta de X?'. Retorna array com: id, name, price (em reais), duration_minutes, specialty_name. Para filtrar por specialty, passe o NOME EXATO retornado por list_specialties (chame list_specialties primeiro).",
 		Parameters: &genai.Schema{
 			Type: genai.TypeObject,
 			Properties: map[string]*genai.Schema{
 				"specialty": {
 					Type:        genai.TypeString,
-					Description: "Filtrar procedimentos por nome da especialidade (opcional). Ex: 'Fisioterapia', 'Pilates'. Case-insensitive.",
+					Description: "Filtrar por nome EXATO da especialidade (opcional), conforme retornado por list_specialties. Case-insensitive. Se o paciente usar termo aproximado, descubra o nome canônico via list_specialties primeiro.",
 				},
 			},
 		},

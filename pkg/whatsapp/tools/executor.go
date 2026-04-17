@@ -20,6 +20,7 @@ type ExecutionContext struct {
 	// Service dependencies (injected from WhatsApp service)
 	ProfessionalLister       ProfessionalLister
 	ProcedureLister          ProcedureLister
+	SpecialtyLister          SpecialtyLister
 	SlotFinder               SlotFinder
 	AppointmentCreator       AppointmentCreator
 	AppointmentFinder        AppointmentFinder
@@ -73,6 +74,10 @@ type TimeSlot struct {
 
 type ProcedureLister interface {
 	ListProcedures(ctx context.Context, clinicID uuid.UUID, specialty string) ([]*ProcedureInfo, error)
+}
+
+type SpecialtyLister interface {
+	ListSpecialties(ctx context.Context, clinicID uuid.UUID) ([]*SpecialtyRef, error)
 }
 
 type ProcedureInfo struct {
@@ -195,6 +200,8 @@ func (e *Executor) Execute(execCtx *ExecutionContext, toolName string, params ma
 		return e.getAvailableProfessionals(execCtx, params)
 	case "list_procedures":
 		return e.listProcedures(execCtx, params)
+	case "list_specialties":
+		return e.listSpecialties(execCtx, params)
 	case "get_available_slots":
 		return e.getAvailableSlots(execCtx, params)
 	case "create_appointment":
@@ -244,6 +251,17 @@ func (e *Executor) getAvailableProfessionals(execCtx *ExecutionContext, params m
 	}
 
 	return professionals, nil
+}
+
+func (e *Executor) listSpecialties(execCtx *ExecutionContext, _ map[string]interface{}) (interface{}, error) {
+	if execCtx.SpecialtyLister == nil {
+		return nil, fmt.Errorf("SpecialtyLister not configured")
+	}
+	specs, err := execCtx.SpecialtyLister.ListSpecialties(execCtx.Context, execCtx.ClinicID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list specialties: %w", err)
+	}
+	return specs, nil
 }
 
 func (e *Executor) listProcedures(execCtx *ExecutionContext, params map[string]interface{}) (interface{}, error) {
