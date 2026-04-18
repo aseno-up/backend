@@ -487,3 +487,63 @@ func TestRescheduleOccurrence_SetsIsExceptionAndOriginalDate(t *testing.T) {
 	assert.Equal(t, monday.Format("2006-01-02"), apt.OriginalDate.Format("2006-01-02"), "OriginalDate must match the original virtual date")
 	assert.Equal(t, wednesday.Format("2006-01-02"), apt.StartTime.Format("2006-01-02"), "StartTime must be the new date")
 }
+
+// Regression: when an appointment was already rescheduled once, its current
+// start_time may fall on a day that is NOT a valid RRULE occurrence (e.g., the
+// plan repeats on Thursdays but the appointment was moved to a Friday).
+// Dragging it again previously returned 422 "No session scheduled for the
+// original date" because the RRULE check ran before we looked up the existing
+// appointment. The fix reorders the logic: an existing materialized
+// appointment for the plan is updated in place without requiring the date to
+// match the RRULE.
+func TestRescheduleOccurrence_UpdatesAlreadyRescheduledAppointment(t *testing.T) {
+	clinicID := uuid.New()
+	profID := uuid.New()
+	planID := uuid.New()
+
+	thursday := time.Date(2026, 4, 23, 12, 0, 0, 0, time.UTC)
+	// Plan repeats on Thursdays.
+	dtstart := thursday
+
+	// Simulate an appointment that was already rescheduled from Thursday Apr 23
+	// to Friday Apr 24. It now lives on Apr 24, a day the RRULE does not cover.
+	friday := time.Date(2026, 4, 24, 13, 0, 0, 0, time.UTC)
+	existing := &appointment_model.Appointment{
+		ID:             uuid.New(),
+		ClinicID:       clinicID,
+		ProfessionalID: profID,
+		SessionPlanID:  &planID,
+		StartTime:      friday,
+		EndTime:        friday.Add(50 * time.Minute),
+		IsException:    true,
+		OriginalDate:   &thursday,
+		Status:         appointment_model.AppointmentStatusPending,
+	}
+
+	plan := &model.SessionPlan{
+		ID:             planID,
+		ClinicID:       clinicID,
+		Status:         model.PlanStatusActive,
+		TotalSessions:  -1,
+		SessionsDone:   0,
+		ProfessionalID: &profID,
+		RRule:          "FREQ=WEEKLY;BYDAY=TH",
+		DtStart:        &dtstart,
+		DurationMins:   50,
+	}
+
+	planRepo := &mockMaterializePlanRepo{plan: plan}
+	aptRepo := &mockMaterializeAppointmentRepo{appointments: []*appointment_model.Appointment{existing}}
+
+	svc := NewMaterializeService(planRepo, aptRepo, nil)
+
+	// Reschedule within the same Friday — this is the scenario that was failing.
+	newTime := time.Date(2026, 4, 24, 16, 0, 0, 0, time.UTC)
+	apt, err := svc.RescheduleOccurrence(context.Background(), clinicID, plan.ID, "2026-04-24", newTime)
+	require.NoError(t, err, "Rescheduling an already-rescheduled appointment must not require the current date to match the RRULE")
+	require.NotNil(t, apt)
+	assert.Equal(t, newTime, apt.StartTime, "StartTime must be updated to the new time")
+	assert.True(t, apt.IsException, "Appointment must remain an exception")
+	assert.NotNil(t, apt.OriginalDate, "OriginalDate must be preserved across reschedules")
+	assert.Equal(t, thursday, *apt.OriginalDate, "OriginalDate must keep the first-reschedule source date, not be overwritten")
+}

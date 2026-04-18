@@ -296,7 +296,43 @@ func (s *materializeService) RescheduleOccurrence(ctx context.Context, clinicID 
 		return nil, errors.ErrValidationInstance.WithMessage("Invalid date format. Use YYYY-MM-DD")
 	}
 
-	// Verify the original date is a valid occurrence
+	dayStart := originalDate
+	dayEnd := originalDate.AddDate(0, 0, 1)
+	newEnd := newTime.Add(time.Duration(plan.DurationMins) * time.Minute)
+
+	// If an appointment for this plan already exists on the original date, we
+	// update it directly. This covers two cases: the first reschedule of a
+	// materialized occurrence, and subsequent reschedules of an appointment
+	// that was previously moved to a day the RRULE does not cover — the
+	// incoming originalDate is the appointment's current start_time, which
+	// does not need to match the RRULE.
+	existingAppts, err := s.appointmentRepo.GetByDateRange(ctx, clinicID, dayStart, dayEnd, plan.ProfessionalID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to check existing appointments: %w", err)
+	}
+
+	for _, apt := range existingAppts {
+		if apt.SessionPlanID != nil && *apt.SessionPlanID == sessionPlanID {
+			apt.IsException = true
+			// Preserve the original RRULE date across multiple reschedules.
+			// If this is the first reschedule, OriginalDate is nil and we
+			// record the current StartTime as the original.
+			if apt.OriginalDate == nil {
+				originalStart := apt.StartTime
+				apt.OriginalDate = &originalStart
+			}
+			apt.StartTime = newTime
+			apt.EndTime = newEnd
+			if err := s.appointmentRepo.Update(ctx, apt); err != nil {
+				return nil, fmt.Errorf("failed to update existing appointment: %w", err)
+			}
+			return apt, nil
+		}
+	}
+
+	// No existing appointment — the client is rescheduling a purely virtual
+	// occurrence. Verify the originalDate is a valid RRULE occurrence before
+	// creating a brand-new exception appointment.
 	rruleStr := plan.RRule
 	if rruleStr == "" {
 		rruleStr = FrequencyToRRule(plan.Frequency, plan.WeekDays)
@@ -307,8 +343,6 @@ func (s *materializeService) RescheduleOccurrence(ctx context.Context, clinicID 
 		dtstart = *plan.DtStart
 	}
 
-	dayStart := originalDate
-	dayEnd := originalDate.AddDate(0, 0, 1)
 	var occurrences []time.Time
 	if len(plan.DayTimes) > 0 {
 		occurrences, err = CalculateOccurrencesWithDayTimes(rruleStr, dtstart, plan.DayTimes, dayStart, dayEnd, plan.TotalSessions, plan.SessionsDone)
@@ -324,33 +358,24 @@ func (s *materializeService) RescheduleOccurrence(ctx context.Context, clinicID 
 	}
 
 	originalStart := occurrences[0]
-	newEnd := newTime.Add(time.Duration(plan.DurationMins) * time.Minute)
 
-	// Check if already materialized for the original date
-	existingAppts, err := s.appointmentRepo.GetByDateRange(ctx, clinicID, dayStart, dayEnd, plan.ProfessionalID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to check existing appointments: %w", err)
-	}
-
-	for _, apt := range existingAppts {
-		if apt.SessionPlanID != nil && *apt.SessionPlanID == sessionPlanID {
-			// Already materialized — update it
-			apt.IsException = true
-			apt.OriginalDate = &originalStart
-			apt.StartTime = newTime
-			apt.EndTime = newEnd
-			if err := s.appointmentRepo.Update(ctx, apt); err != nil {
-				return nil, fmt.Errorf("failed to update existing appointment: %w", err)
-			}
-			return apt, nil
-		}
-	}
-
+	// Determine professional. Flexible individual plans ("qualquer profissional")
+	// arrive here with a nil ProfessionalID — fall back to the first active
+	// professional of the clinic so the user isn't blocked.
 	var professionalID uuid.UUID
 	if plan.ProfessionalID != nil {
 		professionalID = *plan.ProfessionalID
+	} else if s.professionalRepo != nil {
+		fallback, err := s.professionalRepo.FirstActiveIDByClinic(ctx, clinicID)
+		if err != nil {
+			return nil, err
+		}
+		if fallback == nil {
+			return nil, errors.ErrValidationInstance.WithMessage("Nenhum profissional ativo encontrado na clínica para atribuir a este plano.")
+		}
+		professionalID = *fallback
 	} else {
-		return nil, errors.ErrValidationInstance.WithMessage("Cannot reschedule without a professional assigned")
+		return nil, errors.ErrValidationInstance.WithMessage("Nenhum profissional ativo encontrado na clínica para atribuir a este plano.")
 	}
 
 	price := plan.GetEffectivePrice()
