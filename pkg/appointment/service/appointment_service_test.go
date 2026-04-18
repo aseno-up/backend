@@ -104,6 +104,9 @@ func (m *mockAppointmentRepo) UpdatePaymentStatus(_ context.Context, _ uuid.UUID
 func (m *mockAppointmentRepo) GetByDateRangeWithExceptions(_ context.Context, _ uuid.UUID, _, _ time.Time, _ *uuid.UUID) ([]*model.Appointment, error) {
 	return nil, nil
 }
+func (m *mockAppointmentRepo) FindPlanAppointmentOnDate(_ context.Context, _, _ uuid.UUID, _ time.Time) (*model.Appointment, error) {
+	return nil, nil
+}
 
 // --- Helpers ---
 

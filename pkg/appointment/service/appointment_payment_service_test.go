@@ -98,6 +98,9 @@ func (m *mockAptRepoForPayment) UpdatePaymentStatus(_ context.Context, _ uuid.UU
 func (m *mockAptRepoForPayment) GetByDateRangeWithExceptions(_ context.Context, _ uuid.UUID, _, _ time.Time, _ *uuid.UUID) ([]*model.Appointment, error) {
 	return nil, nil
 }
+func (m *mockAptRepoForPayment) FindPlanAppointmentOnDate(_ context.Context, _, _ uuid.UUID, _ time.Time) (*model.Appointment, error) {
+	return nil, nil
+}
 
 // Unused interface methods
 func (m *mockAptRepoForPayment) Create(_ context.Context, _ *model.Appointment) error { return nil }

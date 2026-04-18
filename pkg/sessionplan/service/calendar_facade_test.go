@@ -131,6 +131,9 @@ func (m *mockCalendarAppointmentRepo) UpdatePaymentStatus(_ context.Context, _ u
 func (m *mockCalendarAppointmentRepo) GetByDateRangeWithExceptions(_ context.Context, _ uuid.UUID, _, _ time.Time, _ *uuid.UUID) ([]*appointment_model.Appointment, error) {
 	return m.appointments, nil
 }
+func (m *mockCalendarAppointmentRepo) FindPlanAppointmentOnDate(_ context.Context, _, _ uuid.UUID, _ time.Time) (*appointment_model.Appointment, error) {
+	return nil, nil
+}
 
 type mockCalendarEnrollmentRepo struct {
 	active []*enrollment_model.SessionPlanEnrollment

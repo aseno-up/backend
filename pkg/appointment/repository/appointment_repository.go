@@ -52,6 +52,14 @@ type AppointmentRepository interface {
 	// GetByDateRangeWithExceptions retrieves appointments including cancelled exceptions (for calendar facade)
 	GetByDateRangeWithExceptions(ctx context.Context, clinicID uuid.UUID, start, end time.Time, professionalID *uuid.UUID) ([]*model.Appointment, error)
 
+	// FindPlanAppointmentOnDate returns the non-cancelled, non-deleted
+	// appointment for the given session plan whose current start_time OR
+	// original_date falls within the requested day. Used by reschedule flows
+	// to locate the appointment to update without depending on the plan's
+	// currently-configured professional (which may differ from the
+	// appointment's). Returns nil when no matching appointment exists.
+	FindPlanAppointmentOnDate(ctx context.Context, clinicID, sessionPlanID uuid.UUID, day time.Time) (*model.Appointment, error)
+
 	// CountByProfessionalID returns the count of non-deleted appointments for a professional
 	CountByProfessionalID(ctx context.Context, professionalID, clinicID uuid.UUID) (int64, error)
 
@@ -301,6 +309,44 @@ func (r *appointmentRepository) GetByDateRangeWithExceptions(ctx context.Context
 
 	r.fillMissingProcedures(ctx, appointments)
 	return appointments, nil
+}
+
+// FindPlanAppointmentOnDate returns the non-cancelled, non-deleted appointment
+// belonging to the given session plan whose current start_time OR original_date
+// falls within the requested day. Ordering by original_date first (nulls last,
+// then start_time) keeps the result stable when both a first-time materialized
+// appointment and an already-rescheduled one happen to exist on the day —
+// though in practice a plan should only have one appointment per occurrence.
+//
+// The plan's current professional_id is deliberately NOT used as a filter: the
+// plan may have been reconfigured after the appointment was materialized, and
+// the reschedule flow still needs to update the original row instead of
+// creating a duplicate.
+func (r *appointmentRepository) FindPlanAppointmentOnDate(ctx context.Context, clinicID, sessionPlanID uuid.UUID, day time.Time) (*model.Appointment, error) {
+	start := time.Date(day.Year(), day.Month(), day.Day(), 0, 0, 0, 0, day.Location())
+	end := start.AddDate(0, 0, 1)
+
+	var apt model.Appointment
+	err := r.db.WithContext(ctx).
+		Preload("Patient").
+		Preload("Professional").
+		Preload("Procedures.Procedure", func(db *gorm.DB) *gorm.DB { return db.Unscoped() }).
+		Preload("Specialties").
+		Where("clinic_id = ? AND session_plan_id = ? AND deleted_at IS NULL", clinicID, sessionPlanID).
+		Where("status != ?", model.AppointmentStatusCanceled).
+		Where(
+			"(start_time >= ? AND start_time < ?) OR (original_date IS NOT NULL AND original_date >= ? AND original_date < ?)",
+			start, end, start, end,
+		).
+		Order("start_time ASC").
+		First(&apt).Error
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil, nil
+		}
+		return nil, errors.ErrInternalInstance.WithError(err)
+	}
+	return &apt, nil
 }
 
 // GetByDay retrieves appointments for a specific day

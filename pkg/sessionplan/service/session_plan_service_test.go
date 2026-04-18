@@ -67,6 +67,9 @@ func (m *mockAptRepo) GetByDateRange(_ context.Context, _ uuid.UUID, _, _ time.T
 func (m *mockAptRepo) GetByDateRangeWithExceptions(_ context.Context, _ uuid.UUID, _, _ time.Time, _ *uuid.UUID) ([]*appointment_model.Appointment, error) {
 	return nil, nil
 }
+func (m *mockAptRepo) FindPlanAppointmentOnDate(_ context.Context, _, _ uuid.UUID, _ time.Time) (*appointment_model.Appointment, error) {
+	return nil, nil
+}
 func (m *mockAptRepo) GetByDay(_ context.Context, _ uuid.UUID, _ time.Time, _ *uuid.UUID) ([]*appointment_model.Appointment, error) {
 	return nil, nil
 }

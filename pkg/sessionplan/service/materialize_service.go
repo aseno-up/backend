@@ -300,34 +300,36 @@ func (s *materializeService) RescheduleOccurrence(ctx context.Context, clinicID 
 	dayEnd := originalDate.AddDate(0, 0, 1)
 	newEnd := newTime.Add(time.Duration(plan.DurationMins) * time.Minute)
 
-	// If an appointment for this plan already exists on the original date, we
-	// update it directly. This covers two cases: the first reschedule of a
-	// materialized occurrence, and subsequent reschedules of an appointment
-	// that was previously moved to a day the RRULE does not cover — the
-	// incoming originalDate is the appointment's current start_time, which
-	// does not need to match the RRULE.
-	existingAppts, err := s.appointmentRepo.GetByDateRange(ctx, clinicID, dayStart, dayEnd, plan.ProfessionalID)
+	// Locate the existing materialized appointment for this plan on the
+	// original date. This lookup intentionally matches both by current
+	// start_time AND by original_date, and ignores the plan's
+	// professional_id, so that:
+	//   - appointments whose professional was changed after materialization
+	//     are still found (the old code filtered by plan.ProfessionalID and
+	//     missed them, which created a duplicate on reschedule);
+	//   - a retry with the same original_date after the appointment already
+	//     moved away still finds the same row via its original_date, making
+	//     the operation idempotent.
+	existing, err := s.appointmentRepo.FindPlanAppointmentOnDate(ctx, clinicID, sessionPlanID, originalDate)
 	if err != nil {
-		return nil, fmt.Errorf("failed to check existing appointments: %w", err)
+		return nil, fmt.Errorf("failed to check existing appointment: %w", err)
 	}
 
-	for _, apt := range existingAppts {
-		if apt.SessionPlanID != nil && *apt.SessionPlanID == sessionPlanID {
-			apt.IsException = true
-			// Preserve the original RRULE date across multiple reschedules.
-			// If this is the first reschedule, OriginalDate is nil and we
-			// record the current StartTime as the original.
-			if apt.OriginalDate == nil {
-				originalStart := apt.StartTime
-				apt.OriginalDate = &originalStart
-			}
-			apt.StartTime = newTime
-			apt.EndTime = newEnd
-			if err := s.appointmentRepo.Update(ctx, apt); err != nil {
-				return nil, fmt.Errorf("failed to update existing appointment: %w", err)
-			}
-			return apt, nil
+	if existing != nil {
+		existing.IsException = true
+		// Preserve the original RRULE date across multiple reschedules.
+		// If this is the first reschedule, OriginalDate is nil and we
+		// record the current StartTime as the original.
+		if existing.OriginalDate == nil {
+			originalStart := existing.StartTime
+			existing.OriginalDate = &originalStart
 		}
+		existing.StartTime = newTime
+		existing.EndTime = newEnd
+		if err := s.appointmentRepo.Update(ctx, existing); err != nil {
+			return nil, fmt.Errorf("failed to update existing appointment: %w", err)
+		}
+		return existing, nil
 	}
 
 	// No existing appointment — the client is rescheduling a purely virtual

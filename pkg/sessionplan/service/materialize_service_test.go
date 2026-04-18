@@ -59,6 +59,7 @@ func (m *mockMaterializePlanRepo) BulkCancel(_ context.Context, _ uuid.UUID, _ [
 type mockMaterializeAppointmentRepo struct {
 	appointments []*appointment_model.Appointment
 	created      *appointment_model.Appointment
+	updated      *appointment_model.Appointment
 }
 
 func (m *mockMaterializeAppointmentRepo) Create(_ context.Context, apt *appointment_model.Appointment) error {
@@ -85,7 +86,8 @@ func (m *mockMaterializeAppointmentRepo) List(_ context.Context, _ uuid.UUID, _ 
 func (m *mockMaterializeAppointmentRepo) GetByDay(_ context.Context, _ uuid.UUID, _ time.Time, _ *uuid.UUID) ([]*appointment_model.Appointment, error) {
 	return nil, nil
 }
-func (m *mockMaterializeAppointmentRepo) Update(_ context.Context, _ *appointment_model.Appointment) error {
+func (m *mockMaterializeAppointmentRepo) Update(_ context.Context, apt *appointment_model.Appointment) error {
+	m.updated = apt
 	return nil
 }
 func (m *mockMaterializeAppointmentRepo) Delete(_ context.Context, _, _ uuid.UUID) error { return nil }
@@ -136,6 +138,34 @@ func (m *mockMaterializeAppointmentRepo) UpdatePaymentStatus(_ context.Context, 
 }
 func (m *mockMaterializeAppointmentRepo) GetByDateRangeWithExceptions(_ context.Context, _ uuid.UUID, _, _ time.Time, _ *uuid.UUID) ([]*appointment_model.Appointment, error) {
 	return m.appointments, nil
+}
+
+// FindPlanAppointmentOnDate mimics the real repository: it looks for the
+// single non-cancelled appointment on the given day whose current start_time
+// OR original_date falls within the day, for the given plan. Important for
+// the reschedule test cases: the real query intentionally ignores the plan's
+// professional_id and also matches appointments that have already been moved
+// (original_date set) — exactly the cases that caused duplicates before.
+func (m *mockMaterializeAppointmentRepo) FindPlanAppointmentOnDate(_ context.Context, _, sessionPlanID uuid.UUID, day time.Time) (*appointment_model.Appointment, error) {
+	dayStart := time.Date(day.Year(), day.Month(), day.Day(), 0, 0, 0, 0, day.Location())
+	dayEnd := dayStart.AddDate(0, 0, 1)
+	for _, apt := range m.appointments {
+		if apt.SessionPlanID == nil || *apt.SessionPlanID != sessionPlanID {
+			continue
+		}
+		if apt.Status == appointment_model.AppointmentStatusCanceled {
+			continue
+		}
+		if apt.DeletedAt != nil {
+			continue
+		}
+		startInRange := !apt.StartTime.Before(dayStart) && apt.StartTime.Before(dayEnd)
+		originalInRange := apt.OriginalDate != nil && !apt.OriginalDate.Before(dayStart) && apt.OriginalDate.Before(dayEnd)
+		if startInRange || originalInRange {
+			return apt, nil
+		}
+	}
+	return nil, nil
 }
 
 // --- Tests ---
@@ -489,6 +519,118 @@ func TestRescheduleOccurrence_SetsIsExceptionAndOriginalDate(t *testing.T) {
 	assert.NotNil(t, apt.OriginalDate, "Rescheduled occurrence must have original date")
 	assert.Equal(t, monday.Format("2006-01-02"), apt.OriginalDate.Format("2006-01-02"), "OriginalDate must match the original virtual date")
 	assert.Equal(t, wednesday.Format("2006-01-02"), apt.StartTime.Format("2006-01-02"), "StartTime must be the new date")
+}
+
+// Regression: rescheduling a session-plan appointment whose professional_id
+// differs from the plan's professional_id used to create a duplicate
+// appointment. The previous lookup called GetByDateRange with the PLAN's
+// professional as a filter, so the actual materialized row (carrying the
+// appointment's own professional) was not returned, the service fell into
+// the "no existing — create new" branch, and the user saw two agendas: the
+// original one at the old slot and a freshly-created one at the new slot.
+// The fix routes the lookup through FindPlanAppointmentOnDate which matches
+// on (session_plan_id, day) and ignores the plan's professional altogether.
+func TestRescheduleOccurrence_DoesNotDuplicateWhenPlanProfessionalDiffersFromAppointment(t *testing.T) {
+	clinicID := uuid.New()
+	planProfID := uuid.New()
+	appointmentProfID := uuid.New() // different from the plan's current professional
+	planID := uuid.New()
+
+	monday := time.Date(2026, 4, 20, 12, 0, 0, 0, time.UTC)
+	dtstart := monday
+
+	existing := &appointment_model.Appointment{
+		ID:             uuid.New(),
+		ClinicID:       clinicID,
+		ProfessionalID: appointmentProfID,
+		SessionPlanID:  &planID,
+		StartTime:      monday,
+		EndTime:        monday.Add(50 * time.Minute),
+		Status:         appointment_model.AppointmentStatusPending,
+	}
+
+	plan := &model.SessionPlan{
+		ID:             planID,
+		ClinicID:       clinicID,
+		Status:         model.PlanStatusActive,
+		TotalSessions:  -1,
+		SessionsDone:   0,
+		ProfessionalID: &planProfID,
+		RRule:          "FREQ=WEEKLY;BYDAY=MO",
+		DtStart:        &dtstart,
+		DurationMins:   50,
+	}
+
+	planRepo := &mockMaterializePlanRepo{plan: plan}
+	aptRepo := &mockMaterializeAppointmentRepo{appointments: []*appointment_model.Appointment{existing}}
+
+	svc := NewMaterializeService(planRepo, aptRepo, nil)
+
+	newTime := time.Date(2026, 4, 20, 16, 0, 0, 0, time.UTC)
+	apt, err := svc.RescheduleOccurrence(context.Background(), clinicID, plan.ID, "2026-04-20", newTime)
+	require.NoError(t, err)
+	require.NotNil(t, apt)
+
+	assert.Nil(t, aptRepo.created, "RescheduleOccurrence must NOT create a new appointment when the existing one is findable — doing so leaves a duplicate row")
+	require.NotNil(t, aptRepo.updated, "RescheduleOccurrence must update the existing appointment in place")
+	assert.Equal(t, existing.ID, aptRepo.updated.ID, "The updated appointment must be the existing one, not a clone")
+	assert.Equal(t, newTime, aptRepo.updated.StartTime, "StartTime must be updated to the new time")
+	assert.True(t, aptRepo.updated.IsException, "Reschedule must mark the existing appointment as an exception")
+}
+
+// Idempotency: calling RescheduleOccurrence twice with the same original_date
+// (e.g. the client retries, or a future caller is sloppy) must not produce a
+// second appointment row. After the first call the appointment has moved to
+// a new start_time, so the naive "find by start_time in original day" lookup
+// stops matching. The fix also matches by original_date, so the second call
+// still finds the same row and updates it idempotently.
+func TestRescheduleOccurrence_IdempotentWhenCalledTwiceWithSameOriginalDate(t *testing.T) {
+	clinicID := uuid.New()
+	profID := uuid.New()
+	planID := uuid.New()
+
+	monday := time.Date(2026, 4, 20, 12, 0, 0, 0, time.UTC)
+	dtstart := monday
+
+	existing := &appointment_model.Appointment{
+		ID:             uuid.New(),
+		ClinicID:       clinicID,
+		ProfessionalID: profID,
+		SessionPlanID:  &planID,
+		StartTime:      monday,
+		EndTime:        monday.Add(50 * time.Minute),
+		Status:         appointment_model.AppointmentStatusPending,
+	}
+
+	plan := &model.SessionPlan{
+		ID:             planID,
+		ClinicID:       clinicID,
+		Status:         model.PlanStatusActive,
+		TotalSessions:  -1,
+		SessionsDone:   0,
+		ProfessionalID: &profID,
+		RRule:          "FREQ=WEEKLY;BYDAY=MO",
+		DtStart:        &dtstart,
+		DurationMins:   50,
+	}
+
+	planRepo := &mockMaterializePlanRepo{plan: plan}
+	aptRepo := &mockMaterializeAppointmentRepo{appointments: []*appointment_model.Appointment{existing}}
+
+	svc := NewMaterializeService(planRepo, aptRepo, nil)
+
+	firstTarget := time.Date(2026, 4, 22, 14, 0, 0, 0, time.UTC)
+	_, err := svc.RescheduleOccurrence(context.Background(), clinicID, plan.ID, "2026-04-20", firstTarget)
+	require.NoError(t, err)
+	assert.Nil(t, aptRepo.created, "First reschedule must update, not create")
+
+	secondTarget := time.Date(2026, 4, 22, 15, 0, 0, 0, time.UTC)
+	_, err = svc.RescheduleOccurrence(context.Background(), clinicID, plan.ID, "2026-04-20", secondTarget)
+	require.NoError(t, err, "Calling with the same original_date a second time must not error out when the appointment already moved away from that day")
+	assert.Nil(t, aptRepo.created, "Second reschedule must still update the same row — creating a new one would leave a duplicate")
+	require.NotNil(t, aptRepo.updated)
+	assert.Equal(t, existing.ID, aptRepo.updated.ID, "Idempotent: the same appointment row is updated on both calls")
+	assert.Equal(t, secondTarget, aptRepo.updated.StartTime, "StartTime must reflect the latest reschedule")
 }
 
 // Regression: when an appointment was already rescheduled once, its current
