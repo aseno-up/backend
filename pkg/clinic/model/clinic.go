@@ -103,6 +103,51 @@ type ClinicSettings struct {
 	// via the WhatsApp app. Nil uses the default (4h). <=0 disables the
 	// auto-pause and keeps the AI always on.
 	AIHumanTakeoverPauseHours *int `json:"ai_human_takeover_pause_hours,omitempty"`
+
+	// Payment reminder settings (gated by WhatsAppRemindersEnabled as master).
+	// Each channel can be independently disabled even when the master is on.
+	PaymentReminderWhatsAppEnabled *bool `json:"payment_reminder_whatsapp_enabled,omitempty"`
+	PaymentReminderEmailEnabled    *bool `json:"payment_reminder_email_enabled,omitempty"`
+	// PaymentReminderDaysBefore is how many days before the monthly due date
+	// the reminder should fire. Allowed: 1..7. Nil falls back to DefaultPaymentReminderDaysBefore.
+	PaymentReminderDaysBefore *int `json:"payment_reminder_days_before,omitempty"`
+}
+
+// DefaultPaymentReminderDaysBefore is used when the clinic has no explicit value.
+const DefaultPaymentReminderDaysBefore = 3
+
+// GetPaymentReminderDaysBefore returns the configured days-before value for
+// this clinic, clamped into the 1..7 range. Nil or out-of-range falls back
+// to the default.
+func (s *ClinicSettings) GetPaymentReminderDaysBefore() int {
+	if s == nil || s.PaymentReminderDaysBefore == nil {
+		return DefaultPaymentReminderDaysBefore
+	}
+	v := *s.PaymentReminderDaysBefore
+	if v < 1 || v > 7 {
+		return DefaultPaymentReminderDaysBefore
+	}
+	return v
+}
+
+// IsPaymentReminderWhatsAppEnabled returns whether the clinic wants WhatsApp
+// monthly payment reminders. Defaults to true (nil = unset) so clinics that
+// never touched this setting still benefit from the reminder; callers can
+// explicitly store `false` to opt out.
+func (s *ClinicSettings) IsPaymentReminderWhatsAppEnabled() bool {
+	if s == nil || s.PaymentReminderWhatsAppEnabled == nil {
+		return true
+	}
+	return *s.PaymentReminderWhatsAppEnabled
+}
+
+// IsPaymentReminderEmailEnabled returns whether the clinic wants email
+// monthly payment reminders. Defaults to false so clinics opt in explicitly.
+func (s *ClinicSettings) IsPaymentReminderEmailEnabled() bool {
+	if s == nil || s.PaymentReminderEmailEnabled == nil {
+		return false
+	}
+	return *s.PaymentReminderEmailEnabled
 }
 
 // DefaultHumanTakeoverPauseHours is used when the clinic has no explicit value.
@@ -267,6 +312,11 @@ type UpdateClinicSettingsRequest struct {
 	AIToolReschedule          *bool   `json:"ai_tool_reschedule,omitempty"`
 	AIBlockedIntentReply      *string `json:"ai_blocked_intent_reply,omitempty"`
 	AIHumanTakeoverPauseHours *int    `json:"ai_human_takeover_pause_hours,omitempty"`
+
+	// Payment reminder settings
+	PaymentReminderWhatsAppEnabled *bool `json:"payment_reminder_whatsapp_enabled,omitempty"`
+	PaymentReminderEmailEnabled    *bool `json:"payment_reminder_email_enabled,omitempty"`
+	PaymentReminderDaysBefore      *int  `json:"payment_reminder_days_before,omitempty"`
 }
 
 // UpdateClinicRequest represents the request to update a clinic

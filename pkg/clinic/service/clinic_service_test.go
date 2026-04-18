@@ -227,3 +227,69 @@ func TestUpdate_SettingsNil_DoesNotCrash(t *testing.T) {
 	assert.Equal(t, "New Name", result.Name)
 	assert.False(t, result.Settings.RequirePaymentBeforeBooking)
 }
+
+func iPtr(v int) *int { return &v }
+
+func TestUpdate_PaymentReminderDaysBefore_OutOfRange(t *testing.T) {
+	repo := newMockClinicRepo()
+	svc := NewClinicService(repo, "http://localhost:3000")
+	clinic := createTestClinic(repo)
+
+	for _, bad := range []int{0, 8, -1, 100} {
+		_, err := svc.Update(context.Background(), clinic.ID, &model.UpdateClinicRequest{
+			Settings: &model.UpdateClinicSettingsRequest{
+				PaymentReminderDaysBefore: iPtr(bad),
+			},
+		})
+		require.Error(t, err, "expected error for days=%d", bad)
+		assert.Contains(t, err.Error(), "between 1 and 7")
+	}
+}
+
+func TestUpdate_PaymentReminderDaysBefore_Valid(t *testing.T) {
+	repo := newMockClinicRepo()
+	svc := NewClinicService(repo, "http://localhost:3000")
+	clinic := createTestClinic(repo)
+
+	for _, good := range []int{1, 3, 7} {
+		result, err := svc.Update(context.Background(), clinic.ID, &model.UpdateClinicRequest{
+			Settings: &model.UpdateClinicSettingsRequest{
+				PaymentReminderDaysBefore: iPtr(good),
+			},
+		})
+		require.NoError(t, err, "expected no error for days=%d", good)
+		require.NotNil(t, result.Settings.PaymentReminderDaysBefore)
+		assert.Equal(t, good, *result.Settings.PaymentReminderDaysBefore)
+	}
+}
+
+func TestUpdate_PaymentReminderChannelToggles(t *testing.T) {
+	repo := newMockClinicRepo()
+	svc := NewClinicService(repo, "http://localhost:3000")
+	clinic := createTestClinic(repo)
+
+	result, err := svc.Update(context.Background(), clinic.ID, &model.UpdateClinicRequest{
+		Settings: &model.UpdateClinicSettingsRequest{
+			PaymentReminderWhatsAppEnabled: boolPtr(true),
+			PaymentReminderEmailEnabled:    boolPtr(false),
+		},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, result.Settings.PaymentReminderWhatsAppEnabled)
+	require.NotNil(t, result.Settings.PaymentReminderEmailEnabled)
+	assert.True(t, *result.Settings.PaymentReminderWhatsAppEnabled)
+	assert.False(t, *result.Settings.PaymentReminderEmailEnabled)
+}
+
+func TestClinicSettings_GetPaymentReminderDaysBefore_Default(t *testing.T) {
+	var s model.ClinicSettings
+	assert.Equal(t, model.DefaultPaymentReminderDaysBefore, s.GetPaymentReminderDaysBefore())
+
+	bad := 10
+	s.PaymentReminderDaysBefore = &bad
+	assert.Equal(t, model.DefaultPaymentReminderDaysBefore, s.GetPaymentReminderDaysBefore())
+
+	good := 5
+	s.PaymentReminderDaysBefore = &good
+	assert.Equal(t, 5, s.GetPaymentReminderDaysBefore())
+}

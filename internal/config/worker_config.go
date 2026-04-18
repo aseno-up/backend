@@ -27,6 +27,12 @@ type WorkerConfig struct {
 	TimeoutWorkerInterval       time.Duration
 	ConfirmationTimeoutDuration time.Duration
 
+	// Payment Reminder Worker - monthly payment due-date reminders for session
+	// plans. The kill switches are per-channel so operations can shut down
+	// WhatsApp while leaving email working (or vice versa) without a deploy.
+	PaymentReminderWhatsAppEnabled bool
+	PaymentReminderEmailEnabled    bool
+
 	// Message Sender
 	MessageRateLimitSeconds int
 	MessageRetryMax         int
@@ -95,6 +101,10 @@ func NewWorkerConfig() *WorkerConfig {
 		TimeoutWorkerEnabled:        getEnvAsBoolW("TIMEOUT_WORKER_ENABLED", true),
 		TimeoutWorkerInterval:       getEnvAsDurationW("TIMEOUT_WORKER_INTERVAL", 5*time.Minute),
 		ConfirmationTimeoutDuration: getEnvAsDurationW("CONFIRMATION_TIMEOUT_DURATION", 16*time.Hour),
+
+		// Payment Reminder kill switches (default on; ops flips to false to shut down a channel)
+		PaymentReminderWhatsAppEnabled: getEnvAsBoolW("PAYMENT_REMINDER_WHATSAPP_ENABLED", true),
+		PaymentReminderEmailEnabled:    getEnvAsBoolW("PAYMENT_REMINDER_EMAIL_ENABLED", true),
 
 		// Message Sender
 		MessageRateLimitSeconds: getEnvAsIntW("MESSAGE_RATE_LIMIT_SECONDS", 1),

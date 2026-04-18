@@ -620,8 +620,9 @@ func main() {
 	// Initialize Session Plan tasks worker (runs every hour)
 	// No longer generates appointments — occurrences are calculated via RRULE on demand.
 	// Tasks can be registered for notifications, billing reminders, etc.
+	// Started further below after tasks are registered, so RegisterTask calls
+	// are observed before the first tick.
 	sessionPlanWorker := worker.NewSessionPlanTasksWorker(1 * time.Hour)
-	go sessionPlanWorker.Start()
 
 	// Initialize Payment Timeout worker (cancels awaiting_payment appointments)
 	paymentTimeoutWorker := worker.NewPaymentTimeoutWorker(db.GetDB(), cfg.GetBookingPaymentTimeoutMinutes())
@@ -697,6 +698,27 @@ func main() {
 			}
 
 			logger.Println("Reminder, Message Sender, and Timeout workers started")
+
+			// Register monthly payment reminder task on the session plan tasks
+			// worker. The task is idempotent (checks session_plan_payments and
+			// session_plan_payment_reminders before dispatch), so running it
+			// hourly is safe even if the scheduler double-fires. Requires the
+			// WhatsApp message queue for the WhatsApp channel and the
+			// EmailService for the email channel; either can be disabled via
+			// env kill switch or per-clinic settings.
+			paymentReminderRepo := sessionplan_repository.NewPaymentReminderRepository(db.GetDB())
+			paymentReminderTask := worker.NewPaymentReminderTask(
+				workerCfg,
+				worker.NewGormClinicSource(db.GetDB()),
+				worker.NewGormCandidateSource(db.GetDB()),
+				worker.NewGormTracker(db.GetDB(), paymentReminderRepo),
+				messageQueue,
+				worker.NewPaymentReminderEmailAdapter(emailSvc),
+			)
+			paymentReminderTask.SetSubscriptionChecker(&clinicSubscriptionCheckerAdapter{clinicRepo: clinicRepo})
+			paymentReminderTask.SetSystemLogService(systemLogSvc)
+			sessionPlanWorker.RegisterTask("payment_reminder", paymentReminderTask.Run)
+			logger.Println("Payment reminder task registered on session plan worker")
 		}
 
 		// Initialize Waitlist service (requires WhatsApp and queue)
@@ -722,6 +744,11 @@ func main() {
 	} else {
 		logger.Fatalf("FATAL: RabbitMQ URL not configured in environment variables. Please set RABBITMQ_URL.")
 	}
+
+	// Start the session plan tasks worker after all tasks are registered.
+	// When no task was registered (e.g. misconfiguration upstream) the worker
+	// blocks on its stop channel and is effectively inert — safe to always run.
+	go sessionPlanWorker.Start()
 
 	// Wire patient risk calculator into appointment service (always enabled)
 	appointmentService.SetPatientRiskCalculator(&patientRiskAdapter{patientService: patientService})
@@ -1398,6 +1425,7 @@ func runMigrations(db *database.Database) error {
 		&attendance_model.GroupSessionProfessional{},
 		&enrollment_model.SessionPlanEnrollment{},
 		&sessionplan_model.SessionPlanPayment{},
+		&sessionplan_model.SessionPlanPaymentReminder{},
 		&invite_model.Invite{},
 		&patientrecord_model.PatientRecord{},
 		&patientrecord_model.SessionNote{},
@@ -1466,8 +1494,23 @@ func runMigrations(db *database.Database) error {
 		ON patient_records(patient_id, clinic_id, recorded_at DESC)
 	`)
 	db.GetDB().Exec(`
-		CREATE INDEX IF NOT EXISTS idx_patient_records_custom_fields 
+		CREATE INDEX IF NOT EXISTS idx_patient_records_custom_fields
 		ON patient_records USING GIN (custom_fields)
+	`)
+
+	// Unique constraint prevents the payment reminder worker from inserting
+	// two reminders for the same plan/enrollment/reference_month/channel.
+	// COALESCE trick lets NULL enrollment_ids (individual plans) share the
+	// same uniqueness space without colliding with group enrollments.
+	db.GetDB().Exec(`
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_session_plan_payment_reminders_unique
+		ON session_plan_payment_reminders (
+			clinic_id,
+			session_plan_id,
+			COALESCE(enrollment_id, '00000000-0000-0000-0000-000000000000'::uuid),
+			reference_month,
+			channel
+		)
 	`)
 
 	// Data Migration: Migrando plan, status, e asaas id da tabela clinics para a nova accounts
