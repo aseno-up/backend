@@ -2,8 +2,10 @@ package service
 
 import (
 	"context"
+	"strings"
 
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 
 	"github.com/aseno/backend/internal/errors"
 	"github.com/aseno/backend/pkg/pagination"
@@ -22,6 +24,11 @@ type UserService interface {
 	ReactivateUser(ctx context.Context, clinicID, userID uuid.UUID) error
 	RemoveUser(ctx context.Context, clinicID, userID, currentUserID uuid.UUID) error
 	BulkRemoveUsers(ctx context.Context, clinicID uuid.UUID, currentUserID uuid.UUID, userIDs []uuid.UUID) error
+
+	// Tutorials — tracked per user so the in-app tour only shows to those who haven't seen it.
+	GetTutorialsCompleted(ctx context.Context, clinicID, userID uuid.UUID) ([]string, error)
+	MarkTutorialCompleted(ctx context.Context, clinicID, userID uuid.UUID, page string) ([]string, error)
+	ResetTutorials(ctx context.Context, clinicID, userID uuid.UUID) error
 }
 
 // UserListResponse is now deprecated and defined by pagination.Response
@@ -231,6 +238,55 @@ func (s *userService) RemoveUser(ctx context.Context, clinicID, userID, currentU
 	}
 
 	return s.userRepo.Delete(ctx, userID, clinicID)
+}
+
+// GetTutorialsCompleted returns the list of tutorial pages the user has already finished.
+// Always returns a non-nil slice so JSON serialization yields [] instead of null.
+func (s *userService) GetTutorialsCompleted(ctx context.Context, clinicID, userID uuid.UUID) ([]string, error) {
+	user, err := s.userRepo.GetByID(ctx, userID, clinicID)
+	if err != nil {
+		return nil, err
+	}
+	if user.TutorialsCompleted == nil {
+		return []string{}, nil
+	}
+	return []string(user.TutorialsCompleted), nil
+}
+
+// MarkTutorialCompleted records that the user finished a tutorial page. Idempotent:
+// if the page is already in the list, it returns the current list without touching the DB.
+func (s *userService) MarkTutorialCompleted(ctx context.Context, clinicID, userID uuid.UUID, page string) ([]string, error) {
+	page = strings.TrimSpace(page)
+	if page == "" {
+		return nil, errors.ErrValidationInstance.WithMessage("tutorial page is required")
+	}
+
+	user, err := s.userRepo.GetByID(ctx, userID, clinicID)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, p := range user.TutorialsCompleted {
+		if p == page {
+			return []string(user.TutorialsCompleted), nil
+		}
+	}
+
+	user.TutorialsCompleted = append(user.TutorialsCompleted, page)
+	if err := s.userRepo.Update(ctx, user); err != nil {
+		return nil, err
+	}
+	return []string(user.TutorialsCompleted), nil
+}
+
+// ResetTutorials clears the completed list so the user can watch the tour again.
+func (s *userService) ResetTutorials(ctx context.Context, clinicID, userID uuid.UUID) error {
+	user, err := s.userRepo.GetByID(ctx, userID, clinicID)
+	if err != nil {
+		return err
+	}
+	user.TutorialsCompleted = pq.StringArray{}
+	return s.userRepo.Update(ctx, user)
 }
 
 // BulkRemoveUsers soft deletes multiple users (skip the current user if they accidentally included themselves)

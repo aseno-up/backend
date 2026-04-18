@@ -35,6 +35,7 @@ func setupTestDB(t *testing.T) *gorm.DB {
 		is_active numeric DEFAULT 1,
 		last_login_at datetime,
 		professional_id text,
+		tutorials_completed text DEFAULT '{}',
 		created_at datetime,
 		updated_at datetime,
 		deleted_at datetime

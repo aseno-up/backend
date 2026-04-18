@@ -17,6 +17,7 @@ import (
 // UserHandler defines the interface for user handlers
 type UserHandler interface {
 	RegisterRoutes(router gin.IRouter)
+	RegisterMeRoutes(router gin.IRouter)
 	ListUsers(c *gin.Context)
 	GetUser(c *gin.Context)
 	UpdateUser(c *gin.Context)
@@ -25,6 +26,9 @@ type UserHandler interface {
 	ReactivateUser(c *gin.Context)
 	RemoveUser(c *gin.Context)
 	BulkRemoveUsers(c *gin.Context)
+	GetMyTutorials(c *gin.Context)
+	MarkMyTutorialCompleted(c *gin.Context)
+	ResetMyTutorials(c *gin.Context)
 }
 
 // userHandler implements UserHandler
@@ -53,6 +57,18 @@ func (h *userHandler) RegisterRoutes(router gin.IRouter) {
 		users.POST("/:id/reactivate", h.ReactivateUser)
 		users.DELETE("/:id", h.RemoveUser)
 		users.POST("/bulk-delete", h.BulkRemoveUsers)
+	}
+}
+
+// RegisterMeRoutes registers routes scoped to the currently authenticated user.
+// Mounted outside the subscription gate so the in-app tour keeps working even
+// when the clinic's subscription is expired.
+func (h *userHandler) RegisterMeRoutes(router gin.IRouter) {
+	me := router.Group("/me")
+	{
+		me.GET("/tutorials", h.GetMyTutorials)
+		me.POST("/tutorials/:page/complete", h.MarkMyTutorialCompleted)
+		me.DELETE("/tutorials", h.ResetMyTutorials)
 	}
 }
 
@@ -388,4 +404,91 @@ func (h *userHandler) BulkRemoveUsers(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "Users removed successfully"})
+}
+
+// tutorialsResponse is returned by every /me/tutorials endpoint.
+type tutorialsResponse struct {
+	Pages []string `json:"pages"`
+}
+
+// GetMyTutorials returns the tutorial pages the current user already finished.
+// @Summary List completed tutorials for the current user
+// @Tags Users
+// @Security BearerAuth
+// @Produce json
+// @Success 200 {object} tutorialsResponse
+// @Failure 401 {object} errors.AppError
+// @Router /me/tutorials [get]
+func (h *userHandler) GetMyTutorials(c *gin.Context) {
+	clinicID, userID, ok := requireMe(c)
+	if !ok {
+		return
+	}
+
+	pages, err := h.userService.GetTutorialsCompleted(c.Request.Context(), clinicID, userID)
+	if err != nil {
+		c.JSON(errors.GetStatusCode(err), errors.ToResponse(err))
+		return
+	}
+	c.JSON(http.StatusOK, tutorialsResponse{Pages: pages})
+}
+
+// MarkMyTutorialCompleted records that the current user finished a tutorial page.
+// @Summary Mark a tutorial page as completed
+// @Tags Users
+// @Security BearerAuth
+// @Produce json
+// @Param page path string true "Tutorial page identifier (e.g. planos-sessao)"
+// @Success 200 {object} tutorialsResponse
+// @Failure 400 {object} errors.AppError
+// @Failure 401 {object} errors.AppError
+// @Router /me/tutorials/{page}/complete [post]
+func (h *userHandler) MarkMyTutorialCompleted(c *gin.Context) {
+	clinicID, userID, ok := requireMe(c)
+	if !ok {
+		return
+	}
+
+	page := c.Param("page")
+	pages, err := h.userService.MarkTutorialCompleted(c.Request.Context(), clinicID, userID, page)
+	if err != nil {
+		c.JSON(errors.GetStatusCode(err), errors.ToResponse(err))
+		return
+	}
+	c.JSON(http.StatusOK, tutorialsResponse{Pages: pages})
+}
+
+// ResetMyTutorials clears the user's completed tutorials (they'll see the tour again).
+// @Summary Reset completed tutorials for the current user
+// @Tags Users
+// @Security BearerAuth
+// @Success 204 "No Content"
+// @Failure 401 {object} errors.AppError
+// @Router /me/tutorials [delete]
+func (h *userHandler) ResetMyTutorials(c *gin.Context) {
+	clinicID, userID, ok := requireMe(c)
+	if !ok {
+		return
+	}
+
+	if err := h.userService.ResetTutorials(c.Request.Context(), clinicID, userID); err != nil {
+		c.JSON(errors.GetStatusCode(err), errors.ToResponse(err))
+		return
+	}
+	c.Status(http.StatusNoContent)
+}
+
+// requireMe extracts (clinic_id, user_id) from gin context or writes 401 and returns ok=false.
+func requireMe(c *gin.Context) (clinicID uuid.UUID, userID uuid.UUID, ok bool) {
+	clinicRaw, exists := c.Get("clinic_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, errors.ToResponse(errors.ErrUnauthorizedInstance))
+		return uuid.Nil, uuid.Nil, false
+	}
+	userRaw, exists := c.Get("user_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, errors.ToResponse(errors.ErrUnauthorizedInstance))
+		return uuid.Nil, uuid.Nil, false
+	}
+	return clinicRaw.(uuid.UUID), userRaw.(uuid.UUID), true
 }

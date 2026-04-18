@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 
@@ -187,5 +188,133 @@ func TestUserService_ListUsers(t *testing.T) {
 	assert.Equal(t, 2, len(res.Data))
 	assert.Equal(t, "Test User 1", res.Data[0].Name)
 
+	mockRepo.AssertExpectations(t)
+}
+
+// --- Tutorials (per-user tour tracking) ---
+
+func TestUserService_MarkTutorialCompleted_AddsPage(t *testing.T) {
+	mockRepo := new(MockUserRepository)
+	svc := NewUserService(mockRepo, nil)
+
+	ctx := context.Background()
+	clinicID := uuid.New()
+	userID := uuid.New()
+
+	mockRepo.On("GetByID", ctx, userID, clinicID).Return(&model.User{
+		ID:                 userID,
+		ClinicID:           clinicID,
+		TutorialsCompleted: pq.StringArray{},
+	}, nil)
+
+	mockRepo.On("Update", ctx, mock.MatchedBy(func(u *model.User) bool {
+		return len(u.TutorialsCompleted) == 1 && u.TutorialsCompleted[0] == "planos-sessao"
+	})).Return(nil)
+
+	pages, err := svc.MarkTutorialCompleted(ctx, clinicID, userID, "planos-sessao")
+
+	assert.NoError(t, err)
+	assert.Contains(t, pages, "planos-sessao")
+	mockRepo.AssertExpectations(t)
+}
+
+func TestUserService_MarkTutorialCompleted_Idempotent(t *testing.T) {
+	mockRepo := new(MockUserRepository)
+	svc := NewUserService(mockRepo, nil)
+
+	ctx := context.Background()
+	clinicID := uuid.New()
+	userID := uuid.New()
+
+	mockRepo.On("GetByID", ctx, userID, clinicID).Return(&model.User{
+		ID:                 userID,
+		ClinicID:           clinicID,
+		TutorialsCompleted: pq.StringArray{"planos-sessao", "agenda"},
+	}, nil)
+	// Update must NOT be called — already present.
+
+	pages, err := svc.MarkTutorialCompleted(ctx, clinicID, userID, "planos-sessao")
+
+	assert.NoError(t, err)
+	assert.Len(t, pages, 2)
+	assert.Contains(t, pages, "planos-sessao")
+	assert.Contains(t, pages, "agenda")
+	mockRepo.AssertExpectations(t)
+	mockRepo.AssertNotCalled(t, "Update", mock.Anything, mock.Anything)
+}
+
+func TestUserService_MarkTutorialCompleted_RejectsEmptyPage(t *testing.T) {
+	mockRepo := new(MockUserRepository)
+	svc := NewUserService(mockRepo, nil)
+
+	_, err := svc.MarkTutorialCompleted(context.Background(), uuid.New(), uuid.New(), "")
+
+	assert.Error(t, err)
+	mockRepo.AssertNotCalled(t, "GetByID", mock.Anything, mock.Anything, mock.Anything)
+}
+
+func TestUserService_GetTutorialsCompleted(t *testing.T) {
+	mockRepo := new(MockUserRepository)
+	svc := NewUserService(mockRepo, nil)
+
+	ctx := context.Background()
+	clinicID := uuid.New()
+	userID := uuid.New()
+
+	mockRepo.On("GetByID", ctx, userID, clinicID).Return(&model.User{
+		ID:                 userID,
+		ClinicID:           clinicID,
+		TutorialsCompleted: pq.StringArray{"dashboard", "agenda"},
+	}, nil)
+
+	pages, err := svc.GetTutorialsCompleted(ctx, clinicID, userID)
+
+	assert.NoError(t, err)
+	assert.Equal(t, []string{"dashboard", "agenda"}, pages)
+	mockRepo.AssertExpectations(t)
+}
+
+func TestUserService_GetTutorialsCompleted_NilReturnsEmptySlice(t *testing.T) {
+	mockRepo := new(MockUserRepository)
+	svc := NewUserService(mockRepo, nil)
+
+	ctx := context.Background()
+	clinicID := uuid.New()
+	userID := uuid.New()
+
+	mockRepo.On("GetByID", ctx, userID, clinicID).Return(&model.User{
+		ID:                 userID,
+		ClinicID:           clinicID,
+		TutorialsCompleted: nil,
+	}, nil)
+
+	pages, err := svc.GetTutorialsCompleted(ctx, clinicID, userID)
+
+	assert.NoError(t, err)
+	assert.NotNil(t, pages)
+	assert.Empty(t, pages)
+}
+
+func TestUserService_ResetTutorials_ClearsArray(t *testing.T) {
+	mockRepo := new(MockUserRepository)
+	svc := NewUserService(mockRepo, nil)
+
+	ctx := context.Background()
+	clinicID := uuid.New()
+	userID := uuid.New()
+
+	mockRepo.On("GetByID", ctx, userID, clinicID).Return(&model.User{
+		ID:                 userID,
+		ClinicID:           clinicID,
+		TutorialsCompleted: pq.StringArray{"dashboard", "agenda", "planos-sessao"},
+	}, nil)
+
+	mockRepo.On("Update", ctx, mock.MatchedBy(func(u *model.User) bool {
+		return len(u.TutorialsCompleted) == 0
+	})).Return(nil)
+
+	err := svc.ResetTutorials(ctx, clinicID, userID)
+
+	assert.NoError(t, err)
 	mockRepo.AssertExpectations(t)
 }

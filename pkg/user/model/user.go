@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -33,7 +34,11 @@ type User struct {
 	IsActive       bool       `json:"is_active" gorm:"default:true"`
 	LastLoginAt    *time.Time `json:"last_login_at"`
 	ProfessionalID *uuid.UUID `json:"professional_id,omitempty" gorm:"-"` // Populated from professionals table (source of truth is Professional.UserID)
-	CreatedAt      time.Time  `json:"created_at"`
+	// TutorialsCompleted stores which tutorial pages this user has finished at least once,
+	// so the in-app tour is shown only to users who haven't seen it yet — tracked per user,
+	// not per browser (localStorage was previously shared across users of the same device).
+	TutorialsCompleted pq.StringArray `json:"tutorials_completed" gorm:"type:text[];default:'{}'"`
+	CreatedAt          time.Time      `json:"created_at"`
 	UpdatedAt      time.Time  `json:"updated_at"`
 	DeletedAt      *time.Time `json:"deleted_at,omitempty" gorm:"index"`
 }

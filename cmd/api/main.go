@@ -1142,6 +1142,10 @@ func setupRouter(
 				})
 			}
 
+			// /me routes (current-user scoped) — kept outside the subscription
+			// gate so in-app tutorial can load even on expired subscriptions.
+			userHandler.RegisterMeRoutes(authOnly)
+
 			// Billing routes must work with expired subscription so users can pay
 			if paymentHandler != nil {
 				billingAuthOnly := authOnly.Group("")
