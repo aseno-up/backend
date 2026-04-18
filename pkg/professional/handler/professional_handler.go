@@ -30,9 +30,9 @@ type ProfessionalHandler interface {
 
 // professionalHandler implements ProfessionalHandler
 type professionalHandler struct {
-	service    service.ProfessionalService
-	inviteSvc  invite_service.InviteService
-	auditSvc   audit_service.AuditService
+	service   service.ProfessionalService
+	inviteSvc invite_service.InviteService
+	auditSvc  audit_service.AuditService
 }
 
 // NewProfessionalHandler creates a new professional handler

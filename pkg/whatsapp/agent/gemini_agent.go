@@ -152,7 +152,7 @@ func (a *geminiAgent) generateWithModel(ctx context.Context, req *AgentRequest, 
 	systemPrompt := promptBuilder.Build()
 
 	// Build user prompt with conversation history
-	userPrompt := BuildUserPrompt(req.ConversationContext, req.UserMessage)
+	userPrompt := BuildUserPromptWithLimit(req.ConversationContext, req.UserMessage, req.HistoryTurns)
 
 	// Start chat session
 	chat := genModel.StartChat()

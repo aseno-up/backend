@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -158,7 +159,7 @@ func TestGetAvailableProfessionals_ReturnsSpecialtiesArrayAndWorkingHours(t *tes
 					{ID: pilates, Name: "Pilates"},
 				},
 				WorkingHours: &WorkingHours{
-					Monday: []TimeSlot{{Start: "08:00", End: "14:10"}},
+					Monday:  []TimeSlot{{Start: "08:00", End: "14:10"}},
 					Tuesday: []TimeSlot{{Start: "09:00", End: "18:00"}},
 				},
 				IsAvailable: true,
@@ -346,4 +347,222 @@ func TestGetAvailableProfessionals_FilterIsCaseInsensitiveExact(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.Equal(t, "Fisioterapeuta", lister.called.specialty)
+}
+
+// slot builds an AvailableSlot at the given hour on a fixed reference day.
+func slot(hour int) *AvailableSlot {
+	return &AvailableSlot{
+		StartTime: time.Date(2026, 4, 20, hour, 0, 0, 0, time.UTC),
+		EndTime:   time.Date(2026, 4, 20, hour+1, 0, 0, 0, time.UTC),
+	}
+}
+
+func TestSampleSlotsAcrossDay_ReturnsAllWhenUnderLimit(t *testing.T) {
+	in := []*AvailableSlot{slot(9), slot(10), slot(11)}
+	out := sampleSlotsAcrossDay(in, 5)
+	assert.Equal(t, in, out, "when slots <= max, returns all")
+}
+
+func TestSampleSlotsAcrossDay_SpansFullRange(t *testing.T) {
+	// Full-day schedule 9-17 with 1h slots = 9 slots. Regression test: the
+	// previous implementations either cut at slot 13:00 (early afternoon)
+	// or interleaved but stopped before 16h, making that slot invisible.
+	// The new algorithm MUST include the first and last slot.
+	in := []*AvailableSlot{slot(9), slot(10), slot(11), slot(12), slot(13), slot(14), slot(15), slot(16), slot(17)}
+	out := sampleSlotsAcrossDay(in, 5)
+
+	require.Len(t, out, 5)
+	assert.Equal(t, 9, out[0].StartTime.Hour(), "first slot of the day must be included")
+	assert.Equal(t, 17, out[len(out)-1].StartTime.Hour(), "last slot of the day must be included")
+}
+
+func TestSampleSlotsAcrossDay_IncludesLateAfternoon(t *testing.T) {
+	in := []*AvailableSlot{slot(9), slot(10), slot(11), slot(12), slot(13), slot(14), slot(15), slot(16), slot(17)}
+	out := sampleSlotsAcrossDay(in, 5)
+
+	// Find any slot at or after 15h. This fails on the old interleave-
+	// truncated-at-5 behavior.
+	hasLateAfternoon := false
+	for _, s := range out {
+		if s.StartTime.Hour() >= 15 {
+			hasLateAfternoon = true
+			break
+		}
+	}
+	assert.True(t, hasLateAfternoon, "sample must include at least one late-afternoon slot (>=15h)")
+}
+
+func TestSampleSlotsAcrossDay_MorningOnlyStillWorks(t *testing.T) {
+	in := []*AvailableSlot{slot(8), slot(9), slot(10), slot(11)}
+	out := sampleSlotsAcrossDay(in, 3)
+	require.Len(t, out, 3)
+	for _, s := range out {
+		assert.Less(t, s.StartTime.Hour(), 12, "all slots in this test are morning")
+	}
+}
+
+func TestSampleSlotsAcrossDay_EmptyInput(t *testing.T) {
+	out := sampleSlotsAcrossDay(nil, 5)
+	assert.Empty(t, out)
+}
+
+// ---------------------------------------------------------------------------
+// quick_schedule tests
+// ---------------------------------------------------------------------------
+
+type stubSlotFinder struct {
+	slots map[uuid.UUID][]*AvailableSlot
+}
+
+func (s *stubSlotFinder) GetAvailableSlots(_ context.Context, _ uuid.UUID, profID uuid.UUID, _ time.Time, _ int) ([]*AvailableSlot, error) {
+	return s.slots[profID], nil
+}
+
+func (s *stubSlotFinder) GetAvailableSlotsMultipleProfessionals(_ context.Context, _ uuid.UUID, _ []uuid.UUID, _ time.Time, _ int, _ int, _ int) ([]*AvailableSlot, error) {
+	return nil, nil
+}
+
+type stubAppointmentCreator struct {
+	called bool
+	result *AppointmentInfo
+}
+
+func (s *stubAppointmentCreator) CreateFromSchedulingIntent(_ context.Context, _, _, _ uuid.UUID, _ time.Time, _ int) (*AppointmentInfo, error) {
+	s.called = true
+	return s.result, nil
+}
+
+type stubPatientFinder struct{}
+
+func (s *stubPatientFinder) FindOrCreateByPhone(_ context.Context, _ uuid.UUID, _, _ string) (*PatientInfo, error) {
+	return &PatientInfo{ID: uuid.New()}, nil
+}
+
+func slotAt(profID uuid.UUID, y, m, d, h int) *AvailableSlot {
+	return &AvailableSlot{
+		ProfessionalID:   profID,
+		ProfessionalName: "Test",
+		StartTime:        time.Date(y, time.Month(m), d, h, 0, 0, 0, time.UTC),
+		EndTime:          time.Date(y, time.Month(m), d, h+1, 0, 0, 0, time.UTC),
+	}
+}
+
+func TestQuickSchedule_ExactMatch_CreatesAppointment(t *testing.T) {
+	profID := uuid.New()
+	clinicID := uuid.New()
+	patientID := uuid.New()
+
+	lister := &stubProfessionalLister{result: []*ProfessionalInfo{
+		{ID: profID, Name: "José Hamilton Santos Júnior", Specialty: "Geral"},
+	}}
+	slotFinder := &stubSlotFinder{slots: map[uuid.UUID][]*AvailableSlot{
+		profID: {
+			slotAt(profID, 2026, 4, 20, 15),
+			slotAt(profID, 2026, 4, 20, 16),
+			slotAt(profID, 2026, 4, 20, 17),
+		},
+	}}
+	creator := &stubAppointmentCreator{result: &AppointmentInfo{ID: uuid.New()}}
+
+	execCtx := &ExecutionContext{
+		Context:            context.Background(),
+		ClinicID:           clinicID,
+		PatientID:          &patientID,
+		ProfessionalLister: lister,
+		SlotFinder:         slotFinder,
+		AppointmentCreator: creator,
+	}
+
+	out, err := NewExecutor(NewRegistry()).Execute(execCtx, "quick_schedule", map[string]interface{}{
+		"professional_name": "hamilton",
+		"date":              "2026-04-20",
+		"start_time":        "16:00",
+	})
+	require.NoError(t, err)
+	m, _ := out.(map[string]interface{})
+	assert.Equal(t, "scheduled", m["status"], "single name match + slot available must auto-create")
+	assert.True(t, creator.called, "AppointmentCreator must be invoked")
+}
+
+func TestQuickSchedule_AmbiguousName_AsksToChoose(t *testing.T) {
+	p1, p2 := uuid.New(), uuid.New()
+	lister := &stubProfessionalLister{result: []*ProfessionalInfo{
+		{ID: p1, Name: "Hamilton Silva"},
+		{ID: p2, Name: "Hamilton Souza"},
+	}}
+	creator := &stubAppointmentCreator{}
+
+	execCtx := &ExecutionContext{
+		Context:            context.Background(),
+		ClinicID:           uuid.New(),
+		ProfessionalLister: lister,
+		SlotFinder:         &stubSlotFinder{},
+		AppointmentCreator: creator,
+	}
+
+	out, _ := NewExecutor(NewRegistry()).Execute(execCtx, "quick_schedule", map[string]interface{}{
+		"professional_name": "hamilton",
+		"date":              "2026-04-20",
+		"start_time":        "16:00",
+	})
+	m, _ := out.(map[string]interface{})
+	assert.Equal(t, "ambiguous_professional", m["status"])
+	assert.False(t, creator.called, "must NOT create when multiple matches exist")
+	cands := m["candidates"].([]map[string]string)
+	assert.Len(t, cands, 2)
+}
+
+func TestQuickSchedule_NotFound_ReturnsAvailableList(t *testing.T) {
+	lister := &stubProfessionalLister{result: []*ProfessionalInfo{
+		{ID: uuid.New(), Name: "Carla Laine"},
+	}}
+	execCtx := &ExecutionContext{
+		Context:            context.Background(),
+		ClinicID:           uuid.New(),
+		ProfessionalLister: lister,
+		SlotFinder:         &stubSlotFinder{},
+		AppointmentCreator: &stubAppointmentCreator{},
+	}
+	out, _ := NewExecutor(NewRegistry()).Execute(execCtx, "quick_schedule", map[string]interface{}{
+		"professional_name": "hamilton",
+		"date":              "2026-04-20",
+		"start_time":        "16:00",
+	})
+	m, _ := out.(map[string]interface{})
+	assert.Equal(t, "professional_not_found", m["status"])
+}
+
+func TestQuickSchedule_SlotTaken_ReturnsAlternatives(t *testing.T) {
+	profID := uuid.New()
+	patientID := uuid.New()
+	lister := &stubProfessionalLister{result: []*ProfessionalInfo{
+		{ID: profID, Name: "Dr. Hamilton"},
+	}}
+	slotFinder := &stubSlotFinder{slots: map[uuid.UUID][]*AvailableSlot{
+		profID: {
+			slotAt(profID, 2026, 4, 20, 9),
+			slotAt(profID, 2026, 4, 20, 10),
+		},
+	}}
+	creator := &stubAppointmentCreator{}
+
+	execCtx := &ExecutionContext{
+		Context:            context.Background(),
+		ClinicID:           uuid.New(),
+		PatientID:          &patientID,
+		ProfessionalLister: lister,
+		SlotFinder:         slotFinder,
+		AppointmentCreator: creator,
+	}
+
+	out, _ := NewExecutor(NewRegistry()).Execute(execCtx, "quick_schedule", map[string]interface{}{
+		"professional_name": "hamilton",
+		"date":              "2026-04-20",
+		"start_time":        "16:00", // not in the list
+	})
+	m, _ := out.(map[string]interface{})
+	assert.Equal(t, "not_available", m["status"])
+	assert.False(t, creator.called)
+	alt := m["available_same_day"].([]map[string]string)
+	assert.Len(t, alt, 2, "must surface same-day alternatives so LLM can offer them")
 }

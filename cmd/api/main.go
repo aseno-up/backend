@@ -429,6 +429,10 @@ func main() {
 		// Wire up message log service for tracking message lifecycle
 		whatsappService.SetMessageLogService(messageLogService)
 
+		// Wire up instance→clinic resolver so SendTextMessage can log
+		// outbound messages without needing clinicID at every call site.
+		whatsappService.SetInstanceClinicResolver(whatsappConnRepo)
+
 		// Wire up appointment status updater for WhatsApp confirmations/cancellations
 		whatsappService.SetAppointmentUpdater(&appointmentStatusAdapter{appointmentService: appointmentService})
 		whatsappService.SetAppointmentFinder(&appointmentFinderAdapter{appointmentRepo: appointmentRepo})
@@ -442,7 +446,7 @@ func main() {
 		whatsappService.SetPatientFinderCreator(&patientFinderCreatorAdapter{patientRepo: patientRepo})
 		whatsappService.SetPatientEnsurer(&patientEnsurerAdapter{patientRepo: patientRepo, patientService: patientService})
 		whatsappService.SetProfessionalLister(&professionalListerAdapter{professionalRepo: professionalRepo})
-		whatsappService.SetSlotFinder(&slotFinderAdapter{appointmentService: appointmentService, professionalRepo: professionalRepo})
+		whatsappService.SetSlotFinder(&slotFinderAdapter{appointmentService: appointmentService, professionalRepo: professionalRepo, clinicRepo: clinicRepo})
 		whatsappService.SetNewAppointmentCreator(&newAppointmentCreatorAdapter{appointmentService: appointmentService})
 		logger.Println("WhatsApp scheduling flow adapters connected")
 
@@ -503,12 +507,13 @@ func main() {
 		// Initialize AI Agent for dynamic WhatsApp conversations (if enabled)
 		if redis != nil && workerCfg.AIAgentEnabled {
 			clinicService := clinic_service.NewClinicService(clinicRepo, cfg.GetFrontendURL())
-			aiAgentService, _, _, err := initializeAIAgent(
+			aiAgentService, conversationMgr, _, err := initializeAIAgent(
 				cfg,
 				db,
 				redis,
 				professionalService,
 				appointmentService,
+				appointmentRepo,
 				patientService,
 				clinicService,
 				procedureService,
@@ -522,13 +527,23 @@ func main() {
 			if err != nil {
 				logger.Printf("Warning: Failed to initialize AI Agent: %v", err)
 			} else if aiAgentService != nil {
+				aiAgentService.SetPromptHistoryTurns(workerCfg.ConversationPromptHistoryTurns)
 				whatsappService.SetAIAgentService(aiAgentService)
+				if conversationMgr != nil {
+					whatsappService.SetConversationManager(conversationMgr)
+				}
 				whatsappService.SetClinicRepo(clinicRepo)
 				whatsappService.SetPlanGateChecker(whatsapp_service.NewPlanGateChecker(subscriptionRepo, planRepo))
 				whatsappService.SetScheduledMessageRepo(scheduledMsgRepo)
+				pwcRepo := patient_repository.NewPatientWhatsAppConnectionRepository(db.GetDB())
 				whatsappService.SetPatientAIPreferenceChecker(&patientAIPreferenceAdapter{
 					patientRepo: patientRepo,
-					connRepo:    patient_repository.NewPatientWhatsAppConnectionRepository(db.GetDB()),
+					connRepo:    pwcRepo,
+				})
+				whatsappService.SetHumanTakeoverTracker(&humanTakeoverTrackerAdapter{
+					patientRepo:  patientRepo,
+					connRepo:     pwcRepo,
+					whatsappRepo: whatsappConnRepo,
 				})
 				whatsappService.SetSystemLogService(systemLogSvc)
 				whatsappService.SetDefaultDelayBetweenPatients(workerCfg.MinDelayBetweenPatientsSeconds)
@@ -644,6 +659,10 @@ func main() {
 		if whatsappService != nil {
 			whatsappService.SetMessageQueue(messageQueue)
 			logger.Println("WhatsApp message queue configured for segmented delivery")
+			if rateLimiter != nil {
+				whatsappService.SetSentMessageCache(rateLimiter)
+				logger.Println("WhatsApp sent-message cache connected (used for human takeover detection)")
+			}
 		}
 
 		// Initialize and start Reminder Worker (only if WhatsApp is configured)
@@ -728,7 +747,7 @@ func main() {
 	commissionHandler := commission_handler.NewCommissionHandler(commissionSvc, auditSvc)
 	patientHandler := patient_handler.NewPatientHandler(patientService)
 	patientWhatsAppConnRepo := patient_repository.NewPatientWhatsAppConnectionRepository(db.GetDB())
-	patientWhatsAppConnService := patient_service.NewPatientWhatsAppConnectionService(patientWhatsAppConnRepo, patientRepo, whatsappConnRepo)
+	patientWhatsAppConnService := patient_service.NewPatientWhatsAppConnectionService(patientWhatsAppConnRepo, patientRepo, whatsappConnRepo, clinicRepo)
 	patientWhatsAppConnHandler := patient_handler.NewPatientWhatsAppConnectionHandler(patientWhatsAppConnService, auditSvc)
 	// Initialize Enrollment service and handler
 	enrollmentRepo := enrollment_repository.NewEnrollmentRepository(db.GetDB())
@@ -856,7 +875,7 @@ func main() {
 
 	// Initialize Clinic service and handler
 	clinicSvc := clinic_service.NewClinicService(clinicRepo, cfg.GetFrontendURL())
-	clinicHdlr := clinic_handler.NewClinicHandler(clinicSvc)
+	clinicHdlr := clinic_handler.NewClinicHandler(clinicSvc, auditSvc)
 
 	// Initialize Waitlist handler
 	var waitlistHdlr waitlist_handler.WaitlistHandler
@@ -1899,8 +1918,42 @@ func (a *patientFinderCreatorAdapter) FindOrCreateByPhone(ctx context.Context, c
 
 // patientAIPreferenceAdapter checks if AI scheduling is enabled for a patient by phone
 type patientAIPreferenceAdapter struct {
+	patientRepo patient_repository.PatientRepository
+	connRepo    patient_repository.PatientWhatsAppConnectionRepository
+}
+
+// humanTakeoverTrackerAdapter is the whatsapp_service.HumanTakeoverTracker
+// implementation. Persists the timestamp on the patient_whatsapp_connections
+// row keyed by phone → patient → connection. When no patient exists yet for
+// the phone, skips silently (no conversation yet = nothing to pause).
+type humanTakeoverTrackerAdapter struct {
 	patientRepo  patient_repository.PatientRepository
 	connRepo     patient_repository.PatientWhatsAppConnectionRepository
+	whatsappRepo whatsapp_repository.WhatsAppConnectionRepository
+}
+
+func (a *humanTakeoverTrackerAdapter) Mark(ctx context.Context, clinicID uuid.UUID, phone string, at time.Time) error {
+	patient, err := a.patientRepo.GetByPhone(ctx, phone, clinicID)
+	if err != nil || patient == nil {
+		// No patient record → nothing to pause. A later incoming message
+		// will create the patient and the takeover state is lost, but
+		// that's fine: without a patient, there's no AI conversation to
+		// silence. Fail-open.
+		return nil
+	}
+	conn, err := a.whatsappRepo.GetActiveByClinicID(ctx, clinicID)
+	if err != nil || conn == nil {
+		return nil
+	}
+	return a.connRepo.SetHumanTakeoverAt(ctx, patient.ID, clinicID, conn.ID, &at)
+}
+
+func (a *humanTakeoverTrackerAdapter) GetTakeoverAt(ctx context.Context, clinicID uuid.UUID, phone string) (*time.Time, error) {
+	patient, err := a.patientRepo.GetByPhone(ctx, phone, clinicID)
+	if err != nil || patient == nil {
+		return nil, nil
+	}
+	return a.connRepo.GetTakeoverAtByPatientID(ctx, patient.ID, clinicID)
 }
 
 func (a *patientAIPreferenceAdapter) IsAISchedulingEnabledByPhone(ctx context.Context, clinicID uuid.UUID, phone string) (bool, error) {
@@ -1973,9 +2026,23 @@ func (a *professionalListerAdapter) ListAvailable(ctx context.Context, clinicID 
 type slotFinderAdapter struct {
 	appointmentService appointment_service.AppointmentService
 	professionalRepo   professional_repository.ProfessionalRepository
+	clinicRepo         clinic_repository.ClinicRepository
+}
+
+func (a *slotFinderAdapter) clinicDateInLocalTZ(ctx context.Context, clinicID uuid.UUID, date time.Time) time.Time {
+	loc := time.Local
+	if a.clinicRepo != nil {
+		if clinic, err := a.clinicRepo.GetByID(ctx, clinicID); err == nil && clinic != nil && clinic.Settings.Timezone != "" {
+			if parsed, lerr := time.LoadLocation(clinic.Settings.Timezone); lerr == nil {
+				loc = parsed
+			}
+		}
+	}
+	return time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, loc)
 }
 
 func (a *slotFinderAdapter) GetAvailableSlots(ctx context.Context, clinicID uuid.UUID, professionalID uuid.UUID, date time.Time, durationMinutes int) ([]*whatsapp_service.AvailableSlot, error) {
+	date = a.clinicDateInLocalTZ(ctx, clinicID, date)
 	slots, err := a.appointmentService.SuggestSmartSlots(ctx, clinicID, professionalID, date, 14, durationMinutes)
 	if err != nil {
 		return nil, err
@@ -2001,6 +2068,7 @@ func (a *slotFinderAdapter) GetAvailableSlots(ctx context.Context, clinicID uuid
 }
 
 func (a *slotFinderAdapter) GetAvailableSlotsMultipleProfessionals(ctx context.Context, clinicID uuid.UUID, professionalIDs []uuid.UUID, date time.Time, days int, durationMinutes int, limit int) ([]*whatsapp_service.AvailableSlot, error) {
+	date = a.clinicDateInLocalTZ(ctx, clinicID, date)
 	var result []*whatsapp_service.AvailableSlot
 
 	// Iterate through professionals to find slots
@@ -2092,6 +2160,7 @@ func initializeAIAgent(
 	redis *redisClient.RedisClient,
 	professionalService professional_service.ProfessionalService,
 	appointmentService appointment_service.AppointmentService,
+	appointmentRepo appointment_repository.AppointmentRepository,
 	patientService patient_service.PatientService,
 	clinicService clinic_service.ClinicService,
 	procedureService procedure_service.ProcedureService,
@@ -2138,10 +2207,10 @@ func initializeAIAgent(
 		SpecialtyLister:          &aiAgentSpecialtyListerAdapter{specialtyRepo: specialtyRepo},
 		SlotFinder:               &aiAgentSlotFinderAdapter{appointmentService: appointmentService, clinicRepo: clinicRepo, professionalRepo: professionalRepo},
 		AppointmentCreator:       &aiAgentAppointmentCreatorAdapter{appointmentService: appointmentService},
-		AppointmentFinder:        &aiAgentAppointmentFinderAdapter{appointmentService: appointmentService},
+		AppointmentFinder:        &aiAgentAppointmentFinderAdapter{appointmentService: appointmentService, patientRepo: patientRepo, appointmentRepo: appointmentRepo, professionalRepo: professionalRepo},
 		AppointmentConfirmer:     &aiAgentAppointmentConfirmerAdapter{appointmentService: appointmentService},
 		AppointmentCanceller:     &aiAgentAppointmentCancellerAdapter{appointmentService: appointmentService},
-		AppointmentRescheduler:   &aiAgentAppointmentReschedulerAdapter{appointmentService: appointmentService},
+		AppointmentRescheduler:   &aiAgentAppointmentReschedulerAdapter{appointmentService: appointmentService, appointmentRepo: appointmentRepo},
 		ClinicInfoProvider:       &aiAgentClinicInfoAdapter{clinicService: clinicService},
 		ProfessionalInfoProvider: &aiAgentProfessionalInfoAdapter{professionalService: professionalService},
 		PatientInfoProvider:      &aiAgentPatientInfoAdapter{patientService: patientService},
@@ -2195,6 +2264,7 @@ func initializeAIAgent(
 		SchedulingEnabled: workerCfg.AIAgentSchedulingEnabled,
 		ConfirmEnabled:    workerCfg.AIAgentConfirmEnabled,
 		CancelEnabled:     workerCfg.AIAgentCancelEnabled,
+		RescheduleEnabled: workerCfg.AIAgentRescheduleEnabled,
 		RemindersEnabled:  workerCfg.AIAgentRemindersEnabled,
 	}
 
@@ -2212,10 +2282,11 @@ func initializeAIAgent(
 	)
 
 	logger.Printf("AI Agent initialized: provider=%s model=%s", workerCfg.AIAgentProvider, workerCfg.AIAgentModel)
-	logger.Printf("AI Agent features: scheduling=%v confirm=%v cancel=%v reminders=%v",
+	logger.Printf("AI Agent features: scheduling=%v confirm=%v cancel=%v reschedule=%v reminders=%v",
 		workerCfg.AIAgentSchedulingEnabled,
 		workerCfg.AIAgentConfirmEnabled,
 		workerCfg.AIAgentCancelEnabled,
+		workerCfg.AIAgentRescheduleEnabled,
 		workerCfg.AIAgentRemindersEnabled)
 
 	return agentService, conversationMgr, execContext, nil
@@ -2391,6 +2462,22 @@ func (a *aiAgentSlotFinderAdapter) checkSubscription(ctx context.Context, clinic
 	return nil
 }
 
+// clinicDateInLocalTZ normalizes a date to the clinic's configured timezone.
+// Working hours are stored as "HH:MM" strings assuming clinic-local time, and
+// SuggestSmartSlots builds time.Date using date.Location() — so a UTC date
+// here produces slots shifted by the timezone offset (e.g. a BRT 09-18
+// schedule shows up as 06-15 BRT). This helper ensures the date's Location
+// matches the clinic so slots land on the correct real-world hour.
+func (a *aiAgentSlotFinderAdapter) clinicDateInLocalTZ(ctx context.Context, clinicID uuid.UUID, date time.Time) time.Time {
+	loc := time.Local
+	if clinic, err := a.clinicRepo.GetByID(ctx, clinicID); err == nil && clinic != nil && clinic.Settings.Timezone != "" {
+		if parsed, lerr := time.LoadLocation(clinic.Settings.Timezone); lerr == nil {
+			loc = parsed
+		}
+	}
+	return time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, loc)
+}
+
 func (a *aiAgentSlotFinderAdapter) GetAvailableSlots(ctx context.Context, clinicID uuid.UUID, professionalID uuid.UUID, date time.Time, durationMinutes int) ([]*tools.AvailableSlot, error) {
 	// INV-001: clinicID sempre presente; verificar assinatura ativa
 	if err := a.checkSubscription(ctx, clinicID); err != nil {
@@ -2402,6 +2489,10 @@ func (a *aiAgentSlotFinderAdapter) GetAvailableSlots(ctx context.Context, clinic
 	if err != nil {
 		return nil, fmt.Errorf("failed to get professional: %w", err)
 	}
+
+	// Normaliza date pro timezone da clínica: sem isso, slots baseados em
+	// working_hours ("09:00"–"18:00" locais) saem 3h deslocados em BRT.
+	date = a.clinicDateInLocalTZ(ctx, clinicID, date)
 
 	// Usar SuggestSmartSlots diretamente — sem verificação de AllowOnlineBooking
 	slots, err := a.appointmentService.SuggestSmartSlots(ctx, clinicID, professionalID, date, 1, durationMinutes)
@@ -2438,6 +2529,9 @@ func (a *aiAgentSlotFinderAdapter) GetAvailableSlotsMultipleProfessionals(ctx co
 			professionalIDs = append(professionalIDs, prof.ID)
 		}
 	}
+
+	// Normaliza date pro timezone da clínica — senão slots saem deslocados.
+	date = a.clinicDateInLocalTZ(ctx, clinicID, date)
 
 	// Coletar slots de todos os profissionais nos dias solicitados
 	var allSlots []*tools.AvailableSlot
@@ -2522,12 +2616,55 @@ func (a *aiAgentAppointmentCreatorAdapter) CreateFromSchedulingIntent(ctx contex
 
 type aiAgentAppointmentFinderAdapter struct {
 	appointmentService appointment_service.AppointmentService
+	patientRepo        patient_repository.PatientRepository
+	appointmentRepo    appointment_repository.AppointmentRepository
+	professionalRepo   professional_repository.ProfessionalRepository
 }
 
+// GetByPatientPhone resolves the patient by phone, then returns the recent
+// appointments for that patient filtered by status. Replaces the previous
+// stub that always returned empty — which made the confirm/cancel-by-phone
+// flow report "no pending appointments" for every patient.
 func (a *aiAgentAppointmentFinderAdapter) GetByPatientPhone(ctx context.Context, clinicID uuid.UUID, phone string, status string, limit int) ([]*tools.AppointmentInfo, error) {
-	// This would need to be implemented in your appointment service
-	// For now, return empty
-	return []*tools.AppointmentInfo{}, nil
+	if a.patientRepo == nil || a.appointmentRepo == nil {
+		return []*tools.AppointmentInfo{}, nil
+	}
+	patient, err := a.patientRepo.GetByPhone(ctx, phone, clinicID)
+	if err != nil || patient == nil {
+		return []*tools.AppointmentInfo{}, nil
+	}
+	if limit <= 0 {
+		limit = 20
+	}
+	apts, err := a.appointmentRepo.GetByPatient(ctx, patient.ID, clinicID, limit)
+	if err != nil {
+		return nil, err
+	}
+	// Cache professional names to avoid N queries when listing many apts.
+	profNames := map[uuid.UUID]string{}
+	out := make([]*tools.AppointmentInfo, 0, len(apts))
+	for _, apt := range apts {
+		if status != "" && string(apt.Status) != status {
+			continue
+		}
+		profName := profNames[apt.ProfessionalID]
+		if profName == "" && a.professionalRepo != nil {
+			if p, perr := a.professionalRepo.GetByID(ctx, apt.ProfessionalID, clinicID); perr == nil && p != nil {
+				profName = p.Name
+				profNames[apt.ProfessionalID] = profName
+			}
+		}
+		out = append(out, &tools.AppointmentInfo{
+			ID:             apt.ID,
+			PatientID:      apt.PatientID,
+			ProfessionalID: apt.ProfessionalID,
+			Professional:   profName,
+			StartTime:      apt.StartTime,
+			EndTime:        apt.EndTime,
+			Status:         string(apt.Status),
+		})
+	}
+	return out, nil
 }
 
 func (a *aiAgentAppointmentFinderAdapter) GetByID(ctx context.Context, appointmentID, clinicID uuid.UUID) (*tools.AppointmentInfo, error) {
@@ -2570,12 +2707,41 @@ func (a *aiAgentAppointmentCancellerAdapter) CancelByPatient(ctx context.Context
 
 type aiAgentAppointmentReschedulerAdapter struct {
 	appointmentService appointment_service.AppointmentService
+	appointmentRepo    appointment_repository.AppointmentRepository
 }
 
+// Reschedule wires the tool layer to the real appointment_service.Reschedule.
+// When newProfessionalID is nil we keep the current one (patient wants only a
+// new time). duration is derived from the stored End-Start diff, falling back
+// to 60 min if unavailable. Replaces the previous stub that returned
+// "reschedule not yet implemented" — which made the AI surface that literal
+// error to patients.
 func (a *aiAgentAppointmentReschedulerAdapter) Reschedule(ctx context.Context, appointmentID, clinicID uuid.UUID, newStartTime time.Time, newProfessionalID *uuid.UUID) error {
-	// This would need to be implemented in your appointment service
-	// For now, return not implemented error
-	return fmt.Errorf("reschedule not yet implemented")
+	if a.appointmentService == nil {
+		return fmt.Errorf("appointment service not configured")
+	}
+
+	professionalID := uuid.Nil
+	durationMinutes := 60
+
+	if a.appointmentRepo != nil {
+		if apt, err := a.appointmentRepo.GetByID(ctx, appointmentID, clinicID); err == nil && apt != nil {
+			professionalID = apt.ProfessionalID
+			if !apt.EndTime.IsZero() && !apt.StartTime.IsZero() {
+				if d := int(apt.EndTime.Sub(apt.StartTime).Minutes()); d > 0 {
+					durationMinutes = d
+				}
+			}
+		}
+	}
+	if newProfessionalID != nil {
+		professionalID = *newProfessionalID
+	}
+	if professionalID == uuid.Nil {
+		return fmt.Errorf("could not resolve professional for reschedule")
+	}
+
+	return a.appointmentService.Reschedule(ctx, appointmentID, clinicID, professionalID, newStartTime, durationMinutes)
 }
 
 type aiAgentClinicInfoAdapter struct {

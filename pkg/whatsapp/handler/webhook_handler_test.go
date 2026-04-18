@@ -16,10 +16,11 @@ import (
 
 	"github.com/aseno/backend/internal/errors"
 	clinic_model "github.com/aseno/backend/pkg/clinic/model"
+	systemlog_service "github.com/aseno/backend/pkg/systemlog/service"
 	"github.com/aseno/backend/pkg/whatsapp/agent"
 	"github.com/aseno/backend/pkg/whatsapp/classifier"
+	"github.com/aseno/backend/pkg/whatsapp/conversation"
 	whatsapp_model "github.com/aseno/backend/pkg/whatsapp/model"
-	systemlog_service "github.com/aseno/backend/pkg/systemlog/service"
 	"github.com/aseno/backend/pkg/whatsapp/service"
 	"github.com/aseno/backend/pkg/whatsapp/transcriber"
 )
@@ -143,11 +144,19 @@ func (r *stubConnRepo) CountActiveByClinicID(_ context.Context, _ uuid.UUID) (in
 	return 0, nil
 }
 
+func (r *stubConnRepo) GetClinicIDByInstance(ctx context.Context, instance string) (uuid.UUID, error) {
+	conn, err := r.GetByInstance(ctx, instance)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	return conn.ClinicID, nil
+}
+
 // stubWhatsAppSvc implementa service.WhatsAppService completamente.
 type stubWhatsAppSvc struct {
-	statusState          string
-	statusErr            error
-	createInstanceCalls  []string
+	statusState         string
+	statusErr           error
+	createInstanceCalls []string
 }
 
 func (s *stubWhatsAppSvc) CreateInstance(_ context.Context, instance string) (*whatsapp_model.QRCodeData, error) {
@@ -182,29 +191,36 @@ func (s *stubWhatsAppSvc) Logout(_ context.Context, _ string) error         { re
 func (s *stubWhatsAppSvc) DeleteInstance(_ context.Context, _ string) error { return nil }
 
 // Set* methods — no-ops no stub
-func (s *stubWhatsAppSvc) SetAppointmentFinder(_ service.AppointmentFinder)             {}
-func (s *stubWhatsAppSvc) SetWaitlistHandler(_ service.WaitlistResponseHandler)         {}
-func (s *stubWhatsAppSvc) SetMessageLogService(_ service.MessageLogService)             {}
-func (s *stubWhatsAppSvc) SetAppointmentUpdater(_ service.AppointmentStatusUpdater)     {}
-func (s *stubWhatsAppSvc) SetClassifier(_ classifier.MessageClassifier, _ float64)      {}
-func (s *stubWhatsAppSvc) SetSlotSuggester(_ service.SlotSuggester)                     {}
-func (s *stubWhatsAppSvc) SetAppointmentCreator(_ service.AppointmentCreator)           {}
-func (s *stubWhatsAppSvc) SetSchedulingIntentRepo(_ service.SchedulingIntentRepository) {}
-func (s *stubWhatsAppSvc) SetPatientFinderCreator(_ service.PatientFinderCreator)       {}
-func (s *stubWhatsAppSvc) SetProfessionalLister(_ service.ProfessionalLister)           {}
-func (s *stubWhatsAppSvc) SetSlotFinder(_ service.SlotFinder)                           {}
-func (s *stubWhatsAppSvc) SetNewAppointmentCreator(_ service.NewAppointmentCreator)     {}
-func (s *stubWhatsAppSvc) SetMessageQueue(_ service.MessageQueue)                       {}
-func (s *stubWhatsAppSvc) SetAIAgentService(_ agent.Service)                            {}
-func (s *stubWhatsAppSvc) SetClinicRepo(_ service.ClinicRepository)                     {}
-func (s *stubWhatsAppSvc) SetScheduledMessageRepo(_ service.ScheduledMessageRepository) {}
-func (s *stubWhatsAppSvc) SetDefaultDelayBetweenPatients(_ int)                         {}
-func (s *stubWhatsAppSvc) SetDebounceDelay(_ time.Duration)                             {}
-func (s *stubWhatsAppSvc) SetAudioTranscriber(_ transcriber.AudioTranscriber)           {}
+func (s *stubWhatsAppSvc) SetAppointmentFinder(_ service.AppointmentFinder)                   {}
+func (s *stubWhatsAppSvc) SetWaitlistHandler(_ service.WaitlistResponseHandler)               {}
+func (s *stubWhatsAppSvc) SetMessageLogService(_ service.MessageLogService)                   {}
+func (s *stubWhatsAppSvc) SetAppointmentUpdater(_ service.AppointmentStatusUpdater)           {}
+func (s *stubWhatsAppSvc) SetClassifier(_ classifier.MessageClassifier, _ float64)            {}
+func (s *stubWhatsAppSvc) SetSlotSuggester(_ service.SlotSuggester)                           {}
+func (s *stubWhatsAppSvc) SetAppointmentCreator(_ service.AppointmentCreator)                 {}
+func (s *stubWhatsAppSvc) SetSchedulingIntentRepo(_ service.SchedulingIntentRepository)       {}
+func (s *stubWhatsAppSvc) SetPatientFinderCreator(_ service.PatientFinderCreator)             {}
+func (s *stubWhatsAppSvc) SetProfessionalLister(_ service.ProfessionalLister)                 {}
+func (s *stubWhatsAppSvc) SetSlotFinder(_ service.SlotFinder)                                 {}
+func (s *stubWhatsAppSvc) SetNewAppointmentCreator(_ service.NewAppointmentCreator)           {}
+func (s *stubWhatsAppSvc) SetMessageQueue(_ service.MessageQueue)                             {}
+func (s *stubWhatsAppSvc) SetAIAgentService(_ agent.Service)                                  {}
+func (s *stubWhatsAppSvc) SetClinicRepo(_ service.ClinicRepository)                           {}
+func (s *stubWhatsAppSvc) SetScheduledMessageRepo(_ service.ScheduledMessageRepository)       {}
+func (s *stubWhatsAppSvc) SetDefaultDelayBetweenPatients(_ int)                               {}
+func (s *stubWhatsAppSvc) SetDebounceDelay(_ time.Duration)                                   {}
+func (s *stubWhatsAppSvc) SetAudioTranscriber(_ transcriber.AudioTranscriber)                 {}
 func (s *stubWhatsAppSvc) SetPatientAIPreferenceChecker(_ service.PatientAIPreferenceChecker) {}
-func (s *stubWhatsAppSvc) SetPatientEnsurer(_ service.PatientEnsurer)                        {}
+func (s *stubWhatsAppSvc) SetPatientEnsurer(_ service.PatientEnsurer)                         {}
 func (s *stubWhatsAppSvc) SetSystemLogService(_ systemlog_service.SystemLogService)           {}
 func (s *stubWhatsAppSvc) SetPlanGateChecker(_ service.PlanGateChecker)                       {}
+func (s *stubWhatsAppSvc) SetInstanceClinicResolver(_ service.InstanceClinicResolver)         {}
+func (s *stubWhatsAppSvc) SetSentMessageCache(_ service.SentMessageCache)                     {}
+func (s *stubWhatsAppSvc) SetConversationManager(_ conversation.Manager)                      {}
+func (s *stubWhatsAppSvc) SetHumanTakeoverTracker(_ service.HumanTakeoverTracker)             {}
+func (s *stubWhatsAppSvc) HandleOutgoingMessage(_ context.Context, _ uuid.UUID, _ *whatsapp_model.ParsedIncomingMessage) error {
+	return nil
+}
 
 // newTestRouter cria um router Gin com o handler e clinic_id injetados no contexto.
 func newTestRouter(h WhatsAppHandler, clinicID uuid.UUID) *gin.Engine {

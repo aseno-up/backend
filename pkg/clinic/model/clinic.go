@@ -87,6 +87,73 @@ type ClinicSettings struct {
 	AIMinDelayBetweenMessages *int                 `json:"ai_min_delay_between_messages,omitempty"`
 	AIMinDelayBetweenPatients *int                 `json:"ai_min_delay_between_patients,omitempty"`
 	AIBusinessHours           *BusinessHoursConfig `json:"ai_business_hours,omitempty"`
+
+	// Per-clinic AI tool toggles. nil means "use default (enabled)" so that
+	// existing clinics keep the original behavior after the field was introduced.
+	AIToolSchedule   *bool `json:"ai_tool_schedule,omitempty"`
+	AIToolConfirm    *bool `json:"ai_tool_confirm,omitempty"`
+	AIToolCancel     *bool `json:"ai_tool_cancel,omitempty"`
+	AIToolReschedule *bool `json:"ai_tool_reschedule,omitempty"`
+
+	// Canned reply sent when the AI detects an intent the clinic disabled.
+	// Empty falls back to a built-in default at the agent layer.
+	AIBlockedIntentReply string `json:"ai_blocked_intent_reply,omitempty"`
+
+	// Hours to pause the AI after a human from the clinic replies directly
+	// via the WhatsApp app. Nil uses the default (4h). <=0 disables the
+	// auto-pause and keeps the AI always on.
+	AIHumanTakeoverPauseHours *int `json:"ai_human_takeover_pause_hours,omitempty"`
+}
+
+// DefaultHumanTakeoverPauseHours is used when the clinic has no explicit value.
+const DefaultHumanTakeoverPauseHours = 4
+
+// GetHumanTakeoverPauseDuration returns how long the AI stays paused after a
+// human from the clinic replies directly. Returns 0 when the feature is
+// explicitly disabled (value <= 0).
+func (s *ClinicSettings) GetHumanTakeoverPauseDuration() time.Duration {
+	if s == nil || s.AIHumanTakeoverPauseHours == nil {
+		return time.Duration(DefaultHumanTakeoverPauseHours) * time.Hour
+	}
+	if *s.AIHumanTakeoverPauseHours <= 0 {
+		return 0
+	}
+	return time.Duration(*s.AIHumanTakeoverPauseHours) * time.Hour
+}
+
+// IsAIToolScheduleEnabled returns whether AI is allowed to schedule new
+// appointments for this clinic. Nil pointer defaults to true to keep existing
+// clinics behaving as before the flag was introduced.
+func (s *ClinicSettings) IsAIToolScheduleEnabled() bool {
+	if s == nil || s.AIToolSchedule == nil {
+		return true
+	}
+	return *s.AIToolSchedule
+}
+
+// IsAIToolConfirmEnabled returns whether AI is allowed to handle confirmations.
+func (s *ClinicSettings) IsAIToolConfirmEnabled() bool {
+	if s == nil || s.AIToolConfirm == nil {
+		return true
+	}
+	return *s.AIToolConfirm
+}
+
+// IsAIToolCancelEnabled returns whether AI is allowed to cancel appointments.
+func (s *ClinicSettings) IsAIToolCancelEnabled() bool {
+	if s == nil || s.AIToolCancel == nil {
+		return true
+	}
+	return *s.AIToolCancel
+}
+
+// IsAIToolRescheduleEnabled returns whether AI is allowed to reschedule
+// appointments. Independent from Cancel (older code coupled them).
+func (s *ClinicSettings) IsAIToolRescheduleEnabled() bool {
+	if s == nil || s.AIToolReschedule == nil {
+		return true
+	}
+	return *s.AIToolReschedule
 }
 
 // TableName returns the table name for GORM
@@ -193,6 +260,13 @@ type UpdateClinicSettingsRequest struct {
 	AIMinDelayBetweenMessages *int                 `json:"ai_min_delay_between_messages,omitempty"`
 	AIMinDelayBetweenPatients *int                 `json:"ai_min_delay_between_patients,omitempty"`
 	AIBusinessHours           *BusinessHoursConfig `json:"ai_business_hours,omitempty"`
+
+	AIToolSchedule            *bool   `json:"ai_tool_schedule,omitempty"`
+	AIToolConfirm             *bool   `json:"ai_tool_confirm,omitempty"`
+	AIToolCancel              *bool   `json:"ai_tool_cancel,omitempty"`
+	AIToolReschedule          *bool   `json:"ai_tool_reschedule,omitempty"`
+	AIBlockedIntentReply      *string `json:"ai_blocked_intent_reply,omitempty"`
+	AIHumanTakeoverPauseHours *int    `json:"ai_human_takeover_pause_hours,omitempty"`
 }
 
 // UpdateClinicRequest represents the request to update a clinic

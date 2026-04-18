@@ -349,3 +349,82 @@ func TestClinic_GetMinDelayBetweenPatients(t *testing.T) {
 func intPtr(i int) *int {
 	return &i
 }
+
+func boolPtr(b bool) *bool {
+	return &b
+}
+
+func TestClinicSettings_IsAITool_EnabledByDefault(t *testing.T) {
+	s := ClinicSettings{}
+	assert.True(t, s.IsAIToolScheduleEnabled(), "nil pointer must default to true for backwards compat")
+	assert.True(t, s.IsAIToolConfirmEnabled())
+	assert.True(t, s.IsAIToolCancelEnabled())
+	assert.True(t, s.IsAIToolRescheduleEnabled())
+}
+
+func TestClinicSettings_IsAITool_RespectsExplicitValues(t *testing.T) {
+	tests := []struct {
+		name   string
+		ptr    *bool
+		wantOn bool
+	}{
+		{"nil defaults to true", nil, true},
+		{"true stays true", boolPtr(true), true},
+		{"false stays false", boolPtr(false), false},
+	}
+	for _, tt := range tests {
+		t.Run("schedule: "+tt.name, func(t *testing.T) {
+			s := ClinicSettings{AIToolSchedule: tt.ptr}
+			assert.Equal(t, tt.wantOn, s.IsAIToolScheduleEnabled())
+		})
+		t.Run("confirm: "+tt.name, func(t *testing.T) {
+			s := ClinicSettings{AIToolConfirm: tt.ptr}
+			assert.Equal(t, tt.wantOn, s.IsAIToolConfirmEnabled())
+		})
+		t.Run("cancel: "+tt.name, func(t *testing.T) {
+			s := ClinicSettings{AIToolCancel: tt.ptr}
+			assert.Equal(t, tt.wantOn, s.IsAIToolCancelEnabled())
+		})
+		t.Run("reschedule: "+tt.name, func(t *testing.T) {
+			s := ClinicSettings{AIToolReschedule: tt.ptr}
+			assert.Equal(t, tt.wantOn, s.IsAIToolRescheduleEnabled())
+		})
+	}
+}
+
+func TestClinicSettings_GetHumanTakeoverPauseDuration(t *testing.T) {
+	tests := []struct {
+		name  string
+		hours *int
+		want  time.Duration
+	}{
+		{"nil uses default 4h", nil, 4 * time.Hour},
+		{"explicit 1h", intPtr(1), 1 * time.Hour},
+		{"explicit 24h", intPtr(24), 24 * time.Hour},
+		{"zero disables (returns 0)", intPtr(0), 0},
+		{"negative disables (returns 0)", intPtr(-1), 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := &ClinicSettings{AIHumanTakeoverPauseHours: tt.hours}
+			assert.Equal(t, tt.want, s.GetHumanTakeoverPauseDuration())
+		})
+	}
+}
+
+func TestClinicSettings_GetHumanTakeoverPauseDuration_NilReceiver(t *testing.T) {
+	var s *ClinicSettings
+	assert.Equal(t, 4*time.Hour, s.GetHumanTakeoverPauseDuration(),
+		"nil settings pointer must still return the default")
+}
+
+func TestClinicSettings_IsAITool_EachFlagIsIndependent(t *testing.T) {
+	s := ClinicSettings{
+		AIToolSchedule:   boolPtr(false),
+		AIToolReschedule: boolPtr(false),
+	}
+	assert.False(t, s.IsAIToolScheduleEnabled())
+	assert.False(t, s.IsAIToolRescheduleEnabled())
+	assert.True(t, s.IsAIToolConfirmEnabled(), "confirm unchanged (nil) must stay true")
+	assert.True(t, s.IsAIToolCancelEnabled(), "cancel unchanged (nil) must stay true")
+}

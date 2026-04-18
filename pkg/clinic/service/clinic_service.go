@@ -161,6 +161,25 @@ func (s *clinicService) Update(ctx context.Context, id uuid.UUID, req *model.Upd
 		if req.Settings.AIBusinessHours != nil {
 			clinic.Settings.AIBusinessHours = req.Settings.AIBusinessHours
 		}
+
+		if req.Settings.AIToolSchedule != nil {
+			clinic.Settings.AIToolSchedule = req.Settings.AIToolSchedule
+		}
+		if req.Settings.AIToolConfirm != nil {
+			clinic.Settings.AIToolConfirm = req.Settings.AIToolConfirm
+		}
+		if req.Settings.AIToolCancel != nil {
+			clinic.Settings.AIToolCancel = req.Settings.AIToolCancel
+		}
+		if req.Settings.AIToolReschedule != nil {
+			clinic.Settings.AIToolReschedule = req.Settings.AIToolReschedule
+		}
+		if req.Settings.AIBlockedIntentReply != nil {
+			clinic.Settings.AIBlockedIntentReply = *req.Settings.AIBlockedIntentReply
+		}
+		if req.Settings.AIHumanTakeoverPauseHours != nil {
+			clinic.Settings.AIHumanTakeoverPauseHours = req.Settings.AIHumanTakeoverPauseHours
+		}
 	}
 
 	// Save changes

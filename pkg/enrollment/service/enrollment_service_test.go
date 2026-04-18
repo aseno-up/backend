@@ -130,12 +130,16 @@ func (m *mockSPRepo) GetActivePlansForGeneration(_ context.Context, _ time.Time)
 func (m *mockSPRepo) GetAllActive(_ context.Context, _ uuid.UUID) ([]*sp_model.SessionPlan, error) {
 	return nil, nil
 }
-func (m *mockSPRepo) Update(_ context.Context, _ *sp_model.SessionPlan) error                   { return nil }
-func (m *mockSPRepo) UpdateStatus(_ context.Context, _, _ uuid.UUID, _ sp_model.PlanStatus) error { return nil }
-func (m *mockSPRepo) IncrementSessionsDone(_ context.Context, _, _ uuid.UUID) error              { return nil }
-func (m *mockSPRepo) UpdateLastGenerated(_ context.Context, _, _ uuid.UUID, _ time.Time) error   { return nil }
-func (m *mockSPRepo) Delete(_ context.Context, _, _ uuid.UUID) error                             { return nil }
-func (m *mockSPRepo) BulkCancel(_ context.Context, _ uuid.UUID, _ []uuid.UUID) error             { return nil }
+func (m *mockSPRepo) Update(_ context.Context, _ *sp_model.SessionPlan) error { return nil }
+func (m *mockSPRepo) UpdateStatus(_ context.Context, _, _ uuid.UUID, _ sp_model.PlanStatus) error {
+	return nil
+}
+func (m *mockSPRepo) IncrementSessionsDone(_ context.Context, _, _ uuid.UUID) error { return nil }
+func (m *mockSPRepo) UpdateLastGenerated(_ context.Context, _, _ uuid.UUID, _ time.Time) error {
+	return nil
+}
+func (m *mockSPRepo) Delete(_ context.Context, _, _ uuid.UUID) error                 { return nil }
+func (m *mockSPRepo) BulkCancel(_ context.Context, _ uuid.UUID, _ []uuid.UUID) error { return nil }
 
 // --- Helpers ---
 

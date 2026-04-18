@@ -7,6 +7,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/aseno/backend/internal/errors"
+	"github.com/aseno/backend/internal/phone"
 	"github.com/aseno/backend/pkg/pagination"
 	"github.com/aseno/backend/pkg/patient/model"
 )
@@ -154,11 +155,26 @@ func (r *patientRepository) BulkDelete(ctx context.Context, ids []uuid.UUID, cli
 	return nil
 }
 
-// GetByPhone retrieves a patient by phone number within a clinic
-func (r *patientRepository) GetByPhone(ctx context.Context, phone string, clinicID uuid.UUID) (*model.Patient, error) {
+// GetByPhone retrieves a patient by phone number within a clinic. Matches
+// regardless of stored format — strips non-digits from both the query input
+// and the stored values via Postgres regexp_replace, and tries both the
+// canonical 13-digit form (with "55" country code) and the local form
+// (without) to cover legacy records saved before canonicalization existed.
+func (r *patientRepository) GetByPhone(ctx context.Context, phoneInput string, clinicID uuid.UUID) (*model.Patient, error) {
+	canonical := phone.Canonicalize(phoneInput)
+	if canonical == "" {
+		// Empty input would match any patient with an empty phone column; bail early.
+		return nil, errors.ErrPatientNotFoundInstance
+	}
+	local := phone.LocalDigits(canonical)
+
 	var patient model.Patient
 	result := r.db.WithContext(ctx).
-		Where("(phone = ? OR whatsapp = ?) AND clinic_id = ? AND deleted_at IS NULL", phone, phone, clinicID).
+		Where(`(
+			regexp_replace(coalesce(phone, ''), '[^0-9]', '', 'g') IN (?, ?)
+			OR regexp_replace(coalesce(whatsapp, ''), '[^0-9]', '', 'g') IN (?, ?)
+		) AND clinic_id = ? AND deleted_at IS NULL`,
+			canonical, local, canonical, local, clinicID).
 		First(&patient)
 	if result.Error != nil {
 		if result.Error == gorm.ErrRecordNotFound {

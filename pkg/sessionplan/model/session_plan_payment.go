@@ -17,7 +17,7 @@ type SessionPlanPayment struct {
 	Amount          float64        `json:"amount" gorm:"type:decimal(10,2);not null"`
 	Discount        float64        `json:"discount" gorm:"type:decimal(10,2);default:0"`
 	Installments    int            `json:"installments" gorm:"default:1"`
-	ReferenceMonth  string         `json:"reference_month,omitempty" gorm:"size:7"`  // YYYY-MM for monthly
+	ReferenceMonth  string         `json:"reference_month,omitempty" gorm:"size:7"` // YYYY-MM for monthly
 	SessionDate     string         `json:"session_date,omitempty" gorm:"size:10"`   // YYYY-MM-DD for per_session group
 	Notes           string         `json:"notes" gorm:"type:text"`
 	PaidAt          time.Time      `json:"paid_at" gorm:"not null"`

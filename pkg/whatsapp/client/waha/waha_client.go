@@ -422,10 +422,8 @@ func ParseWebhookPayload(data []byte) (*model.ParsedIncomingMessage, error) {
 		return nil, nil
 	}
 
-	// Skip messages from ourselves
-	if payload.Payload.FromMe {
-		return nil, nil
-	}
+	// fromMe is returned to the service so it can distinguish our own echoes
+	// (cache hit) from a human takeover via the WhatsApp app.
 
 	// Extract phone number (remove @c.us suffix)
 	phone := payload.Payload.From

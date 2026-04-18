@@ -194,6 +194,10 @@ func (r *Registry) registerSlotManagementTools() {
 					Type:        genai.TypeString,
 					Description: "UUID of the professional. OMIT THIS PARAMETER to search across all professionals. MUST be a valid UUID from get_available_professionals result, never use names or invent values.",
 				},
+				"professional_name": {
+					Type:        genai.TypeString,
+					Description: "Alternativa ao professional_id quando você NÃO tem o UUID certo. Passe fragmento do nome (ex: 'hamilton', 'Dra. Ana') — case-insensitive substring match. Se houver exatamente 1 match, a tool resolve sozinha. Prefira este parâmetro quando em dúvida sobre o UUID.",
+				},
 				"date": {
 					Type:        genai.TypeString,
 					Description: "Start date in YYYY-MM-DD format. OMIT THIS PARAMETER to search from today automatically. Only provide if you need a specific future date. Never use past dates.",
@@ -213,6 +217,37 @@ func (r *Registry) registerSlotManagementTools() {
 
 // registerAppointmentManagementTools registers tools for managing appointments
 func (r *Registry) registerAppointmentManagementTools() {
+	// quick_schedule — shortcut for "marcar com X para Y dia Z hora" when the
+	// patient already provided everything. Picks the professional by name
+	// fragment (case-insensitive substring), validates the exact slot, and
+	// creates the appointment in one hop. No manual UUID juggling by the LLM.
+	r.register(&Tool{
+		Name:        "quick_schedule",
+		Description: "ATALHO: cria um agendamento direto quando o paciente já disse profissional (ou parte do nome), dia e hora em uma única mensagem. Ex: 'marcar com hamilton segunda 16h'. Use esta tool antes de get_available_professionals/get_available_slots quando o paciente for específico — evita listagem desnecessária. Retorna sucesso se único match e horário disponível; retorna lista de candidatos ou horários disponíveis se ambíguo/indisponível.",
+		Parameters: &genai.Schema{
+			Type:     genai.TypeObject,
+			Required: []string{"professional_name", "date", "start_time"},
+			Properties: map[string]*genai.Schema{
+				"professional_name": {
+					Type:        genai.TypeString,
+					Description: "Nome ou fragmento do nome do profissional (ex: 'hamilton', 'Dra. Ana'). Case-insensitive substring match. REQUIRED.",
+				},
+				"date": {
+					Type:        genai.TypeString,
+					Description: "Data no formato YYYY-MM-DD. Converta 'hoje', 'amanhã', 'segunda' etc para data absoluta antes. REQUIRED.",
+				},
+				"start_time": {
+					Type:        genai.TypeString,
+					Description: "Horário no formato HH:MM (24h). Ex: '16:00' para 4h da tarde. REQUIRED.",
+				},
+				"duration_minutes": {
+					Type:        genai.TypeInteger,
+					Description: "Duração em minutos. OMIT para usar padrão de 60 minutos.",
+				},
+			},
+		},
+	})
+
 	// create_appointment
 	r.register(&Tool{
 		Name:        "create_appointment",
@@ -223,7 +258,7 @@ func (r *Registry) registerAppointmentManagementTools() {
 			Properties: map[string]*genai.Schema{
 				"professional_id": {
 					Type:        genai.TypeString,
-					Description: "The UUID from the \"id\" field returned by get_available_professionals (e.g. \"c07523c1-44eb-4fc5-b445-207a65cbe91b\"). REQUIRED. MUST be a valid UUID in xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx format. NEVER pass names, text, or invented values.",
+					Description: "The UUID from the \"id\" field returned by get_available_professionals (e.g. \"<UUID_FROM_PROFESSIONALS_LIST>\"). REQUIRED. MUST be a valid UUID in xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx format. NEVER pass names, text, or invented values.",
 				},
 				"start_time": {
 					Type:        genai.TypeString,
@@ -250,7 +285,7 @@ func (r *Registry) registerAppointmentManagementTools() {
 			Properties: map[string]*genai.Schema{
 				"appointment_id": {
 					Type:        genai.TypeString,
-					Description: "UUID of the appointment (e.g. '7b8e3c2a-5f1d-4e9a-b3c4-1a2b3c4d5e6f'). OMIT THIS PARAMETER if there is only one pending appointment - system will auto-detect. MUST be valid UUID format.",
+					Description: "UUID of the appointment (e.g. '<UUID_FROM_APPOINTMENTS_LIST>'). OMIT THIS PARAMETER if there is only one pending appointment - system will auto-detect. MUST be valid UUID format.",
 				},
 			},
 		},
@@ -259,17 +294,57 @@ func (r *Registry) registerAppointmentManagementTools() {
 	// cancel_appointment
 	r.register(&Tool{
 		Name:        "cancel_appointment",
-		Description: "Cancela um agendamento do paciente",
+		Description: "Cancela um agendamento do paciente. Passe appointment_id se souber, OU passe time_filter quando o paciente disser o horário (ex: 'o das 17h') — isso evita listar tudo e pedir UUID ao paciente.",
 		Parameters: &genai.Schema{
 			Type: genai.TypeObject,
 			Properties: map[string]*genai.Schema{
 				"appointment_id": {
 					Type:        genai.TypeString,
-					Description: "UUID of the appointment (e.g. '7b8e3c2a-5f1d-4e9a-b3c4-1a2b3c4d5e6f'). OMIT THIS PARAMETER if there is only one future appointment - system will auto-detect. MUST be valid UUID format.",
+					Description: "UUID of the appointment. OMIT if not known. Prefer time_filter when the patient specified the time.",
+				},
+				"time_filter": {
+					Type:        genai.TypeString,
+					Description: "Horário que o paciente mencionou (HH:MM, ex: '17:00'). Se o paciente disse 'cancela o das 17h' passe '17:00' aqui; a tool filtra entre os agendamentos futuros e cancela automaticamente se houver exatamente 1 match. OMIT se paciente não deu o horário.",
 				},
 				"reason": {
 					Type:        genai.TypeString,
-					Description: "Cancellation reason. OMIT THIS PARAMETER if no specific reason was provided by the patient. Only include if patient explicitly states a reason.",
+					Description: "Cancellation reason. OMIT if no specific reason was provided by the patient.",
+				},
+			},
+		},
+	})
+
+	// quick_reschedule — shortcut when the patient gave new date + new time in
+	// a single message. Resolves the current appointment automatically (by
+	// time_filter or single-future-appt), validates the new slot, reschedules
+	// in one hop. Much simpler than reschedule_appointment which requires a
+	// known UUID upfront.
+	r.register(&Tool{
+		Name:        "quick_reschedule",
+		Description: "Tool UNIFICADA para todo o fluxo de remarcação. Chame SEMPRE que o paciente quiser remarcar, mesmo se só disse 'quero remarcar' sem mais nada — a tool retorna a lista de agendamentos pra você mostrar. Quando paciente dá novo dia+hora, a tool valida e remarca direto. Use em vez de perguntar 'qual dia?' às cegas.",
+		Parameters: &genai.Schema{
+			Type:     genai.TypeObject,
+			Required: []string{}, // all optional — tool decides what it needs
+			Properties: map[string]*genai.Schema{
+				"new_date": {
+					Type:        genai.TypeString,
+					Description: "Nova data no formato YYYY-MM-DD. OMIT se paciente ainda não disse — a tool vai retornar lista de agendamentos pra você mostrar e perguntar. Quando souber, chame de novo passando new_date + new_time.",
+				},
+				"new_time": {
+					Type:        genai.TypeString,
+					Description: "Novo horário HH:MM (ex: '10:00'). OMIT se paciente ainda não disse.",
+				},
+				"current_time_filter": {
+					Type:        genai.TypeString,
+					Description: "Horário do agendamento atual (HH:MM). Passe quando o paciente identificou qual remarcar (ex: 'o das 16h'). OMIT se só há 1 agendamento futuro.",
+				},
+				"appointment_id": {
+					Type:        genai.TypeString,
+					Description: "UUID do agendamento. OMIT e deixa a tool resolver sozinha — só passe se alguém já te deu o UUID explicitamente.",
+				},
+				"duration_minutes": {
+					Type:        genai.TypeInteger,
+					Description: "Duração em minutos. OMIT para usar padrão de 60.",
 				},
 			},
 		},
@@ -285,7 +360,7 @@ func (r *Registry) registerAppointmentManagementTools() {
 			Properties: map[string]*genai.Schema{
 				"appointment_id": {
 					Type:        genai.TypeString,
-					Description: "UUID of the appointment to reschedule (e.g. '7b8e3c2a-5f1d-4e9a-b3c4-1a2b3c4d5e6f'). REQUIRED. MUST be valid UUID format.",
+					Description: "UUID of the appointment to reschedule (e.g. '<UUID_FROM_APPOINTMENTS_LIST>'). REQUIRED. MUST be valid UUID format.",
 				},
 				"new_start_time": {
 					Type:        genai.TypeString,

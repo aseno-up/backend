@@ -62,11 +62,17 @@ type WorkerConfig struct {
 	ConversationMaxTurns    int
 	ConversationRedisTTL    time.Duration
 	ConversationPostgresTTL time.Duration
+	// ConversationPromptHistoryTurns = how many past turns (user+assistant
+	// mixed) are injected into the LLM prompt. Different from MaxTurns, which
+	// is the storage cap. Lower values reduce "memory-faulty" hallucination
+	// on cheaper models; higher values give better continuity on strong ones.
+	ConversationPromptHistoryTurns int
 
 	// AI Agent Feature Flags (gradual rollout)
 	AIAgentSchedulingEnabled bool
 	AIAgentConfirmEnabled    bool
 	AIAgentCancelEnabled     bool
+	AIAgentRescheduleEnabled bool
 	AIAgentRemindersEnabled  bool
 }
 
@@ -118,17 +124,19 @@ func NewWorkerConfig() *WorkerConfig {
 			"google/gemini-2.0-flash-lite-001",
 			"qwen/qwen-2.5-72b-instruct",
 		}),
-		AIAgentMaxTokens:        getEnvAsIntW("AI_AGENT_MAX_TOKENS", 2048),
-		AIAgentTemperature:      getEnvAsFloat32W("AI_AGENT_TEMPERATURE", 0.7),
-		AIAgentTimeout:          getEnvAsDurationW("AI_AGENT_TIMEOUT", 30*time.Second),
-		ConversationMaxTurns:    getEnvAsIntW("CONVERSATION_MAX_TURNS", 30),
-		ConversationRedisTTL:    getEnvAsDurationW("CONVERSATION_REDIS_TTL", 30*time.Minute),
-		ConversationPostgresTTL: getEnvAsDurationW("CONVERSATION_POSTGRES_TTL", 7*24*time.Hour),
+		AIAgentMaxTokens:               getEnvAsIntW("AI_AGENT_MAX_TOKENS", 2048),
+		AIAgentTemperature:             getEnvAsFloat32W("AI_AGENT_TEMPERATURE", 0.7),
+		AIAgentTimeout:                 getEnvAsDurationW("AI_AGENT_TIMEOUT", 30*time.Second),
+		ConversationMaxTurns:           getEnvAsIntW("CONVERSATION_MAX_TURNS", 30),
+		ConversationRedisTTL:           getEnvAsDurationW("CONVERSATION_REDIS_TTL", 30*time.Minute),
+		ConversationPostgresTTL:        getEnvAsDurationW("CONVERSATION_POSTGRES_TTL", 90*24*time.Hour),
+		ConversationPromptHistoryTurns: getEnvAsIntW("CONVERSATION_PROMPT_HISTORY_TURNS", 10),
 
 		// AI Agent Feature Flags (all disabled by default for gradual rollout)
 		AIAgentSchedulingEnabled: getEnvAsBoolW("AI_AGENT_SCHEDULING_ENABLED", false),
 		AIAgentConfirmEnabled:    getEnvAsBoolW("AI_AGENT_CONFIRM_ENABLED", false),
 		AIAgentCancelEnabled:     getEnvAsBoolW("AI_AGENT_CANCEL_ENABLED", false),
+		AIAgentRescheduleEnabled: getEnvAsBoolW("AI_AGENT_RESCHEDULE_ENABLED", false),
 		AIAgentRemindersEnabled:  getEnvAsBoolW("AI_AGENT_REMINDERS_ENABLED", false),
 	}
 }

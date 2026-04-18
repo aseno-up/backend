@@ -184,7 +184,7 @@ func (a *openRouterAgent) generateWithModel(ctx context.Context, req *AgentReque
 	systemPrompt := promptBuilder.Build()
 
 	// Build user prompt with conversation history
-	userPrompt := BuildUserPrompt(req.ConversationContext, req.UserMessage)
+	userPrompt := BuildUserPromptWithLimit(req.ConversationContext, req.UserMessage, req.HistoryTurns)
 
 	// Initialize messages with system prompt
 	messages := []openRouterMessage{

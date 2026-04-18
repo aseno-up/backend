@@ -70,8 +70,8 @@ func (e *notFoundErr) Error() string { return "not found" }
 
 // --- Helper ---
 
-func boolPtr(b bool) *bool      { return &b }
-func strPtr(s string) *string   { return &s }
+func boolPtr(b bool) *bool    { return &b }
+func strPtr(s string) *string { return &s }
 
 func createTestClinic(repo *mockClinicRepo) *model.Clinic {
 	clinic := &model.Clinic{

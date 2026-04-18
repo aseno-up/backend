@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/aseno/backend/internal/logger"
+	"github.com/aseno/backend/internal/phone"
 
 	"github.com/aseno/backend/pkg/whatsapp/model"
 	"github.com/google/uuid"
@@ -80,7 +81,10 @@ func (m *conversationManager) GetOrCreate(ctx context.Context, clinicID uuid.UUI
 		return conversation, nil
 	}
 
-	// Create new conversation
+	// Create new conversation. ExpiresAt uses the extended (Postgres) TTL —
+	// the short defaultTTL is for Redis cache validity only and treating it
+	// as the row expiry causes every conversation to expire within 30
+	// minutes, leading to duplicate rows per patient and loss of context.
 	conversation = &ConversationContext{
 		ID:             uuid.New(),
 		ClinicID:       clinicID,
@@ -92,7 +96,7 @@ func (m *conversationManager) GetOrCreate(ctx context.Context, clinicID uuid.UUI
 		Metadata:       map[string]interface{}{},
 		CreatedAt:      time.Now(),
 		UpdatedAt:      time.Now(),
-		ExpiresAt:      time.Now().Add(m.defaultTTL),
+		ExpiresAt:      time.Now().Add(m.extendedTTL),
 	}
 
 	if err := m.repo.Create(ctx, conversation); err != nil {
@@ -147,6 +151,13 @@ func (m *conversationManager) UpdateState(ctx context.Context, conversationID uu
 	logger.Printf("[Conversation Manager] Updated conversation %s state to %s (intent: %s)", conversationID, state, intent)
 
 	return m.repo.Update(ctx, conversation)
+}
+
+// CanonicalizePhone is a thin wrapper around internal/phone.Canonicalize kept
+// here so existing callers inside this package don't churn. New code should
+// import internal/phone directly.
+func CanonicalizePhone(p string) string {
+	return phone.Canonicalize(p)
 }
 
 // SetPendingAction sets a pending action in the conversation

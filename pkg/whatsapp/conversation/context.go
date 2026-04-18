@@ -270,14 +270,14 @@ func (r ToolCallResult) MarshalJSON() ([]byte, error) {
 
 // ToolCallLog represents a log of tool execution for monitoring
 type ToolCallLog struct {
-	ID             uuid.UUID              `json:"id" gorm:"type:uuid;primary_key;default:gen_random_uuid()"`
-	ConversationID uuid.UUID              `json:"conversation_id" gorm:"type:uuid;not null;index"`
-	ToolName       string                 `json:"tool_name" gorm:"type:varchar(100);not null;index"`
-	Parameters     ToolCallParameters     `json:"parameters" gorm:"type:jsonb"`
-	Result         ToolCallResult         `json:"result" gorm:"type:jsonb"`
-	Error          string                 `json:"error" gorm:"type:text"`
-	DurationMS     int                    `json:"duration_ms" gorm:"type:int"`
-	CreatedAt      time.Time              `json:"created_at" gorm:"index"`
+	ID             uuid.UUID          `json:"id" gorm:"type:uuid;primary_key;default:gen_random_uuid()"`
+	ConversationID uuid.UUID          `json:"conversation_id" gorm:"type:uuid;not null;index"`
+	ToolName       string             `json:"tool_name" gorm:"type:varchar(100);not null;index"`
+	Parameters     ToolCallParameters `json:"parameters" gorm:"type:jsonb"`
+	Result         ToolCallResult     `json:"result" gorm:"type:jsonb"`
+	Error          string             `json:"error" gorm:"type:text"`
+	DurationMS     int                `json:"duration_ms" gorm:"type:int"`
+	CreatedAt      time.Time          `json:"created_at" gorm:"index"`
 }
 
 // TableName returns the table name for GORM

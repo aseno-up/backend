@@ -60,8 +60,8 @@ func (m *mockGroupPlanRepo) GetByID(_ context.Context, _, _ uuid.UUID) (*session
 
 type mockGroupEnrollmentRepo struct {
 	enrollments      map[string]*enrollment_model.SessionPlanEnrollment // key: patientID
-	incrementCalled  map[string]bool                                   // key: enrollmentID
-	updateStatusArgs map[string]enrollment_model.EnrollmentStatus      // key: enrollmentID
+	incrementCalled  map[string]bool                                    // key: enrollmentID
+	updateStatusArgs map[string]enrollment_model.EnrollmentStatus       // key: enrollmentID
 }
 
 func newMockGroupEnrollmentRepo() *mockGroupEnrollmentRepo {

@@ -38,9 +38,11 @@ func (s *stubAIAgentService) ProcessMessage(_ context.Context, req *agent.Messag
 	}, nil
 }
 
-func (s *stubAIAgentService) ShouldUseAIAgent(_ model.MessageIntent) bool {
+func (s *stubAIAgentService) ShouldUseAIAgent(_ model.MessageIntent, _ *clinic_model.Clinic) bool {
 	return true
 }
+
+func (s *stubAIAgentService) SetPromptHistoryTurns(_ int) {}
 
 func (s *stubAIAgentService) callCount() int {
 	s.mu.Lock()
@@ -87,6 +89,9 @@ type stubMessageRepo struct{}
 
 func (r *stubMessageRepo) Create(_ context.Context, _ *model.Message) error { return nil }
 func (r *stubMessageRepo) GetByID(_ context.Context, _ uuid.UUID) (*model.Message, error) {
+	return nil, nil
+}
+func (r *stubMessageRepo) GetByExternalID(_ context.Context, _ string) (*model.Message, error) {
 	return nil, nil
 }
 func (r *stubMessageRepo) UpdateStatus(_ context.Context, _ uuid.UUID, _ model.MessageStatus) error {

@@ -11,6 +11,7 @@ import (
 
 	clinic_model "github.com/aseno/backend/pkg/clinic/model"
 	clinic_repository "github.com/aseno/backend/pkg/clinic/repository"
+	systemlog_model "github.com/aseno/backend/pkg/systemlog/model"
 	systemlog_service "github.com/aseno/backend/pkg/systemlog/service"
 	"github.com/aseno/backend/pkg/whatsapp/conversation"
 	"github.com/aseno/backend/pkg/whatsapp/model"
@@ -23,7 +24,13 @@ type Service interface {
 	ProcessMessage(ctx context.Context, req *MessageRequest) (*MessageResponse, error)
 
 	// ShouldUseAIAgent determines if AI agent should handle this message
-	ShouldUseAIAgent(intent model.MessageIntent) bool
+	// taking into account both the ops-level kill-switch (FeatureFlags) and
+	// the per-clinic tool configuration.
+	ShouldUseAIAgent(intent model.MessageIntent, clinic *clinic_model.Clinic) bool
+
+	// SetPromptHistoryTurns tunes the history window injected into the LLM
+	// prompt. Configured from env (CONVERSATION_PROMPT_HISTORY_TURNS).
+	SetPromptHistoryTurns(n int)
 }
 
 // MessageRequest represents a request to process a WhatsApp message
@@ -58,13 +65,25 @@ type aiAgentService struct {
 	clinicRepo                     clinic_repository.ClinicRepository
 	systemLogSvc                   systemlog_service.SystemLogService
 	defaultMinDelayBetweenMessages int
+	// promptHistoryTurns is how many past turns go into the LLM prompt.
+	// 0 means "use package default" (DefaultPromptHistoryTurns).
+	promptHistoryTurns int
 }
 
-// FeatureFlags holds feature enablement flags
+// SetPromptHistoryTurns configures the history window used when building
+// the LLM prompt. Wired from the worker config env var
+// CONVERSATION_PROMPT_HISTORY_TURNS in main.go.
+func (s *aiAgentService) SetPromptHistoryTurns(n int) {
+	s.promptHistoryTurns = n
+}
+
+// FeatureFlags holds feature enablement flags (ops-level kill-switch).
+// Per-clinic overrides can only tighten these, never widen them.
 type FeatureFlags struct {
 	SchedulingEnabled bool
 	ConfirmEnabled    bool
 	CancelEnabled     bool
+	RescheduleEnabled bool
 	RemindersEnabled  bool
 }
 
@@ -93,24 +112,50 @@ func NewService(
 	}
 }
 
-// ShouldUseAIAgent determines if AI agent should handle this message based on feature flags
-func (s *aiAgentService) ShouldUseAIAgent(intent model.MessageIntent) bool {
+// ShouldUseAIAgent determines if AI agent should handle this message.
+// The decision is an AND of two gates:
+//  1. Ops-level kill-switch (FeatureFlags) — global per deploy.
+//  2. Per-clinic config (clinic.Settings.AIToolXxx) — only tightens the above.
+//
+// Question/Unknown intents bypass the tool flags because the former is the
+// FAQ path and the latter lets the LLM re-classify or ask a clarification.
+func (s *aiAgentService) ShouldUseAIAgent(intent model.MessageIntent, clinic *clinic_model.Clinic) bool {
+	switch intent {
+	case model.MessageIntentQuestion, model.MessageIntentUnknown:
+		return true
+	}
+
+	var globalOn, clinicOn bool
 	switch intent {
 	case model.MessageIntentSchedule:
-		return s.featureFlags.SchedulingEnabled
+		globalOn = s.featureFlags.SchedulingEnabled
+		clinicOn = clinic == nil || clinic.Settings.IsAIToolScheduleEnabled()
 	case model.MessageIntentConfirm:
-		return s.featureFlags.ConfirmEnabled
+		globalOn = s.featureFlags.ConfirmEnabled
+		clinicOn = clinic == nil || clinic.Settings.IsAIToolConfirmEnabled()
 	case model.MessageIntentCancel:
-		return s.featureFlags.CancelEnabled
+		globalOn = s.featureFlags.CancelEnabled
+		clinicOn = clinic == nil || clinic.Settings.IsAIToolCancelEnabled()
 	case model.MessageIntentReschedule:
-		return s.featureFlags.CancelEnabled // Use same flag as cancel
-	case model.MessageIntentQuestion:
-		return true // Always use AI for questions if agent is enabled
-	case model.MessageIntentUnknown:
-		return true // Let AI figure out what the user wants
+		globalOn = s.featureFlags.RescheduleEnabled
+		clinicOn = clinic == nil || clinic.Settings.IsAIToolRescheduleEnabled()
 	default:
 		return false
 	}
+	return globalOn && clinicOn
+}
+
+// defaultBlockedIntentReply is sent when the AI identifies an intent the clinic
+// disabled — the message keeps the patient engaged while the clinic takes over.
+const defaultBlockedIntentReply = "Pode aguardar um minutinho? Alguém do nosso time vai te atender em breve."
+
+// ResolveBlockedIntentReply returns the clinic-configured canned reply, or the
+// built-in default when none was set.
+func ResolveBlockedIntentReply(s *clinic_model.ClinicSettings) string {
+	if s == nil || strings.TrimSpace(s.AIBlockedIntentReply) == "" {
+		return defaultBlockedIntentReply
+	}
+	return s.AIBlockedIntentReply
 }
 
 // ProcessMessage processes an incoming message using the AI agent
@@ -124,10 +169,53 @@ func (s *aiAgentService) ProcessMessage(ctx context.Context, req *MessageRequest
 		clinic = nil // Will use default settings
 	}
 
-	// Get or create conversation context
+	// Get or create conversation context — done before the intent gate so the
+	// canned-reply branch can still persist the exchange to conversation
+	// history (otherwise subsequent messages would arrive without context).
 	conv, err := s.conversationMgr.GetOrCreate(ctx, req.ClinicID, req.PatientPhone, req.PatientName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get/create conversation: %w", err)
+	}
+
+	// Intent-level gate: if the clinic (or global kill-switch) blocks this
+	// intent, reply with a canned message and skip the LLM + tool loop entirely.
+	// Question/Unknown always pass so FAQ keeps working for FAQ-only clinics.
+	if !s.ShouldUseAIAgent(req.Intent, clinic) {
+		var settings *clinic_model.ClinicSettings
+		if clinic != nil {
+			settings = &clinic.Settings
+		}
+		reply := ResolveBlockedIntentReply(settings)
+		logger.Printf("[AI Agent Service] Intent %s blocked by clinic config for %s — sending canned reply", req.Intent, req.ClinicID)
+
+		if err := s.conversationMgr.AddUserMessage(ctx, conv.ID, req.MessageText); err != nil {
+			logger.Printf("[AI Agent Service] Warning: failed to add user message on blocked intent: %v", err)
+		}
+		if err := s.conversationMgr.AddAssistantMessage(ctx, conv.ID, reply, nil); err != nil {
+			logger.Printf("[AI Agent Service] Warning: failed to add canned assistant message: %v", err)
+		}
+
+		if s.systemLogSvc != nil {
+			_ = s.systemLogSvc.Log(ctx, systemlog_service.SystemLogEntry{
+				ClinicID: &req.ClinicID,
+				Service:  "ai_agent",
+				Event:    "intent_blocked_by_clinic_config",
+				Status:   systemlog_model.LogStatusWarning,
+				Payload: map[string]interface{}{
+					"intent":          string(req.Intent),
+					"patient_phone":   req.PatientPhone,
+					"conversation_id": conv.ID.String(),
+				},
+			})
+		}
+		return &MessageResponse{
+			ResponseText: reply,
+			MessageType:  model.MessageTypeText,
+			Segments: []*model.MessageSegment{
+				{Content: reply, Type: model.SegmentTypeContent},
+			},
+			Latency: time.Since(start),
+		}, nil
 	}
 
 	// If the conversation has no patient linked yet, try to resolve it now.
@@ -174,6 +262,7 @@ func (s *aiAgentService) ProcessMessage(ctx context.Context, req *MessageRequest
 		ClinicName:          req.ClinicName,
 		MaxTokens:           2048,
 		Temperature:         0.7,
+		HistoryTurns:        s.promptHistoryTurns,
 	}
 	if clinic != nil {
 		if agentReq.ClinicName == "" {

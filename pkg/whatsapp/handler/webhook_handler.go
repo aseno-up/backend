@@ -212,6 +212,17 @@ func (h *whatsAppHandler) processWebhook(c *gin.Context, provider string) {
 		return
 	}
 
+	// fromMe events are outbound echoes — either our own send coming back via
+	// webhook or a human from the clinic typing directly in the WhatsApp app.
+	// The service decides which, and pauses the AI in the takeover case.
+	if parsed.IsFromMe {
+		if err := h.service.HandleOutgoingMessage(c.Request.Context(), conn.ClinicID, parsed); err != nil {
+			logger.Printf("Error handling outgoing message echo: %v", err)
+		}
+		c.JSON(http.StatusOK, gin.H{"status": "outbound_echo_processed"})
+		return
+	}
+
 	// Process the message
 	if err := h.service.HandleIncomingMessage(c.Request.Context(), conn.ClinicID, parsed); err != nil {
 		logger.Printf("Error handling incoming message: %v", err)

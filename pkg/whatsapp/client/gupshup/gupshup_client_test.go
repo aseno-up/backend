@@ -44,6 +44,12 @@ func (m *mockConnRepo) Deactivate(ctx context.Context, clinicID uuid.UUID) error
 func (m *mockConnRepo) CountActiveByClinicID(ctx context.Context, clinicID uuid.UUID) (int64, error) {
 	return 0, nil
 }
+func (m *mockConnRepo) GetClinicIDByInstance(ctx context.Context, instance string) (uuid.UUID, error) {
+	if m.conn != nil {
+		return m.conn.ClinicID, m.err
+	}
+	return uuid.Nil, m.err
+}
 
 func strPtr(s string) *string { return &s }
 

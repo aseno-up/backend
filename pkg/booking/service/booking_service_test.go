@@ -127,6 +127,9 @@ func (m *mockEmailSvc) SendBookingConfirmation(ctx context.Context, data *emailS
 func (m *mockEmailSvc) SendPortalEmailVerification(ctx context.Context, data *emailSvc.PortalEmailVerificationData) error {
 	return m.Called(ctx, data).Error(0)
 }
+func (m *mockEmailSvc) SendLeadIsca(ctx context.Context, data *emailSvc.LeadIscaEmailData) error {
+	return m.Called(ctx, data).Error(0)
+}
 
 type mockProcedureRepo struct{ mock.Mock }
 

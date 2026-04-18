@@ -21,6 +21,7 @@ type WhatsAppConnectionRepository interface {
 	HasAnyByClinicID(ctx context.Context, clinicID uuid.UUID) bool
 	UpsertInstance(ctx context.Context, clinicID uuid.UUID, instance string) error
 	CountActiveByClinicID(ctx context.Context, clinicID uuid.UUID) (int64, error)
+	GetClinicIDByInstance(ctx context.Context, instance string) (uuid.UUID, error)
 }
 
 // whatsAppConnectionRepository implements WhatsAppConnectionRepository
@@ -64,6 +65,18 @@ func (r *whatsAppConnectionRepository) GetActiveByClinicID(ctx context.Context, 
 		return nil, errors.ErrInternalInstance.WithError(result.Error)
 	}
 	return &conn, nil
+}
+
+// GetClinicIDByInstance returns just the clinic ID that owns the given
+// instance. Separate from GetByInstance so the WhatsApp service can use a
+// narrow interface for outbound-message clinic resolution without pulling in
+// the full connection row.
+func (r *whatsAppConnectionRepository) GetClinicIDByInstance(ctx context.Context, instance string) (uuid.UUID, error) {
+	conn, err := r.GetByInstance(ctx, instance)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	return conn.ClinicID, nil
 }
 
 // GetByInstance retrieves a clinic's active WhatsApp connection by instance name

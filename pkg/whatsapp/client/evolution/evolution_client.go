@@ -439,10 +439,9 @@ func ParseWebhookPayload(data []byte) (*model.ParsedIncomingMessage, error) {
 		return nil, errors.ErrInvalidPayloadInstance.WithError(err)
 	}
 
-	// Skip messages from ourselves
-	if payload.Data.Key.FromMe {
-		return nil, nil
-	}
+	// fromMe used to be dropped here; it is now returned so the service layer
+	// can decide whether the echo is our own outbound (cache hit) or a human
+	// takeover (clinic user typing via the WhatsApp app).
 
 	// Extract phone number (remove @s.whatsapp.net)
 	phone := payload.Data.Key.RemoteJid

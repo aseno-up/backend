@@ -199,7 +199,22 @@ func (b *SystemPromptBuilder) conversationFlowGuidelines() string {
    ✅ "quero marcar", "quero agendar", "preciso de consulta" → SIM, inicie
    ❌ "oi", "olá", "tudo bem?" → NÃO inicie agendamento, apenas responda educadamente
 
-   **Quando o paciente pedir para agendar, siga EXATAMENTE esta sequência:**
+   **⚡ ATALHO CIRÚRGICO (preferir sempre que aplicável):**
+   Se o paciente mandou profissional (ou parte do nome) + dia + hora em uma única mensagem, use quick_schedule DIRETO. Exemplos que se qualificam:
+   - "marcar com hamilton segunda 16h"
+   - "quero consulta com a thaiane amanhã 10h"
+   - "agenda pra Carla sexta 15:30"
+
+   Passe: professional_name (fragmento, ex: "hamilton"), date (YYYY-MM-DD), start_time (HH:MM).
+   A tool resolve o profissional, valida o horário e cria tudo em uma chamada. Trate os retornos assim:
+   - status "scheduled" → confirme os detalhes pro paciente
+   - status "ambiguous_professional" → pergunte qual dos candidatos (use os nomes do campo "candidates")
+   - status "professional_not_found" → informe que não achou e ofereça a lista de available_professionals
+   - status "not_available" → diga que o horário pedido não tá livre e mostre as alternativas do mesmo dia (available_same_day)
+
+   NÃO use quick_schedule se faltar qualquer dos 3: profissional, dia, hora. Aí vá pro fluxo longo abaixo.
+
+   **Fluxo longo (usar quando paciente NÃO deu tudo de uma vez):**
 
    a) Chame get_available_professionals (sem filtro de especialidade)
 
@@ -237,11 +252,21 @@ func (b *SystemPromptBuilder) conversationFlowGuidelines() string {
    Segunda, Terça, Quarta, Quinta, Sexta, Sábado, Domingo
 
    d) Após paciente escolher um horário, use create_appointment:
-      ⛔ O campo professional_id DEVE ser o UUID (ex: "c07523c1-44eb-4fc5-b445-207a65cbe91b") retornado no campo "id" de get_available_professionals.
+      ⛔ O campo professional_id DEVE ser o UUID (ex: "<UUID_REAL_DO_PROFISSIONAL>") retornado no campo "id" de get_available_professionals.
       ⛔ NUNCA passe nomes, textos ou strings inventadas como professional_id. APENAS o UUID do campo "id".
       ⛔ O campo start_time DEVE ser o timestamp EXATO retornado por get_available_slots (ex: "2026-04-10T10:00:00-03:00").
       - Se o paciente disse "qualquer um", escolha o PRIMEIRO profissional que tem o horário pedido.
       - Consulte os resultados anteriores de get_available_professionals para obter o UUID correto.
+
+   ⚠️ **REGRA OBRIGATÓRIA — Paciente pediu horário ESPECÍFICO que não apareceu nos resultados em cache:**
+   Exemplo: você mostrou "Hamilton segunda 09:00 e 10:00" antes, e agora paciente diz "quero 16h segunda com Hamilton". Esse horário não está nos resultados anteriores — mas pode existir no agenda real! A tool get_available_slots só retorna uma AMOSTRA (até 5 por dia), não a lista completa.
+
+   NUNCA responda "não tem esse horário" baseado apenas no histórico anterior. Sempre que o paciente pedir um horário específico que NÃO aparece nos resultados em cache:
+   1. Chame get_available_slots NOVAMENTE com o professional_id e o date do dia pedido (formato YYYY-MM-DD). A nova chamada pode trazer horários diferentes da amostra anterior.
+   2. Se o horário pedido aparecer agora → crie o agendamento direto.
+   3. Se ainda não aparecer → aí sim informe que não está disponível E liste os que apareceram dessa vez como alternativa.
+
+   Mesma regra se o paciente responder coisas como "e 14h? e 16h? e 17h?" — chame a tool de novo, não adivinhe pelo histórico.
 
    e) Confirme os detalhes do agendamento criado
 
@@ -252,15 +277,28 @@ func (b *SystemPromptBuilder) conversationFlowGuidelines() string {
    - Confirme a ação com uma mensagem positiva
 
 3. **Cancelamento (cancel):**
-   - Use get_patient_appointments para encontrar agendamentos futuros
-   - Use cancel_appointment
-   - Seja empático e ofereça reagendar se fizer sentido
+   - **Prefira chamar cancel_appointment direto, SEM get_patient_appointments antes**:
+     * Se o paciente disse o horário ("cancela o das 17h") → passe time_filter="17:00". A tool filtra sozinha.
+     * Se o paciente não especificou E só há 1 agendamento futuro → cancel_appointment sem argumentos (auto-detect).
+     * Se houver múltiplos E paciente não especificou → a tool retorna lista com displays legíveis; apresente ao paciente usando os 'display', NUNCA mostre IDs/UUIDs.
+   - get_patient_appointments só é pra QUESTION intent ("quais consultas eu tenho?"), não pra cancelar.
+   - Seja empático e ofereça reagendar se fizer sentido.
 
 4. **Remarcação (reschedule):**
-   - Identifique qual agendamento remarcar
-   - Busque novos horários com get_available_slots
-   - Use reschedule_appointment com novo horário
-   - Confirme a remarcação
+   - **SEMPRE chame quick_reschedule primeiro**, mesmo se o paciente só disse "quero remarcar". A tool é inteligente e retorna os estados possíveis — você decide o texto baseado no retorno.
+   - Exemplos:
+     * "quero remarcar" → quick_reschedule() — tool retorna lista de agendamentos, você pergunta qual e pra quando.
+     * "remarca o das 16h" → quick_reschedule(current_time_filter="16:00") — tool retorna "needs_new_slot", você pergunta pra quando.
+     * "remarca pra quarta 10h" → quick_reschedule(new_date="2026-04-22", new_time="10:00") — se há só 1 agendamento futuro, resolve e remarca.
+     * "remarca o das 16h pra quarta 10h" → quick_reschedule(new_date, new_time, current_time_filter="16:00") — fluxo ideal, 1 hop.
+   - Retornos e o que responder:
+     * "rescheduled" → confirme pro paciente o novo horário (use campo 'display').
+     * "ambiguous_appointment" → liste os agendamentos usando 'display' e pergunte qual remarcar E para quando; NUNCA mostre IDs.
+     * "needs_new_slot" → liste o agendamento atual e pergunte pra qual dia e hora remarcar.
+     * "no_current_appointment" → informe que o paciente não tem agendamento futuro.
+     * "not_available" → informe que o novo slot não tá livre e mostre alternativas (available_same_day).
+   - **NUNCA pergunte "pra qual dia?" às cegas sem chamar quick_reschedule primeiro** — senão você não tem contexto dos agendamentos dele.
+   - reschedule_appointment só se você já tiver o appointment_id exato na mão (caso raro).
 
 5. **Perguntas (question):**
    - Use get_clinic_info para informações da clínica
@@ -295,6 +333,27 @@ func (b *SystemPromptBuilder) toolUsageGuidelines() string {
 - professional_id DEVE ser um UUID real (formato: "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx") vindo do campo "id" de get_available_professionals. NUNCA passe nomes, strings ou valores inventados.
 - Se ferramenta retornar lista vazia ou erro, NÃO invente dados fictícios
 - Quando ferramentas falharem, informe o problema e ofereça alternativas
+
+🚨 **PROIBIDO AFIRMAR AÇÃO SEM TER CHAMADO A TOOL NO MESMO TURNO:**
+É PROIBIDO responder ao paciente que uma ação foi/está sendo executada se você NÃO chamou a tool correspondente naquele mesmo turno.
+
+Exemplos do que é PROIBIDO (você está mentindo pro paciente):
+- "Cancelando o agendamento..." sem ter chamado cancel_appointment no mesmo turno
+- "Agendamento confirmado" sem ter chamado confirm_appointment/quick_schedule no mesmo turno
+- "Remarcado para sexta" sem ter chamado reschedule_appointment no mesmo turno
+- "Consulta agendada" sem ter chamado create_appointment/quick_schedule no mesmo turno
+
+Regra: se sua resposta contém verbos de ação no passado ou gerúndio sobre agendamentos ("cancelado", "confirmado", "agendado", "remarcado", "cancelando", "confirmando"), você DEVE ter chamado a tool apropriada nesse mesmo turno. Se não chamou, você está alucinando — chame a tool PRIMEIRO, depois responda.
+
+Se por algum motivo não chamou a tool (ex: faltou info do paciente), NÃO afirme que a ação foi feita. Pergunte o que falta ou informe o problema.
+
+⚠️ **DADOS DO HISTÓRICO SÃO SEMPRE CONSIDERADOS STALE:**
+O histórico que você recebe contém texto de respostas suas anteriores, incluindo horários, listas de profissionais, etc. ESSES DADOS PODEM ESTAR DESATUALIZADOS:
+- Um horário "09:00 disponível" pode ter sido agendado depois
+- Uma lista de profissionais pode estar obsoleta
+- IDs e timestamps do texto do histórico NÃO devem ser reusados em tool calls
+
+**Regra de ouro:** antes de AFIRMAR algo específico pro paciente (horário existe, profissional atende tal dia, etc), chame a tool relevante NESTE turno. Não confie em "eu já sei porque disse antes". Tools são baratas, frustração do paciente é cara.
 
 **⚠️ QUANDO FERRAMENTAS FALHAREM OU RETORNAREM VAZIO:**
 - NÃO invente nomes de profissionais, horários ou dados
@@ -418,18 +477,40 @@ Aplicar também para: lista de profissionais, de especialidades, horários de tr
 `, weekdaysPT[currentTime.Weekday()], currentTime.Format("02/01/2006 15:04"), daysRef, b.clinicName, b.clinicName)
 }
 
-// BuildUserPrompt builds the user message with conversation history
+// BuildUserPrompt builds the user message with conversation history.
+//
+// The history window is kept intentionally short (10 turns = ~5 ida-e-voltas)
+// and wrapped in an explicit staleness warning. Cheaper models treat anything
+// in the assistant's past text as ground truth and stop calling tools — e.g.
+// "Hamilton tem 09:00 e 10:00" from a previous turn becomes a memorized
+// "fact" even after the state changes (new appointments, different day,
+// etc.). The warning pushes the model to re-validate via tools instead of
+// reusing stale textual claims. Tool-layer mitigations (quick_schedule,
+// professional_name fallback, UUID validation) catch the residual cases.
+// DefaultPromptHistoryTurns is used when the caller passes 0 or a negative
+// value. 10 turns ≈ 5 ida-e-voltas — balanço decente entre contexto e
+// "memória falsa" em modelos mais baratos.
+const DefaultPromptHistoryTurns = 10
+
 func BuildUserPrompt(ctx *conversation.ConversationContext, currentMessage string) string {
+	return BuildUserPromptWithLimit(ctx, currentMessage, DefaultPromptHistoryTurns)
+}
+
+// BuildUserPromptWithLimit is the configurable variant — prefer this at the
+// wiring layer so the history window can be tuned via env (CONVERSATION_PROMPT_HISTORY_TURNS).
+func BuildUserPromptWithLimit(ctx *conversation.ConversationContext, currentMessage string, maxHistoryTurns int) string {
 	var prompt strings.Builder
 
-	// Add conversation history (last few turns for context)
-	if len(ctx.History) > 0 {
-		prompt.WriteString("Histórico da conversa:\n")
+	if maxHistoryTurns <= 0 {
+		maxHistoryTurns = DefaultPromptHistoryTurns
+	}
 
-		// Show last 5 turns (or less)
+	if len(ctx.History) > 0 {
+		prompt.WriteString("⚠️ HISTÓRICO RECENTE (apenas contexto geral — horários/IDs citados podem estar DESATUALIZADOS após agendamentos/cancelamentos/mudanças. Sempre re-valide dados específicos com as tools antes de prometer algo ao paciente):\n")
+
 		start := 0
-		if len(ctx.History) > 5 {
-			start = len(ctx.History) - 5
+		if len(ctx.History) > maxHistoryTurns {
+			start = len(ctx.History) - maxHistoryTurns
 		}
 
 		for _, turn := range ctx.History[start:] {

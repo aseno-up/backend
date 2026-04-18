@@ -16,6 +16,9 @@ type AgentRequest struct {
 	ClinicFAQ           string
 	MaxTokens           int
 	Temperature         float32
+	// HistoryTurns limits how many past turns are injected into the prompt.
+	// 0 uses the package default (DefaultPromptHistoryTurns = 10).
+	HistoryTurns int
 }
 
 // AgentResponse represents the agent's response
