@@ -86,6 +86,9 @@ func (m *mockCalendarAppointmentRepo) Delete(_ context.Context, _, _ uuid.UUID) 
 func (m *mockCalendarAppointmentRepo) DeleteCascade(_ context.Context, _, _ uuid.UUID, _ bool) error {
 	return nil
 }
+func (m *mockCalendarAppointmentRepo) SoftDeleteAsCanceledException(_ context.Context, _, _ uuid.UUID, _ bool) error {
+	return nil
+}
 func (m *mockCalendarAppointmentRepo) GetDeletePreview(_ context.Context, _, _ uuid.UUID) (*appointment_model.AppointmentDeletePreview, error) {
 	return &appointment_model.AppointmentDeletePreview{}, nil
 }
@@ -239,6 +242,74 @@ func TestCalendarFacade_ExcludesVirtualForCancelledExceptionAppointment(t *testi
 
 	assert.Equal(t, 0, virtualCountForMonday, "Should NOT render virtual event for a cancelled exception date")
 	assert.Equal(t, 1, realCountForMonday, "Should show the cancelled exception as a real event")
+}
+
+// Regression: a deleted session-plan appointment is stored as a cancelled
+// exception with deleted_at set (a "tombstone"). Without the hide-and-suppress
+// behavior, the tombstone either rendered on the calendar (looking like a
+// ghost cancelled event) or — if it was hard-deleted instead — the virtual
+// occurrence came back.
+func TestCalendarFacade_HidesDeletedTombstoneButStillSuppressesVirtual(t *testing.T) {
+	clinicID := uuid.New()
+	profID := uuid.New()
+	planID := uuid.New()
+
+	monday := time.Date(2026, 4, 6, 9, 0, 0, 0, time.UTC)
+	dtstart := monday
+
+	plan := &model.SessionPlan{
+		ID:             planID,
+		ClinicID:       clinicID,
+		Status:         model.PlanStatusActive,
+		Type:           model.PlanTypeIndividual,
+		TotalSessions:  10,
+		SessionsDone:   3,
+		ProfessionalID: &profID,
+		PatientID:      uuid.New(),
+		RRule:          "FREQ=WEEKLY;BYDAY=MO",
+		DtStart:        &dtstart,
+		DurationMins:   50,
+		Title:          "Fisio",
+	}
+
+	// A deleted session-plan appointment: cancelled exception + deleted_at set.
+	deletedAt := monday.Add(time.Hour)
+	tombstone := &appointment_model.Appointment{
+		ID:             uuid.New(),
+		ClinicID:       clinicID,
+		SessionPlanID:  &planID,
+		ProfessionalID: profID,
+		StartTime:      monday,
+		EndTime:        monday.Add(50 * time.Minute),
+		Status:         appointment_model.AppointmentStatusCanceled,
+		IsException:    true,
+		OriginalDate:   &monday,
+		DeletedAt:      &deletedAt,
+	}
+
+	planRepo := &mockCalendarPlanRepo{plans: []*model.SessionPlan{plan}}
+	aptRepo := &mockCalendarAppointmentRepo{appointments: []*appointment_model.Appointment{tombstone}}
+	enrollRepo := &mockCalendarEnrollmentRepo{}
+
+	facade := NewCalendarFacade(planRepo, aptRepo, enrollRepo)
+
+	events, err := facade.GetCalendarEvents(context.Background(), clinicID, &profID, monday, monday.AddDate(0, 0, 7))
+	require.NoError(t, err)
+
+	virtualCountForMonday := 0
+	realCountForMonday := 0
+	for _, e := range events {
+		if e.StartTime.Format("2006-01-02") == monday.Format("2006-01-02") {
+			if e.IsVirtual {
+				virtualCountForMonday++
+			} else {
+				realCountForMonday++
+			}
+		}
+	}
+
+	assert.Equal(t, 0, virtualCountForMonday, "Virtual occurrence must be suppressed by the tombstone — otherwise deleted session-plan appointments 'come back'")
+	assert.Equal(t, 0, realCountForMonday, "Tombstone must NOT render as a real event — the user deleted it and expects it gone")
 }
 
 func TestCalendarFacade_DayTimesProducesDifferentTimesPerDay(t *testing.T) {

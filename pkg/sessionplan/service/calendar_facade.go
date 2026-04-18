@@ -54,10 +54,19 @@ func (f *calendarFacade) GetCalendarEvents(ctx context.Context, clinicID uuid.UU
 	materializedByPlan := make(map[string]map[string]bool) // planID -> date -> true
 
 	for _, apt := range realAppointments {
-		event := realAppointmentToEvent(apt)
-		events = append(events, event)
+		// Soft-deleted cancelled exceptions are suppression-only tombstones
+		// (the user deleted the appointment and expects it gone). They must
+		// still populate the materialization map so the RRULE does not
+		// re-materialize the slot, but they must NOT render as calendar
+		// events.
+		isTombstone := apt.DeletedAt != nil && apt.IsException && apt.Status == appointment_model.AppointmentStatusCanceled
+		if !isTombstone {
+			event := realAppointmentToEvent(apt)
+			events = append(events, event)
+		}
 
-		// Track materialized dates per session plan
+		// Track materialized dates per session plan (tombstones included —
+		// that is the whole point of keeping the row around).
 		if apt.SessionPlanID != nil {
 			planID := apt.SessionPlanID.String()
 			if materializedByPlan[planID] == nil {

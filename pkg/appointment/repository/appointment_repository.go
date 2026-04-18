@@ -22,6 +22,13 @@ type AppointmentRepository interface {
 	Update(ctx context.Context, appointment *model.Appointment) error
 	Delete(ctx context.Context, id, clinicID uuid.UUID) error
 	DeleteCascade(ctx context.Context, id, clinicID uuid.UUID, deletePayments bool) error
+	// SoftDeleteAsCanceledException marks a session-plan appointment as a
+	// cancelled-exception tombstone (status=canceled, is_exception=true,
+	// deleted_at set) so the CalendarFacade keeps suppressing its virtual
+	// occurrence. Used instead of a hard delete for appointments linked to a
+	// session plan — otherwise the RRULE re-materializes the slot and the
+	// appointment appears to "come back".
+	SoftDeleteAsCanceledException(ctx context.Context, id, clinicID uuid.UUID, deletePayments bool) error
 	GetDeletePreview(ctx context.Context, id, clinicID uuid.UUID) (*model.AppointmentDeletePreview, error)
 	CheckConflict(ctx context.Context, clinicID, professionalID uuid.UUID, start, end time.Time, excludeID *uuid.UUID) (bool, error)
 	GetByPatient(ctx context.Context, patientID, clinicID uuid.UUID, limit int) ([]*model.Appointment, error)
@@ -254,8 +261,17 @@ func (r *appointmentRepository) GetByDateRange(ctx context.Context, clinicID uui
 	return appointments, nil
 }
 
-// GetByDateRangeWithExceptions retrieves appointments in range, including cancelled ones
-// that are exceptions (is_exception=true). Used by CalendarFacade to suppress virtual events.
+// GetByDateRangeWithExceptions retrieves appointments in range, including
+// cancelled exceptions. Used by CalendarFacade to merge real appointments with
+// virtual RRULE occurrences. Three categories of rows are returned:
+//
+//   - Non-deleted, non-cancelled appointments (the normal case).
+//   - Non-deleted cancelled exceptions — rendered on the calendar as cancelled
+//     entries AND used to suppress the virtual occurrence at that date.
+//   - Soft-deleted cancelled exceptions ("tombstones") — NOT rendered, but
+//     still used by the facade to suppress the virtual occurrence. This is
+//     what prevents a deleted session-plan appointment from "coming back" as a
+//     virtual event.
 func (r *appointmentRepository) GetByDateRangeWithExceptions(ctx context.Context, clinicID uuid.UUID, start, end time.Time, professionalID *uuid.UUID) ([]*model.Appointment, error) {
 	var appointments []*model.Appointment
 
@@ -264,11 +280,15 @@ func (r *appointmentRepository) GetByDateRangeWithExceptions(ctx context.Context
 		Preload("Professional").
 		Preload("Procedures.Procedure", func(db *gorm.DB) *gorm.DB { return db.Unscoped() }).
 		Preload("Specialties").
-		Where("clinic_id = ? AND deleted_at IS NULL", clinicID).
+		Where("clinic_id = ?", clinicID).
 		Where("start_time >= ? AND start_time < ?", start, end).
-		Where("status NOT IN (?) OR (is_exception = true AND status = ?)",
+		Where(
+			"(deleted_at IS NULL AND (status NOT IN (?) OR (is_exception = true AND status = ?)))"+
+				" OR (deleted_at IS NOT NULL AND is_exception = true AND status = ?)",
 			[]model.AppointmentStatus{model.AppointmentStatusCanceled},
-			model.AppointmentStatusCanceled)
+			model.AppointmentStatusCanceled,
+			model.AppointmentStatusCanceled,
+		)
 
 	if professionalID != nil {
 		query = query.Where("professional_id = ?", *professionalID)
@@ -382,6 +402,59 @@ func (r *appointmentRepository) DeleteCascade(ctx context.Context, id, clinicID 
 		if err := tx.Where("id = ? AND clinic_id = ?", id, clinicID).
 			Delete(&model.Appointment{}).Error; err != nil {
 			return errors.ErrInternalInstance.WithError(err)
+		}
+		return nil
+	})
+}
+
+// SoftDeleteAsCanceledException marks the appointment as a tombstone (cancelled
+// exception + deleted_at set) so the CalendarFacade suppresses the virtual
+// occurrence at the original date. This is used for session-plan appointments,
+// where a hard delete would erase the record and the RRULE would re-render the
+// same slot on the next calendar fetch. Payments are hard-deleted only when
+// the caller opts in via deletePayments.
+func (r *appointmentRepository) SoftDeleteAsCanceledException(ctx context.Context, id, clinicID uuid.UUID, deletePayments bool) error {
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var apt model.Appointment
+		if err := tx.Where("id = ? AND clinic_id = ? AND deleted_at IS NULL", id, clinicID).First(&apt).Error; err != nil {
+			if err == gorm.ErrRecordNotFound {
+				return errors.ErrAppointmentNotFoundInstance
+			}
+			return errors.ErrInternalInstance.WithError(err)
+		}
+
+		now := time.Now()
+		updates := map[string]interface{}{
+			"status":       model.AppointmentStatusCanceled,
+			"is_exception": true,
+			"canceled_at":  now,
+			"deleted_at":   now,
+		}
+		// Preserve the original RRULE date if this appointment was already
+		// rescheduled once; otherwise the current StartTime is the original.
+		if apt.OriginalDate == nil {
+			originalStart := apt.StartTime
+			updates["original_date"] = originalStart
+		}
+
+		if err := tx.Model(&model.Appointment{}).
+			Where("id = ? AND clinic_id = ?", id, clinicID).
+			Updates(updates).Error; err != nil {
+			return errors.ErrInternalInstance.WithError(err)
+		}
+
+		// appointment_procedures are join rows tied to this specific
+		// appointment; drop them so the same procedure slot can be re-used
+		// if the plan rebuilds a fresh occurrence for that date later.
+		if err := tx.Where("appointment_id = ?", id).Delete(&model.AppointmentProcedure{}).Error; err != nil {
+			return errors.ErrInternalInstance.WithError(err)
+		}
+
+		if deletePayments {
+			if err := tx.Where("appointment_id = ? AND clinic_id = ?", id, clinicID).
+				Delete(&model.AppointmentPayment{}).Error; err != nil {
+				return errors.ErrInternalInstance.WithError(err)
+			}
 		}
 		return nil
 	})

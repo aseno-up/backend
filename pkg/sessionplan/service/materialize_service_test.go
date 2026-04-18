@@ -92,6 +92,9 @@ func (m *mockMaterializeAppointmentRepo) Delete(_ context.Context, _, _ uuid.UUI
 func (m *mockMaterializeAppointmentRepo) DeleteCascade(_ context.Context, _, _ uuid.UUID, _ bool) error {
 	return nil
 }
+func (m *mockMaterializeAppointmentRepo) SoftDeleteAsCanceledException(_ context.Context, _, _ uuid.UUID, _ bool) error {
+	return nil
+}
 func (m *mockMaterializeAppointmentRepo) GetDeletePreview(_ context.Context, _, _ uuid.UUID) (*appointment_model.AppointmentDeletePreview, error) {
 	return &appointment_model.AppointmentDeletePreview{}, nil
 }

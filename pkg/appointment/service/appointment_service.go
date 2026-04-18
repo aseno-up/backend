@@ -732,7 +732,21 @@ func (s *appointmentService) Update(ctx context.Context, id, clinicID uuid.UUID,
 // specific appointment. appointment_payments are kept by default — they are
 // part of the financial history — and are only removed when the caller
 // explicitly opts in via deletePayments.
+//
+// Session-plan appointments are NOT hard-deleted: they are converted into a
+// suppression tombstone (cancelled exception + deleted_at set) so the
+// CalendarFacade keeps hiding the virtual occurrence at that slot. A hard
+// delete would erase the record entirely and the RRULE would re-materialize
+// the same date on the next calendar fetch — making the appointment appear to
+// "come back" after the user asked to delete it.
 func (s *appointmentService) Delete(ctx context.Context, id, clinicID uuid.UUID, deletePayments bool) error {
+	apt, err := s.repo.GetByID(ctx, id, clinicID)
+	if err != nil {
+		return err
+	}
+	if apt.SessionPlanID != nil {
+		return s.repo.SoftDeleteAsCanceledException(ctx, id, clinicID, deletePayments)
+	}
 	return s.repo.DeleteCascade(ctx, id, clinicID, deletePayments)
 }
 

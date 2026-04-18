@@ -17,10 +17,13 @@ import (
 // --- Minimal mock repository ---
 
 type mockAppointmentRepo struct {
-	appointment  *model.Appointment
-	hasConflict  bool
-	conflictErr  error
-	updateCalled bool
+	appointment               *model.Appointment
+	hasConflict               bool
+	conflictErr               error
+	updateCalled              bool
+	hardDeleteCalled          bool
+	tombstoneCalled           bool
+	tombstoneDeletePaymentArg bool
 }
 
 func (m *mockAppointmentRepo) GetByID(_ context.Context, id, _ uuid.UUID) (*model.Appointment, error) {
@@ -54,6 +57,12 @@ func (m *mockAppointmentRepo) GetByDay(_ context.Context, _ uuid.UUID, _ time.Ti
 }
 func (m *mockAppointmentRepo) Delete(_ context.Context, _, _ uuid.UUID) error { return nil }
 func (m *mockAppointmentRepo) DeleteCascade(_ context.Context, _, _ uuid.UUID, _ bool) error {
+	m.hardDeleteCalled = true
+	return nil
+}
+func (m *mockAppointmentRepo) SoftDeleteAsCanceledException(_ context.Context, _, _ uuid.UUID, deletePayments bool) error {
+	m.tombstoneCalled = true
+	m.tombstoneDeletePaymentArg = deletePayments
 	return nil
 }
 func (m *mockAppointmentRepo) GetDeletePreview(_ context.Context, _, _ uuid.UUID) (*model.AppointmentDeletePreview, error) {
@@ -177,6 +186,43 @@ type mockSessionPlanHandler struct {
 func (m *mockSessionPlanHandler) OnAppointmentCompleted(_ context.Context, _, _ uuid.UUID) error {
 	m.called = true
 	return nil
+}
+
+// Regression: deleting an appointment that belongs to a session plan must leave
+// a suppression tombstone instead of hard-deleting. Hard delete removes the
+// record entirely and the CalendarFacade re-materializes the virtual occurrence
+// at the same slot on the next fetch — making the appointment appear to "come
+// back" after the user asked to delete it.
+func TestDelete_SessionPlanAppointmentSoftDeletesAsTombstone(t *testing.T) {
+	planID := uuid.New()
+	apt := newAppointment(model.AppointmentStatusPending)
+	apt.SessionPlanID = &planID
+
+	repo := &mockAppointmentRepo{appointment: apt}
+	svc := buildService(repo)
+
+	err := svc.Delete(context.Background(), apt.ID, apt.ClinicID, true)
+	require.NoError(t, err)
+
+	assert.True(t, repo.tombstoneCalled, "Delete on a session-plan appointment must call SoftDeleteAsCanceledException so the virtual occurrence stays suppressed")
+	assert.False(t, repo.hardDeleteCalled, "Delete on a session-plan appointment must NOT hard-delete; that is what makes the virtual re-appear")
+	assert.True(t, repo.tombstoneDeletePaymentArg, "deletePayments flag must propagate so the caller can still clear linked payments")
+}
+
+// A plain (non-plan) appointment has nothing to suppress — the delete path
+// must keep hard-deleting so we don't leave ghost cancelled rows behind.
+func TestDelete_RegularAppointmentStillHardDeletes(t *testing.T) {
+	apt := newAppointment(model.AppointmentStatusConfirmed)
+	apt.SessionPlanID = nil
+
+	repo := &mockAppointmentRepo{appointment: apt}
+	svc := buildService(repo)
+
+	err := svc.Delete(context.Background(), apt.ID, apt.ClinicID, false)
+	require.NoError(t, err)
+
+	assert.True(t, repo.hardDeleteCalled, "Regular appointments must still be hard-deleted")
+	assert.False(t, repo.tombstoneCalled, "Regular appointments have no RRULE to suppress, so no tombstone is needed")
 }
 
 // Cenário 5: Complete NÃO deve incrementar sessions_done diretamente —

@@ -115,6 +115,9 @@ func (m *mockAptRepoForPayment) Delete(_ context.Context, _, _ uuid.UUID) error 
 func (m *mockAptRepoForPayment) DeleteCascade(_ context.Context, _, _ uuid.UUID, _ bool) error {
 	return nil
 }
+func (m *mockAptRepoForPayment) SoftDeleteAsCanceledException(_ context.Context, _, _ uuid.UUID, _ bool) error {
+	return nil
+}
 func (m *mockAptRepoForPayment) GetDeletePreview(_ context.Context, _, _ uuid.UUID) (*model.AppointmentDeletePreview, error) {
 	return &model.AppointmentDeletePreview{}, nil
 }
