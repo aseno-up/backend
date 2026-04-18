@@ -62,6 +62,7 @@ func (r *enrollmentRepository) GetByPlan(ctx context.Context, clinicID, sessionP
 	var enrollments []*model.SessionPlanEnrollment
 	err := r.db.WithContext(ctx).
 		Where("clinic_id = ? AND session_plan_id = ?", clinicID, sessionPlanID).
+		Where("patient_id IN (SELECT id FROM patients WHERE deleted_at IS NULL)").
 		Order("joined_at ASC").
 		Find(&enrollments).Error
 
@@ -79,6 +80,7 @@ func (r *enrollmentRepository) GetActiveByPlan(ctx context.Context, clinicID, se
 	var enrollments []*model.SessionPlanEnrollment
 	err := r.db.WithContext(ctx).
 		Where("clinic_id = ? AND session_plan_id = ? AND status = ?", clinicID, sessionPlanID, model.EnrollmentStatusActive).
+		Where("patient_id IN (SELECT id FROM patients WHERE deleted_at IS NULL)").
 		Order("joined_at ASC").
 		Find(&enrollments).Error
 

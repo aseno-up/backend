@@ -21,19 +21,29 @@ type MaterializeService interface {
 	RescheduleOccurrence(ctx context.Context, clinicID uuid.UUID, sessionPlanID uuid.UUID, originalDate string, newTime time.Time) (*appointment_model.Appointment, error)
 }
 
-type materializeService struct {
-	planRepo        repository.SessionPlanRepository
-	appointmentRepo appointment_repository.AppointmentRepository
+// ProfessionalResolver is a minimal dependency used to pick a fallback
+// professional when an individual plan was created without a fixed one.
+type ProfessionalResolver interface {
+	FirstActiveIDByClinic(ctx context.Context, clinicID uuid.UUID) (*uuid.UUID, error)
 }
 
-// NewMaterializeService creates a new MaterializeService
+type materializeService struct {
+	planRepo         repository.SessionPlanRepository
+	appointmentRepo  appointment_repository.AppointmentRepository
+	professionalRepo ProfessionalResolver
+}
+
+// NewMaterializeService creates a new MaterializeService. professionalRepo
+// may be nil in tests that don't exercise the "any professional" fallback.
 func NewMaterializeService(
 	planRepo repository.SessionPlanRepository,
 	appointmentRepo appointment_repository.AppointmentRepository,
+	professionalRepo ProfessionalResolver,
 ) MaterializeService {
 	return &materializeService{
-		planRepo:        planRepo,
-		appointmentRepo: appointmentRepo,
+		planRepo:         planRepo,
+		appointmentRepo:  appointmentRepo,
+		professionalRepo: professionalRepo,
 	}
 }
 
@@ -110,12 +120,24 @@ func (s *materializeService) Materialize(ctx context.Context, clinicID uuid.UUID
 		}
 	}
 
-	// Determine professional
+	// Determine professional. Flexible individual plans ("qualquer profissional")
+	// arrive here with a nil ProfessionalID — fall back to the first active
+	// professional of the clinic so the user isn't blocked. They can change
+	// the professional on the appointment after it opens.
 	var professionalID uuid.UUID
 	if plan.ProfessionalID != nil {
 		professionalID = *plan.ProfessionalID
+	} else if s.professionalRepo != nil {
+		fallback, err := s.professionalRepo.FirstActiveIDByClinic(ctx, clinicID)
+		if err != nil {
+			return nil, err
+		}
+		if fallback == nil {
+			return nil, errors.ErrValidationInstance.WithMessage("Nenhum profissional ativo encontrado na clínica para atribuir a este plano.")
+		}
+		professionalID = *fallback
 	} else {
-		return nil, errors.ErrValidationInstance.WithMessage("Cannot materialize without a professional assigned")
+		return nil, errors.ErrValidationInstance.WithMessage("Nenhum profissional ativo encontrado na clínica para atribuir a este plano.")
 	}
 
 	// Determine price

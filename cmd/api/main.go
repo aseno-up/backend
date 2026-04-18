@@ -141,6 +141,7 @@ import (
 	specialty_repository "github.com/aseno/backend/pkg/specialty/repository"
 	specialty_service "github.com/aseno/backend/pkg/specialty/service"
 	systemlog_handler "github.com/aseno/backend/pkg/systemlog/handler"
+	systemlog_middleware "github.com/aseno/backend/pkg/systemlog/middleware"
 	systemlog_model "github.com/aseno/backend/pkg/systemlog/model"
 	systemlog_repository "github.com/aseno/backend/pkg/systemlog/repository"
 	systemlog_service "github.com/aseno/backend/pkg/systemlog/service"
@@ -745,7 +746,7 @@ func main() {
 	professionalHandler := professional_handler.NewProfessionalHandler(professionalService, inviteSvc, auditSvc)
 	professionalProcedureHandler := professional_handler.NewProfessionalProcedureHandler(professionalProcedureService, auditSvc)
 	commissionHandler := commission_handler.NewCommissionHandler(commissionSvc, auditSvc)
-	patientHandler := patient_handler.NewPatientHandler(patientService)
+	patientHandler := patient_handler.NewPatientHandler(patientService, auditSvc)
 	patientWhatsAppConnRepo := patient_repository.NewPatientWhatsAppConnectionRepository(db.GetDB())
 	patientWhatsAppConnService := patient_service.NewPatientWhatsAppConnectionService(patientWhatsAppConnRepo, patientRepo, whatsappConnRepo, clinicRepo)
 	patientWhatsAppConnHandler := patient_handler.NewPatientWhatsAppConnectionHandler(patientWhatsAppConnService, auditSvc)
@@ -778,6 +779,7 @@ func main() {
 	appointmentHandler := appointment_handler.NewAppointmentHandler(
 		appointmentService,
 		appointment_handler.WithAttendanceRecorder(attendanceSvc),
+		appointment_handler.WithAuditService(auditSvc),
 	)
 	procedureHandler := procedure_handler.NewProcedureHandler(procedureService)
 	paymentMethodHandler := paymentmethod_handler.NewPaymentMethodHandler(paymentMethodService, auditSvc)
@@ -834,8 +836,8 @@ func main() {
 
 	// Initialize Session Plan handler with calendar facade and materialize service
 	calendarFacade := sessionplan_service.NewCalendarFacade(sessionPlanRepo, appointmentRepo, enrollmentRepo)
-	materializeSvc := sessionplan_service.NewMaterializeService(sessionPlanRepo, appointmentRepo)
-	sessionPlanHandler := sessionplan_handler.NewSessionPlanHandler(sessionPlanService, calendarFacade, materializeSvc)
+	materializeSvc := sessionplan_service.NewMaterializeService(sessionPlanRepo, appointmentRepo, professionalRepo)
+	sessionPlanHandler := sessionplan_handler.NewSessionPlanHandler(sessionPlanService, calendarFacade, materializeSvc, auditSvc)
 
 	// Initialize Plan Payment service and handler
 	planPaymentRepo := sessionplan_repository.NewPlanPaymentRepository(db.GetDB())
@@ -973,6 +975,7 @@ func main() {
 		patientWhatsAppConnHandler,
 		authMiddleware,
 		tenantMiddleware,
+		systemLogSvc,
 	)
 
 	// Create HTTP server
@@ -1072,6 +1075,7 @@ func setupRouter(
 	patientWhatsAppConnHandler patient_handler.PatientWhatsAppConnectionHandler,
 	authMiddleware auth_middleware.AuthMiddleware,
 	tenantMiddleware auth_middleware.TenantMiddleware,
+	systemLogSvc systemlog_service.SystemLogService,
 ) *gin.Engine {
 	router := gin.New()
 
@@ -1094,6 +1098,7 @@ func setupRouter(
 
 	// API v1 routes
 	v1 := router.Group("/api/v1")
+	v1.Use(systemlog_middleware.ErrorCapture(systemLogSvc))
 	{
 		// Public auth routes (no auth required)
 		authHandler.RegisterRoutes(v1)

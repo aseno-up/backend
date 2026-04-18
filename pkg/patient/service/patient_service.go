@@ -20,6 +20,7 @@ type PatientService interface {
 	Update(ctx context.Context, id, clinicID uuid.UUID, req *model.UpdatePatientRequest) (*model.PatientResponse, error)
 	Delete(ctx context.Context, id, clinicID uuid.UUID) error
 	BulkDelete(ctx context.Context, ids []uuid.UUID, clinicID uuid.UUID) error
+	GetDeletePreview(ctx context.Context, id, clinicID uuid.UUID) (*model.PatientDeletePreview, error)
 	// Risk assessment methods
 	GetRisk(ctx context.Context, id, clinicID uuid.UUID) (*model.PatientRiskResponse, error)
 	CalculateRiskScore(ctx context.Context, patientID, clinicID uuid.UUID) error
@@ -77,6 +78,11 @@ func (s *patientService) Create(ctx context.Context, clinicID uuid.UUID, req *mo
 		source = model.PatientSourceInternal
 	}
 
+	birthDate, err := model.ParseBirthDate(req.BirthDate)
+	if err != nil {
+		return nil, errors.ErrValidationInstance.WithMessage(err.Error())
+	}
+
 	patient := &model.Patient{
 		ClinicID:  clinicID,
 		Name:      req.Name,
@@ -84,7 +90,7 @@ func (s *patientService) Create(ctx context.Context, clinicID uuid.UUID, req *mo
 		Phone:     req.Phone,
 		WhatsApp:  req.WhatsApp,
 		Document:  req.Document,
-		BirthDate: req.BirthDate,
+		BirthDate: birthDate,
 		Gender:    req.Gender,
 		Address:   req.Address,
 		City:      req.City,
@@ -158,43 +164,32 @@ func (s *patientService) Update(ctx context.Context, id, clinicID uuid.UUID, req
 		return nil, err
 	}
 
-	// Update fields if provided
+	// Full-PUT semantics: whatever the client sends replaces the current
+	// value, including empty strings for explicit clears. The frontend sends
+	// the complete form on every save, so we don't need to guess which fields
+	// are meant to stay untouched.
 	if req.Name != "" {
 		patient.Name = req.Name
 	}
-	if req.Email != "" {
-		patient.Email = req.Email
-	}
-	if req.Phone != "" {
-		patient.Phone = req.Phone
-	}
-	if req.WhatsApp != "" {
-		patient.WhatsApp = req.WhatsApp
-	}
-	if req.Document != "" {
-		patient.Document = req.Document
-	}
+	patient.Email = req.Email
+	patient.Phone = req.Phone
+	patient.WhatsApp = req.WhatsApp
+	patient.Document = req.Document
 	if req.BirthDate != nil {
-		patient.BirthDate = req.BirthDate
+		birthDate, err := model.ParseBirthDate(req.BirthDate)
+		if err != nil {
+			return nil, errors.ErrValidationInstance.WithMessage(err.Error())
+		}
+		patient.BirthDate = birthDate
 	}
 	if req.Gender != "" {
 		patient.Gender = req.Gender
 	}
-	if req.Address != "" {
-		patient.Address = req.Address
-	}
-	if req.City != "" {
-		patient.City = req.City
-	}
-	if req.State != "" {
-		patient.State = req.State
-	}
-	if req.ZipCode != "" {
-		patient.ZipCode = req.ZipCode
-	}
-	if req.Notes != "" {
-		patient.Notes = req.Notes
-	}
+	patient.Address = req.Address
+	patient.City = req.City
+	patient.State = req.State
+	patient.ZipCode = req.ZipCode
+	patient.Notes = req.Notes
 	if req.IsActive != nil {
 		patient.IsActive = *req.IsActive
 	}
@@ -209,6 +204,12 @@ func (s *patientService) Update(ctx context.Context, id, clinicID uuid.UUID, req
 // Delete deletes a patient
 func (s *patientService) Delete(ctx context.Context, id, clinicID uuid.UUID) error {
 	return s.repo.Delete(ctx, id, clinicID)
+}
+
+// GetDeletePreview exposes counts of linked history so the UI can warn the
+// user before confirming the deletion.
+func (s *patientService) GetDeletePreview(ctx context.Context, id, clinicID uuid.UUID) (*model.PatientDeletePreview, error) {
+	return s.repo.GetDeletePreview(ctx, id, clinicID)
 }
 
 // BulkDelete soft deletes multiple patients

@@ -83,6 +83,12 @@ func (m *mockCalendarAppointmentRepo) Update(_ context.Context, _ *appointment_m
 	return nil
 }
 func (m *mockCalendarAppointmentRepo) Delete(_ context.Context, _, _ uuid.UUID) error { return nil }
+func (m *mockCalendarAppointmentRepo) DeleteCascade(_ context.Context, _, _ uuid.UUID, _ bool) error {
+	return nil
+}
+func (m *mockCalendarAppointmentRepo) GetDeletePreview(_ context.Context, _, _ uuid.UUID) (*appointment_model.AppointmentDeletePreview, error) {
+	return &appointment_model.AppointmentDeletePreview{}, nil
+}
 func (m *mockCalendarAppointmentRepo) CheckConflict(_ context.Context, _, _ uuid.UUID, _, _ time.Time, _ *uuid.UUID) (bool, error) {
 	return false, nil
 }

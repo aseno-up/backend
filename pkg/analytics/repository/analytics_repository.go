@@ -299,7 +299,9 @@ func (r *analyticsRepository) GetAppointmentsSummary(ctx context.Context, clinic
 func (r *analyticsRepository) GetFinancialSummary(ctx context.Context, clinicID uuid.UUID, professionalID *uuid.UUID, start, end time.Time) (*model.FinancialSummary, error) {
 	var summary model.FinancialSummary
 
-	// Get appointment-level metrics (expected, sessions, paid/pending counts)
+	// Get appointment-level metrics (expected, sessions, paid/pending counts).
+	// Covers every active appointment in the period (excluding cancellations)
+	// — the cash-register view counts anything that generated a price.
 	appointmentQuery := `
 		SELECT
 			COALESCE(SUM(price), 0) as total_expected,
@@ -309,7 +311,7 @@ func (r *analyticsRepository) GetFinancialSummary(ctx context.Context, clinicID 
 		FROM appointments
 		WHERE clinic_id = ?
 			AND start_time BETWEEN ? AND ?
-			AND status = 'completed'
+			AND status <> 'canceled'
 			AND deleted_at IS NULL
 	`
 
@@ -339,7 +341,6 @@ func (r *analyticsRepository) GetFinancialSummary(ctx context.Context, clinicID 
 			INNER JOIN appointments a ON ap.appointment_id = a.id
 			WHERE a.clinic_id = ?
 				AND a.start_time BETWEEN ? AND ?
-				AND a.status = 'completed'
 				AND a.deleted_at IS NULL
 				AND ap.deleted_at IS NULL
 			UNION ALL
@@ -375,7 +376,6 @@ func (r *analyticsRepository) GetFinancialSummary(ctx context.Context, clinicID 
 				INNER JOIN appointments a ON ap.appointment_id = a.id
 				WHERE a.clinic_id = ?
 					AND a.start_time BETWEEN ? AND ?
-					AND a.status = 'completed'
 					AND a.deleted_at IS NULL
 					AND ap.deleted_at IS NULL
 					AND a.professional_id = ?
@@ -439,7 +439,6 @@ func (r *analyticsRepository) GetDailyReceivables(ctx context.Context, clinicID 
 			FROM appointments a
 			WHERE a.clinic_id = ?
 				AND a.start_time BETWEEN ? AND ?
-				AND a.status = 'completed'
 				AND a.deleted_at IS NULL
 	`
 
@@ -516,7 +515,6 @@ func (r *analyticsRepository) GetPaymentMethodBreakdown(ctx context.Context, cli
 			INNER JOIN payment_methods pm ON ap.payment_method_id = pm.id
 			WHERE a.clinic_id = ?
 				AND a.start_time BETWEEN ? AND ?
-				AND a.status = 'completed'
 				AND a.deleted_at IS NULL
 				AND ap.deleted_at IS NULL
 			GROUP BY pm.id, pm.name, pm.type

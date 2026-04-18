@@ -17,6 +17,7 @@ type ProcedureRepository interface {
 	Update(procedure *model.Procedure) error
 	Delete(id uuid.UUID, clinicID uuid.UUID) error
 	BulkDelete(ids []uuid.UUID, clinicID uuid.UUID) error
+	Restore(id uuid.UUID, clinicID uuid.UUID) error
 	List(ctx context.Context, clinicID uuid.UUID, filter pagination.Filter) ([]*model.Procedure, int64, error)
 	ListByClinicAndSpecialty(ctx context.Context, clinicID uuid.UUID, specialtyID *uuid.UUID) ([]*model.Procedure, error)
 }
@@ -68,26 +69,40 @@ func (r *procedureRepository) BulkDelete(ids []uuid.UUID, clinicID uuid.UUID) er
 	return r.db.Where("id IN ? AND clinic_id = ?", ids, clinicID).Delete(&model.Procedure{}).Error
 }
 
+// Restore clears deleted_at for a soft-deleted procedure, bringing it back
+// to the active catalog. Uses Unscoped because the row would otherwise be
+// filtered out by the gorm.DeletedAt auto-filter.
+func (r *procedureRepository) Restore(id uuid.UUID, clinicID uuid.UUID) error {
+	return r.db.Unscoped().
+		Model(&model.Procedure{}).
+		Where("id = ? AND clinic_id = ? AND deleted_at IS NOT NULL", id, clinicID).
+		Update("deleted_at", nil).Error
+}
+
 // List retrieves a paginated list of procedures for a clinic
 func (r *procedureRepository) List(ctx context.Context, clinicID uuid.UUID, filter pagination.Filter) ([]*model.Procedure, int64, error) {
 	var procedures []*model.Procedure
 	var total int64
 
-	query := r.db.WithContext(ctx).Model(&model.Procedure{}).Where("clinic_id = ?", clinicID)
+	// "inactive" shows only soft-deleted, "all" shows both active + inactive,
+	// and the default (or "active") relies on GORM's automatic gorm.DeletedAt
+	// filter to hide soft-deleted rows.
+	var query *gorm.DB
+	switch filter.Status {
+	case "inactive":
+		query = r.db.WithContext(ctx).Unscoped().Model(&model.Procedure{}).
+			Where("clinic_id = ? AND deleted_at IS NOT NULL", clinicID)
+	case "all":
+		query = r.db.WithContext(ctx).Unscoped().Model(&model.Procedure{}).
+			Where("clinic_id = ?", clinicID)
+	default:
+		query = r.db.WithContext(ctx).Model(&model.Procedure{}).Where("clinic_id = ?", clinicID)
+	}
 
 	// Search
 	if filter.Search != "" {
 		searchQuery := "%" + filter.Search + "%"
 		query = query.Where("name ILIKE ?", searchQuery)
-	}
-
-	// Status (Ativo/Inativo) - Se aplicavel (assumindo que procedure tem is_active se o status vier, se nao tiver, ignorar)
-	// Como a UI de Procedimentos pode n ter Inativos, deixamos preparado
-	switch filter.Status {
-	case "active":
-		query = query.Where("is_active = ?", true)
-	case "inactive":
-		query = query.Where("is_active = ?", false)
 	}
 
 	err := query.Count(&total).Error

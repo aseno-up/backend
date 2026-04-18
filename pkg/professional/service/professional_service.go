@@ -26,6 +26,7 @@ type ProfessionalService interface {
 	List(ctx context.Context, clinicID uuid.UUID, filter pagination.Filter) (pagination.Response[*model.ProfessionalResponse], error)
 	Update(ctx context.Context, id, clinicID uuid.UUID, req *model.UpdateProfessionalRequest) (*model.ProfessionalResponse, error)
 	Delete(ctx context.Context, id, clinicID uuid.UUID) error
+	Restore(ctx context.Context, id, clinicID uuid.UUID) error
 	BulkDelete(ctx context.Context, ids []uuid.UUID, clinicID uuid.UUID) error
 }
 
@@ -319,32 +320,20 @@ func (s *professionalService) Update(ctx context.Context, id, clinicID uuid.UUID
 	return s.buildResponse(professional), nil
 }
 
-// Delete deletes a professional (blocked if has appointments or linked user)
+// Delete deactivates a professional by flipping is_active to false. The row
+// stays so every historical reference (appointments, session plans, commissions)
+// keeps resolving to a real name. Linked users and existing agendamentos no
+// longer block the operation — it is a reversible "inactivate" action.
 func (s *professionalService) Delete(ctx context.Context, id, clinicID uuid.UUID) error {
-	professional, err := s.repo.GetByID(ctx, id, clinicID)
-	if err != nil {
+	if _, err := s.repo.GetByID(ctx, id, clinicID); err != nil {
 		return err
 	}
-
-	// Block delete if professional has a linked user
-	if professional.UserID != nil {
-		return errors.ErrValidationInstance.WithMessage(
-			"Este profissional possui um usuário vinculado. Desative-o ao invés de excluir.")
-	}
-
-	// Block delete if professional has appointments
-	if s.appointmentRepo != nil {
-		count, err := s.appointmentRepo.CountByProfessionalID(ctx, id, clinicID)
-		if err != nil {
-			return err
-		}
-		if count > 0 {
-			return errors.ErrValidationInstance.WithMessage(
-				fmt.Sprintf("Este profissional possui %d agendamento(s). Desative-o ao invés de excluir.", count))
-		}
-	}
-
 	return s.repo.Delete(ctx, id, clinicID)
+}
+
+// Restore re-activates a previously deactivated professional.
+func (s *professionalService) Restore(ctx context.Context, id, clinicID uuid.UUID) error {
+	return s.repo.Restore(ctx, id, clinicID)
 }
 
 // BulkDelete soft deletes multiple professionals (blocks any that have appointments or linked users)

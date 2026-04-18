@@ -31,8 +31,31 @@ func (h *ProcedureHandler) RegisterRoutes(r *gin.RouterGroup) {
 		procedures.GET("/:id", h.GetByID)
 		procedures.PUT("/:id", h.Update)
 		procedures.DELETE("/:id", h.Delete)
+		procedures.POST("/:id/restore", h.Restore)
 		procedures.POST("/bulk-delete", h.BulkDelete)
 	}
+}
+
+// Restore undoes a soft delete so the procedure appears in the active catalog again.
+func (h *ProcedureHandler) Restore(c *gin.Context) {
+	clinicID, err := getClinicID(c)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
+		return
+	}
+
+	id, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "ID inválido"})
+		return
+	}
+
+	if err := h.service.Restore(clinicID, id); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Procedimento reativado com sucesso"})
 }
 
 // getClinicID extracts clinic ID from Gin context

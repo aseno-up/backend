@@ -85,6 +85,10 @@ func (m *mockProfRepo) GetByUserID(ctx context.Context, userID, clinicID uuid.UU
 	return args.Get(0).(*model.Professional), args.Error(1)
 }
 
+func (m *mockProfRepo) FirstActiveIDByClinic(_ context.Context, _ uuid.UUID) (*uuid.UUID, error) {
+	return nil, nil
+}
+func (m *mockProfRepo) Restore(_ context.Context, _, _ uuid.UUID) error { return nil }
 func (m *mockProfRepo) CountActiveByClinicID(ctx context.Context, clinicID uuid.UUID) (int64, error) {
 	args := m.Called(ctx, clinicID)
 	return args.Get(0).(int64), args.Error(1)
@@ -124,6 +128,8 @@ func (m *mockProcedureRepo) Delete(id uuid.UUID, clinicID uuid.UUID) error {
 func (m *mockProcedureRepo) BulkDelete(ids []uuid.UUID, clinicID uuid.UUID) error {
 	return m.Called(ids, clinicID).Error(0)
 }
+
+func (m *mockProcedureRepo) Restore(_ uuid.UUID, _ uuid.UUID) error { return nil }
 
 func (m *mockProcedureRepo) List(ctx context.Context, clinicID uuid.UUID, filter pagination.Filter) ([]*procedure_model.Procedure, int64, error) {
 	args := m.Called(ctx, clinicID, filter)

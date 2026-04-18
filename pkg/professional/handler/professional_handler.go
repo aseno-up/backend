@@ -25,6 +25,7 @@ type ProfessionalHandler interface {
 	List(c *gin.Context)
 	Update(c *gin.Context)
 	Delete(c *gin.Context)
+	Restore(c *gin.Context)
 	BulkDelete(c *gin.Context)
 }
 
@@ -48,7 +49,33 @@ func (h *professionalHandler) RegisterRoutes(router gin.IRouter) {
 		professionals.GET("", h.List)
 		professionals.GET("/:id", h.GetByID)
 		professionals.PUT("/:id", h.Update)
+		professionals.DELETE("/:id", h.Delete)
+		professionals.POST("/:id/restore", h.Restore)
+		professionals.POST("/bulk-delete", h.BulkDelete)
 	}
+}
+
+// Restore re-activates a previously deactivated professional.
+func (h *professionalHandler) Restore(c *gin.Context) {
+	clinicID, _ := c.Get("clinic_id")
+
+	id, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, errors.ToResponse(errors.ErrValidationInstance.WithMessage("Invalid professional ID")))
+		return
+	}
+
+	if err := h.service.Restore(c.Request.Context(), id, clinicID.(uuid.UUID)); err != nil {
+		statusCode := errors.GetStatusCode(err)
+		c.JSON(statusCode, errors.ToResponse(err))
+		return
+	}
+
+	if h.auditSvc != nil {
+		_ = h.auditSvc.LogFromGin(c, audit_model.AuditActionUpdate, audit_model.AuditEntityProfessional, id.String(), nil, map[string]interface{}{"is_active": true})
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Professional restored successfully"})
 }
 
 // createProfessionalRequest represents the new POST /professionals request

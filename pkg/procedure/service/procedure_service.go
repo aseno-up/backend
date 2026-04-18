@@ -22,6 +22,7 @@ type ProcedureService interface {
 	Update(clinicID, id uuid.UUID, req *model.UpdateProcedureRequest) (*model.ProcedureResponse, error)
 	Delete(clinicID, id uuid.UUID) error
 	BulkDelete(clinicID uuid.UUID, ids []uuid.UUID) error
+	Restore(clinicID, id uuid.UUID) error
 	List(ctx context.Context, clinicID uuid.UUID, filter pagination.Filter) (pagination.Response[*model.ProcedureResponse], error)
 }
 
@@ -91,6 +92,10 @@ func (s *procedureService) Delete(clinicID, id uuid.UUID) error {
 
 func (s *procedureService) BulkDelete(clinicID uuid.UUID, ids []uuid.UUID) error {
 	return s.repo.BulkDelete(ids, clinicID)
+}
+
+func (s *procedureService) Restore(clinicID, id uuid.UUID) error {
+	return s.repo.Restore(id, clinicID)
 }
 
 func (s *procedureService) List(ctx context.Context, clinicID uuid.UUID, filter pagination.Filter) (pagination.Response[*model.ProcedureResponse], error) {

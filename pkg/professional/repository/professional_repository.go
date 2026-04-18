@@ -21,6 +21,8 @@ type ProfessionalRepository interface {
 	BulkDelete(ctx context.Context, ids []uuid.UUID, clinicID uuid.UUID) error
 	GetByUserID(ctx context.Context, userID, clinicID uuid.UUID) (*model.Professional, error)
 	CountActiveByClinicID(ctx context.Context, clinicID uuid.UUID) (int64, error)
+	FirstActiveIDByClinic(ctx context.Context, clinicID uuid.UUID) (*uuid.UUID, error)
+	Restore(ctx context.Context, id, clinicID uuid.UUID) error
 }
 
 // professionalRepository implements ProfessionalRepository
@@ -66,12 +68,17 @@ func (r *professionalRepository) List(ctx context.Context, clinicID uuid.UUID, f
 	query := r.db.WithContext(ctx).Model(&model.Professional{}).
 		Where("clinic_id = ? AND deleted_at IS NULL", clinicID)
 
-	// Status filtering
+	// Default is active-only so dropdowns and pickers never leak inactive
+	// professionals into places users shouldn't assign them. Callers that
+	// genuinely need the full list (financial repasse, /profissionais with
+	// the "Todos" tab) must pass status=all explicitly.
 	switch filter.Status {
-	case "active":
-		query = query.Where("is_active = ?", true)
 	case "inactive":
 		query = query.Where("is_active = ?", false)
+	case "all":
+		// no filter on is_active
+	default:
+		query = query.Where("is_active = ?", true)
 	}
 
 	// Search string
@@ -123,11 +130,32 @@ func (r *professionalRepository) Update(ctx context.Context, professional *model
 	return nil
 }
 
-// Delete soft-deletes a professional
+// Delete sets the professional as inactive (is_active = false). We intentionally
+// do not hard or soft delete the row — professionals are referenced from many
+// other tables (appointments, session_plans, professional_procedures, ...) and
+// toggling is_active preserves every historical reference while hiding the
+// professional from pickers. Reactivate later via Restore.
 func (r *professionalRepository) Delete(ctx context.Context, id, clinicID uuid.UUID) error {
 	result := r.db.WithContext(ctx).
+		Model(&model.Professional{}).
 		Where("id = ? AND clinic_id = ?", id, clinicID).
-		Delete(&model.Professional{})
+		Update("is_active", false)
+	if result.Error != nil {
+		return errors.ErrInternalInstance.WithError(result.Error)
+	}
+	if result.RowsAffected == 0 {
+		return errors.ErrProfessionalNotFoundInstance
+	}
+	return nil
+}
+
+// Restore flips is_active back to true so the professional becomes usable
+// again in pickers and filters.
+func (r *professionalRepository) Restore(ctx context.Context, id, clinicID uuid.UUID) error {
+	result := r.db.WithContext(ctx).
+		Model(&model.Professional{}).
+		Where("id = ? AND clinic_id = ?", id, clinicID).
+		Update("is_active", true)
 	if result.Error != nil {
 		return errors.ErrInternalInstance.WithError(result.Error)
 	}
@@ -160,6 +188,25 @@ func (r *professionalRepository) CountActiveByClinicID(ctx context.Context, clin
 		return 0, errors.ErrInternalInstance.WithError(err)
 	}
 	return count, nil
+}
+
+// FirstActiveIDByClinic returns the ID of any active professional in the clinic,
+// used as a fallback when a session plan was created without a fixed professional
+// ("any professional" mode) and needs a concrete assignee to materialize.
+func (r *professionalRepository) FirstActiveIDByClinic(ctx context.Context, clinicID uuid.UUID) (*uuid.UUID, error) {
+	var prof model.Professional
+	err := r.db.WithContext(ctx).
+		Select("id").
+		Where("clinic_id = ? AND is_active = true AND deleted_at IS NULL", clinicID).
+		Order("created_at ASC").
+		First(&prof).Error
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil, nil
+		}
+		return nil, errors.ErrInternalInstance.WithError(err)
+	}
+	return &prof.ID, nil
 }
 
 // GetByUserID retrieves a professional by their linked user ID

@@ -9,6 +9,7 @@ import (
 
 	"github.com/aseno/backend/internal/errors"
 	"github.com/aseno/backend/pkg/appointment/model"
+	procedureModel "github.com/aseno/backend/pkg/procedure/model"
 )
 
 // AppointmentRepository defines the interface for appointment data operations
@@ -20,6 +21,8 @@ type AppointmentRepository interface {
 	GetByDay(ctx context.Context, clinicID uuid.UUID, date time.Time, professionalID *uuid.UUID) ([]*model.Appointment, error)
 	Update(ctx context.Context, appointment *model.Appointment) error
 	Delete(ctx context.Context, id, clinicID uuid.UUID) error
+	DeleteCascade(ctx context.Context, id, clinicID uuid.UUID, deletePayments bool) error
+	GetDeletePreview(ctx context.Context, id, clinicID uuid.UUID) (*model.AppointmentDeletePreview, error)
 	CheckConflict(ctx context.Context, clinicID, professionalID uuid.UUID, start, end time.Time, excludeID *uuid.UUID) (bool, error)
 	GetByPatient(ctx context.Context, patientID, clinicID uuid.UUID, limit int) ([]*model.Appointment, error)
 	UpdateStatus(ctx context.Context, id, clinicID uuid.UUID, status model.AppointmentStatus) error
@@ -107,7 +110,7 @@ func (r *appointmentRepository) GetByID(ctx context.Context, id, clinicID uuid.U
 	result := r.db.WithContext(ctx).
 		Preload("Patient").
 		Preload("Professional").
-		Preload("Procedures.Procedure").
+		Preload("Procedures.Procedure", func(db *gorm.DB) *gorm.DB { return db.Unscoped() }).
 		Preload("Specialties").
 		Where("id = ? AND clinic_id = ? AND deleted_at IS NULL", id, clinicID).
 		First(&appointment)
@@ -117,7 +120,52 @@ func (r *appointmentRepository) GetByID(ctx context.Context, id, clinicID uuid.U
 		}
 		return nil, errors.ErrInternalInstance.WithError(result.Error)
 	}
+	r.fillMissingProcedures(ctx, []*model.Appointment{&appointment})
 	return &appointment, nil
+}
+
+// fillMissingProcedures is a defensive fallback for the Preload("Procedures.Procedure")
+// callback: if GORM's nested Unscoped preload doesn't attach the Procedure row for
+// every AppointmentProcedure (e.g. when the procedure was soft-deleted), we issue a
+// single batched Unscoped SELECT and populate the pointers ourselves. Without this,
+// the edit dialog would lose the procedure name and the user couldn't remove it
+// from the appointment.
+func (r *appointmentRepository) fillMissingProcedures(ctx context.Context, appts []*model.Appointment) {
+	missing := make(map[uuid.UUID]struct{})
+	for _, apt := range appts {
+		for i := range apt.Procedures {
+			if apt.Procedures[i].Procedure == nil {
+				missing[apt.Procedures[i].ProcedureID] = struct{}{}
+			}
+		}
+	}
+	if len(missing) == 0 {
+		return
+	}
+	ids := make([]uuid.UUID, 0, len(missing))
+	for id := range missing {
+		ids = append(ids, id)
+	}
+
+	var procs []procedureModel.Procedure
+	if err := r.db.WithContext(ctx).Unscoped().
+		Where("id IN ?", ids).
+		Find(&procs).Error; err != nil {
+		return
+	}
+	byID := make(map[uuid.UUID]*procedureModel.Procedure, len(procs))
+	for i := range procs {
+		byID[procs[i].ID] = &procs[i]
+	}
+	for _, apt := range appts {
+		for i := range apt.Procedures {
+			if apt.Procedures[i].Procedure == nil {
+				if p := byID[apt.Procedures[i].ProcedureID]; p != nil {
+					apt.Procedures[i].Procedure = p
+				}
+			}
+		}
+	}
 }
 
 // List retrieves appointments with filters
@@ -165,7 +213,7 @@ func (r *appointmentRepository) List(ctx context.Context, clinicID uuid.UUID, fi
 	result := query.
 		Preload("Patient").
 		Preload("Professional").
-		Preload("Procedures.Procedure").
+		Preload("Procedures.Procedure", func(db *gorm.DB) *gorm.DB { return db.Unscoped() }).
 		Preload("Specialties").
 		Order("start_time ASC").
 		Limit(perPage).
@@ -176,6 +224,7 @@ func (r *appointmentRepository) List(ctx context.Context, clinicID uuid.UUID, fi
 		return nil, 0, errors.ErrInternalInstance.WithError(result.Error)
 	}
 
+	r.fillMissingProcedures(ctx, appointments)
 	return appointments, total, nil
 }
 
@@ -186,7 +235,7 @@ func (r *appointmentRepository) GetByDateRange(ctx context.Context, clinicID uui
 	query := r.db.WithContext(ctx).
 		Preload("Patient").
 		Preload("Professional").
-		Preload("Procedures.Procedure").
+		Preload("Procedures.Procedure", func(db *gorm.DB) *gorm.DB { return db.Unscoped() }).
 		Preload("Specialties").
 		Where("clinic_id = ? AND deleted_at IS NULL", clinicID).
 		Where("start_time >= ? AND start_time < ?", start, end).
@@ -201,6 +250,7 @@ func (r *appointmentRepository) GetByDateRange(ctx context.Context, clinicID uui
 		return nil, errors.ErrInternalInstance.WithError(result.Error)
 	}
 
+	r.fillMissingProcedures(ctx, appointments)
 	return appointments, nil
 }
 
@@ -212,7 +262,7 @@ func (r *appointmentRepository) GetByDateRangeWithExceptions(ctx context.Context
 	query := r.db.WithContext(ctx).
 		Preload("Patient").
 		Preload("Professional").
-		Preload("Procedures.Procedure").
+		Preload("Procedures.Procedure", func(db *gorm.DB) *gorm.DB { return db.Unscoped() }).
 		Preload("Specialties").
 		Where("clinic_id = ? AND deleted_at IS NULL", clinicID).
 		Where("start_time >= ? AND start_time < ?", start, end).
@@ -229,6 +279,7 @@ func (r *appointmentRepository) GetByDateRangeWithExceptions(ctx context.Context
 		return nil, errors.ErrInternalInstance.WithError(result.Error)
 	}
 
+	r.fillMissingProcedures(ctx, appointments)
 	return appointments, nil
 }
 
@@ -301,6 +352,90 @@ func (r *appointmentRepository) Delete(ctx context.Context, id, clinicID uuid.UU
 	return nil
 }
 
+// DeleteCascade removes the appointment together with its linked
+// appointment_procedures (hard delete, since the join table has no soft-delete
+// column) and, when deletePayments is true, its appointment_payments (soft
+// delete). When deletePayments is false, payment rows stay linked to the now
+// soft-deleted appointment so the financial history is preserved.
+func (r *appointmentRepository) DeleteCascade(ctx context.Context, id, clinicID uuid.UUID, deletePayments bool) error {
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// Ensure the appointment exists within the clinic before touching anything.
+		var apt model.Appointment
+		if err := tx.Where("id = ? AND clinic_id = ?", id, clinicID).First(&apt).Error; err != nil {
+			if err == gorm.ErrRecordNotFound {
+				return errors.ErrAppointmentNotFoundInstance
+			}
+			return errors.ErrInternalInstance.WithError(err)
+		}
+
+		if err := tx.Where("appointment_id = ?", id).Delete(&model.AppointmentProcedure{}).Error; err != nil {
+			return errors.ErrInternalInstance.WithError(err)
+		}
+
+		if deletePayments {
+			if err := tx.Where("appointment_id = ? AND clinic_id = ?", id, clinicID).
+				Delete(&model.AppointmentPayment{}).Error; err != nil {
+				return errors.ErrInternalInstance.WithError(err)
+			}
+		}
+
+		if err := tx.Where("id = ? AND clinic_id = ?", id, clinicID).
+			Delete(&model.Appointment{}).Error; err != nil {
+			return errors.ErrInternalInstance.WithError(err)
+		}
+		return nil
+	})
+}
+
+// GetDeletePreview returns counts the UI needs to warn the user about
+// procedures and payments that will be affected by the deletion.
+func (r *appointmentRepository) GetDeletePreview(ctx context.Context, id, clinicID uuid.UUID) (*model.AppointmentDeletePreview, error) {
+	// Confirm appointment exists within the clinic.
+	var apt model.Appointment
+	if err := r.db.WithContext(ctx).
+		Where("id = ? AND clinic_id = ?", id, clinicID).
+		First(&apt).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil, errors.ErrAppointmentNotFoundInstance
+		}
+		return nil, errors.ErrInternalInstance.WithError(err)
+	}
+
+	preview := &model.AppointmentDeletePreview{}
+
+	var proceduresCount int64
+	if err := r.db.WithContext(ctx).
+		Model(&model.AppointmentProcedure{}).
+		Where("appointment_id = ?", id).
+		Count(&proceduresCount).Error; err != nil {
+		return nil, errors.ErrInternalInstance.WithError(err)
+	}
+	preview.ProceduresCount = int(proceduresCount)
+
+	var paymentsCount int64
+	if err := r.db.WithContext(ctx).
+		Model(&model.AppointmentPayment{}).
+		Where("appointment_id = ? AND clinic_id = ?", id, clinicID).
+		Count(&paymentsCount).Error; err != nil {
+		return nil, errors.ErrInternalInstance.WithError(err)
+	}
+	preview.PaymentsCount = int(paymentsCount)
+
+	if paymentsCount > 0 {
+		var total float64
+		if err := r.db.WithContext(ctx).
+			Model(&model.AppointmentPayment{}).
+			Where("appointment_id = ? AND clinic_id = ?", id, clinicID).
+			Select("COALESCE(SUM(amount - discount), 0)").
+			Scan(&total).Error; err != nil {
+			return nil, errors.ErrInternalInstance.WithError(err)
+		}
+		preview.PaymentsTotal = total
+	}
+
+	return preview, nil
+}
+
 // CheckConflict checks if there's a conflicting appointment for a professional
 func (r *appointmentRepository) CheckConflict(ctx context.Context, clinicID, professionalID uuid.UUID, start, end time.Time, excludeID *uuid.UUID) (bool, error) {
 	var count int64
@@ -327,7 +462,7 @@ func (r *appointmentRepository) GetByPatient(ctx context.Context, patientID, cli
 
 	result := r.db.WithContext(ctx).
 		Preload("Professional").
-		Preload("Procedures.Procedure").
+		Preload("Procedures.Procedure", func(db *gorm.DB) *gorm.DB { return db.Unscoped() }).
 		Where("patient_id = ? AND clinic_id = ? AND deleted_at IS NULL", patientID, clinicID).
 		Order("start_time DESC").
 		Limit(limit).

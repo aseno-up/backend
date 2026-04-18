@@ -224,19 +224,23 @@ func GetStatusCode(err error) int {
 	return http.StatusInternalServerError
 }
 
-// ToResponse converts an error to a response map
+// ToResponse converts an error to a response map. When the AppError wraps an
+// underlying error (typically a gin binding error with field-level details),
+// we include its string in `details` so the caller and system_logs can see
+// which field failed instead of a generic "Validation failed".
 func ToResponse(err error) map[string]interface{} {
 	if appErr, ok := err.(*AppError); ok {
-		response := map[string]interface{}{
-			"error": map[string]interface{}{
-				"type":    appErr.Type,
-				"message": appErr.Message,
-			},
+		body := map[string]interface{}{
+			"type":    appErr.Type,
+			"message": appErr.Message,
 		}
 		if len(appErr.Variables) > 0 {
-			response["error"].(map[string]interface{})["variables"] = appErr.Variables
+			body["variables"] = appErr.Variables
 		}
-		return response
+		if appErr.Err != nil {
+			body["details"] = appErr.Err.Error()
+		}
+		return map[string]interface{}{"error": body}
 	}
 	return map[string]interface{}{
 		"error": map[string]interface{}{

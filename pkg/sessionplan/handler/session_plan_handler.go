@@ -8,6 +8,8 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/aseno/backend/internal/errors"
+	audit_model "github.com/aseno/backend/pkg/audit/model"
+	audit_service "github.com/aseno/backend/pkg/audit/service"
 	"github.com/aseno/backend/pkg/pagination"
 	"github.com/aseno/backend/pkg/sessionplan/model"
 	"github.com/aseno/backend/pkg/sessionplan/service"
@@ -37,18 +39,22 @@ type sessionPlanHandler struct {
 	service        service.SessionPlanService
 	calendarFacade service.CalendarFacade
 	materializeSvc service.MaterializeService
+	auditSvc       audit_service.AuditService
 }
 
-// NewSessionPlanHandler creates a new session plan handler
+// NewSessionPlanHandler creates a new session plan handler. auditSvc can be
+// nil in tests; when provided, destructive actions are audited.
 func NewSessionPlanHandler(
 	svc service.SessionPlanService,
 	calendarFacade service.CalendarFacade,
 	materializeSvc service.MaterializeService,
+	auditSvc audit_service.AuditService,
 ) SessionPlanHandler {
 	return &sessionPlanHandler{
 		service:        svc,
 		calendarFacade: calendarFacade,
 		materializeSvc: materializeSvc,
+		auditSvc:       auditSvc,
 	}
 }
 
@@ -304,10 +310,16 @@ func (h *sessionPlanHandler) Delete(c *gin.Context) {
 		return
 	}
 
+	oldData, _ := h.service.GetByID(c.Request.Context(), clinicID.(uuid.UUID), id)
+
 	if err := h.service.Delete(c.Request.Context(), clinicID.(uuid.UUID), id); err != nil {
 		statusCode := errors.GetStatusCode(err)
 		c.JSON(statusCode, errors.ToResponse(err))
 		return
+	}
+
+	if h.auditSvc != nil {
+		_ = h.auditSvc.LogFromGin(c, audit_model.AuditActionDelete, audit_model.AuditEntitySessionPlan, id.String(), oldData, nil)
 	}
 
 	c.JSON(http.StatusOK, gin.H{

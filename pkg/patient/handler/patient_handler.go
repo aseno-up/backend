@@ -7,6 +7,8 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/aseno/backend/internal/errors"
+	audit_model "github.com/aseno/backend/pkg/audit/model"
+	audit_service "github.com/aseno/backend/pkg/audit/service"
 	"github.com/aseno/backend/pkg/pagination"
 	"github.com/aseno/backend/pkg/patient/model"
 	"github.com/aseno/backend/pkg/patient/service"
@@ -20,6 +22,7 @@ type PatientHandler interface {
 	List(c *gin.Context)
 	Update(c *gin.Context)
 	Delete(c *gin.Context)
+	GetDeletePreview(c *gin.Context)
 	BulkDelete(c *gin.Context)
 	// Risk assessment endpoints
 	GetRisk(c *gin.Context)
@@ -35,12 +38,14 @@ type PatientHandler interface {
 
 // patientHandler implements PatientHandler
 type patientHandler struct {
-	service service.PatientService
+	service  service.PatientService
+	auditSvc audit_service.AuditService
 }
 
-// NewPatientHandler creates a new patient handler
-func NewPatientHandler(service service.PatientService) PatientHandler {
-	return &patientHandler{service: service}
+// NewPatientHandler creates a new patient handler. Pass auditSvc to leave a
+// trail for destructive actions; it can be nil in tests.
+func NewPatientHandler(service service.PatientService, auditSvc audit_service.AuditService) PatientHandler {
+	return &patientHandler{service: service, auditSvc: auditSvc}
 }
 
 // RegisterRoutes registers patient routes
@@ -55,6 +60,7 @@ func (h *patientHandler) RegisterRoutes(router gin.IRouter) {
 		patients.GET("/self-registered", h.ListSelfRegistered)
 		patients.GET("/:id", h.GetByID)
 		patients.PUT("/:id", h.Update)
+		patients.GET("/:id/delete-preview", h.GetDeletePreview)
 		patients.DELETE("/:id", h.Delete)
 		patients.POST("/bulk-delete", h.BulkDelete)
 		patients.GET("/:id/risk", h.GetRisk)
@@ -175,13 +181,41 @@ func (h *patientHandler) Delete(c *gin.Context) {
 		return
 	}
 
+	oldData, _ := h.service.GetByID(c.Request.Context(), id, clinicID.(uuid.UUID))
+
 	if err := h.service.Delete(c.Request.Context(), id, clinicID.(uuid.UUID)); err != nil {
 		statusCode := errors.GetStatusCode(err)
 		c.JSON(statusCode, errors.ToResponse(err))
 		return
 	}
 
+	if h.auditSvc != nil {
+		_ = h.auditSvc.LogFromGin(c, audit_model.AuditActionDelete, audit_model.AuditEntityPatient, id.String(), oldData, nil)
+	}
+
 	c.JSON(http.StatusOK, gin.H{"message": "Patient deleted successfully"})
+}
+
+// GetDeletePreview returns counts of linked records so the UI can show them
+// in a confirmation modal before the user deletes a patient.
+func (h *patientHandler) GetDeletePreview(c *gin.Context) {
+	clinicID, _ := c.Get("clinic_id")
+
+	idParam := c.Param("id")
+	id, err := uuid.Parse(idParam)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, errors.ToResponse(errors.ErrValidationInstance.WithMessage("Invalid patient ID")))
+		return
+	}
+
+	preview, err := h.service.GetDeletePreview(c.Request.Context(), id, clinicID.(uuid.UUID))
+	if err != nil {
+		statusCode := errors.GetStatusCode(err)
+		c.JSON(statusCode, errors.ToResponse(err))
+		return
+	}
+
+	c.JSON(http.StatusOK, preview)
 }
 
 // BulkDelete handles deleting multiple patients

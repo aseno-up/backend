@@ -37,7 +37,8 @@ type AppointmentService interface {
 	GetByDay(ctx context.Context, clinicID uuid.UUID, date time.Time, professionalID *uuid.UUID) ([]*model.AppointmentResponse, error)
 	GetByWeek(ctx context.Context, clinicID uuid.UUID, date time.Time, professionalID *uuid.UUID) ([]*model.AppointmentResponse, error)
 	Update(ctx context.Context, id, clinicID uuid.UUID, req *model.UpdateAppointmentRequest) (*model.AppointmentResponse, error)
-	Delete(ctx context.Context, id, clinicID uuid.UUID) error
+	Delete(ctx context.Context, id, clinicID uuid.UUID, deletePayments bool) error
+	GetDeletePreview(ctx context.Context, id, clinicID uuid.UUID) (*model.AppointmentDeletePreview, error)
 	Confirm(ctx context.Context, id, clinicID uuid.UUID, req *model.ConfirmAppointmentRequest) (*model.AppointmentResponse, error)
 	Cancel(ctx context.Context, id, clinicID uuid.UUID, req *model.CancelAppointmentRequest) (*model.AppointmentResponse, error)
 	Complete(ctx context.Context, id, clinicID uuid.UUID) (*model.AppointmentResponse, error)
@@ -726,9 +727,20 @@ func (s *appointmentService) Update(ctx context.Context, id, clinicID uuid.UUID,
 	return s.GetByID(ctx, id, clinicID)
 }
 
-// Delete deletes an appointment
-func (s *appointmentService) Delete(ctx context.Context, id, clinicID uuid.UUID) error {
-	return s.repo.Delete(ctx, id, clinicID)
+// Delete deletes an appointment. Linked appointment_procedures are always
+// removed in cascade because they are historical join rows tied to this
+// specific appointment. appointment_payments are kept by default — they are
+// part of the financial history — and are only removed when the caller
+// explicitly opts in via deletePayments.
+func (s *appointmentService) Delete(ctx context.Context, id, clinicID uuid.UUID, deletePayments bool) error {
+	return s.repo.DeleteCascade(ctx, id, clinicID, deletePayments)
+}
+
+// GetDeletePreview returns counts the UI uses to warn the user before
+// deleting an appointment (how many procedures cascade, and how many
+// payments exist and their total value).
+func (s *appointmentService) GetDeletePreview(ctx context.Context, id, clinicID uuid.UUID) (*model.AppointmentDeletePreview, error) {
+	return s.repo.GetDeletePreview(ctx, id, clinicID)
 }
 
 // Confirm confirms an appointment

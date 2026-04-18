@@ -35,6 +35,9 @@ func (r *capturingPatientRepo) Delete(_ context.Context, _, _ uuid.UUID) error  
 func (r *capturingPatientRepo) BulkDelete(_ context.Context, _ []uuid.UUID, _ uuid.UUID) error {
 	return nil
 }
+func (r *capturingPatientRepo) GetDeletePreview(_ context.Context, _, _ uuid.UUID) (*model.PatientDeletePreview, error) {
+	return &model.PatientDeletePreview{}, nil
+}
 func (r *capturingPatientRepo) GetByPhone(_ context.Context, _ string, _ uuid.UUID) (*model.Patient, error) {
 	return nil, nil
 }

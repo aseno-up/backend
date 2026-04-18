@@ -112,6 +112,12 @@ func (m *mockAptRepoForPayment) GetByDay(_ context.Context, _ uuid.UUID, _ time.
 }
 func (m *mockAptRepoForPayment) Update(_ context.Context, _ *model.Appointment) error { return nil }
 func (m *mockAptRepoForPayment) Delete(_ context.Context, _, _ uuid.UUID) error       { return nil }
+func (m *mockAptRepoForPayment) DeleteCascade(_ context.Context, _, _ uuid.UUID, _ bool) error {
+	return nil
+}
+func (m *mockAptRepoForPayment) GetDeletePreview(_ context.Context, _, _ uuid.UUID) (*model.AppointmentDeletePreview, error) {
+	return &model.AppointmentDeletePreview{}, nil
+}
 func (m *mockAptRepoForPayment) CheckConflict(_ context.Context, _, _ uuid.UUID, _, _ time.Time, _ *uuid.UUID) (bool, error) {
 	return false, nil
 }

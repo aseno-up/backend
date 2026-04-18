@@ -93,6 +93,9 @@ func (m *mockPatientRepoForConn) List(_ context.Context, _ uuid.UUID, _ paginati
 }
 func (m *mockPatientRepoForConn) Update(_ context.Context, _ *model.Patient) error { return nil }
 func (m *mockPatientRepoForConn) Delete(_ context.Context, _, _ uuid.UUID) error   { return nil }
+func (m *mockPatientRepoForConn) GetDeletePreview(_ context.Context, _, _ uuid.UUID) (*model.PatientDeletePreview, error) {
+	return &model.PatientDeletePreview{}, nil
+}
 func (m *mockPatientRepoForConn) BulkDelete(_ context.Context, _ []uuid.UUID, _ uuid.UUID) error {
 	return nil
 }

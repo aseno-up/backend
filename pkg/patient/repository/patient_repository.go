@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"time"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -20,6 +21,7 @@ type PatientRepository interface {
 	Update(ctx context.Context, patient *model.Patient) error
 	Delete(ctx context.Context, id, clinicID uuid.UUID) error
 	BulkDelete(ctx context.Context, ids []uuid.UUID, clinicID uuid.UUID) error
+	GetDeletePreview(ctx context.Context, id, clinicID uuid.UUID) (*model.PatientDeletePreview, error)
 	GetByPhone(ctx context.Context, phone string, clinicID uuid.UUID) (*model.Patient, error)
 	GetByDocument(ctx context.Context, document string, clinicID uuid.UUID) (*model.Patient, error)
 	// Risk assessment methods
@@ -129,18 +131,129 @@ func (r *patientRepository) Update(ctx context.Context, patient *model.Patient) 
 	return nil
 }
 
-// Delete soft-deletes a patient
+// Delete soft-deletes a patient and cascades to their history: appointments,
+// session plans, enrollments, and linked payments. Keeping those around would
+// leave orphan references surfacing in the calendar and the financial report.
+// All writes run in a single transaction.
 func (r *patientRepository) Delete(ctx context.Context, id, clinicID uuid.UUID) error {
-	result := r.db.WithContext(ctx).
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var patient model.Patient
+		if err := tx.Where("id = ? AND clinic_id = ?", id, clinicID).First(&patient).Error; err != nil {
+			if err == gorm.ErrRecordNotFound {
+				return errors.ErrPatientNotFoundInstance
+			}
+			return errors.ErrInternalInstance.WithError(err)
+		}
+
+		// Mark related rows as deleted via raw UPDATE so the update applies even
+		// to tables whose DeletedAt is still a plain *time.Time and GORM would
+		// otherwise hard-delete them.
+		now := time.Now()
+		cascades := []string{
+			`UPDATE appointment_payments
+				SET deleted_at = ?
+				WHERE clinic_id = ? AND deleted_at IS NULL
+				AND appointment_id IN (SELECT id FROM appointments WHERE patient_id = ? AND clinic_id = ?)`,
+			`UPDATE appointments
+				SET deleted_at = ?
+				WHERE patient_id = ? AND clinic_id = ? AND deleted_at IS NULL`,
+			`UPDATE session_plan_payments
+				SET deleted_at = ?
+				WHERE clinic_id = ? AND deleted_at IS NULL
+				AND (session_plan_id IN (SELECT id FROM session_plans WHERE patient_id = ? AND clinic_id = ?)
+					OR enrollment_id IN (SELECT id FROM session_plan_enrollments WHERE patient_id = ? AND clinic_id = ?))`,
+			`UPDATE session_plan_enrollments
+				SET deleted_at = ?
+				WHERE patient_id = ? AND clinic_id = ? AND deleted_at IS NULL`,
+			`UPDATE session_plans
+				SET deleted_at = ?
+				WHERE patient_id = ? AND clinic_id = ? AND deleted_at IS NULL`,
+		}
+		cascadeArgs := [][]interface{}{
+			{now, clinicID, id, clinicID},
+			{now, id, clinicID},
+			{now, clinicID, id, clinicID, id, clinicID},
+			{now, id, clinicID},
+			{now, id, clinicID},
+		}
+		for i, sql := range cascades {
+			if err := tx.Exec(sql, cascadeArgs[i]...).Error; err != nil {
+				return errors.ErrInternalInstance.WithError(err)
+			}
+		}
+
+		// Finally soft-delete the patient itself. Because the Patient model now
+		// uses gorm.DeletedAt, GORM takes care of setting deleted_at.
+		if err := tx.Where("id = ? AND clinic_id = ?", id, clinicID).
+			Delete(&model.Patient{}).Error; err != nil {
+			return errors.ErrInternalInstance.WithError(err)
+		}
+
+		return nil
+	})
+}
+
+// GetDeletePreview counts linked records so the UI can warn the user about
+// the amount of history that will remain linked to the deleted patient.
+// Counts scan only non-deleted rows (deleted_at IS NULL).
+func (r *patientRepository) GetDeletePreview(ctx context.Context, id, clinicID uuid.UUID) (*model.PatientDeletePreview, error) {
+	var patient model.Patient
+	if err := r.db.WithContext(ctx).
 		Where("id = ? AND clinic_id = ?", id, clinicID).
-		Delete(&model.Patient{})
-	if result.Error != nil {
-		return errors.ErrInternalInstance.WithError(result.Error)
+		First(&patient).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil, errors.ErrPatientNotFoundInstance
+		}
+		return nil, errors.ErrInternalInstance.WithError(err)
 	}
-	if result.RowsAffected == 0 {
-		return errors.ErrPatientNotFoundInstance
+
+	preview := &model.PatientDeletePreview{}
+	db := r.db.WithContext(ctx)
+
+	count := func(table, where string, args ...interface{}) (int, error) {
+		var c int64
+		if err := db.Table(table).Where(where, args...).Count(&c).Error; err != nil {
+			return 0, err
+		}
+		return int(c), nil
 	}
-	return nil
+
+	var err error
+	if preview.AppointmentsCount, err = count("appointments",
+		"patient_id = ? AND clinic_id = ? AND deleted_at IS NULL", id, clinicID); err != nil {
+		return nil, errors.ErrInternalInstance.WithError(err)
+	}
+
+	if preview.SessionPlansCount, err = count("session_plans",
+		"patient_id = ? AND clinic_id = ? AND deleted_at IS NULL", id, clinicID); err != nil {
+		return nil, errors.ErrInternalInstance.WithError(err)
+	}
+
+	if preview.EnrollmentsCount, err = count("session_plan_enrollments",
+		"patient_id = ? AND clinic_id = ? AND deleted_at IS NULL", id, clinicID); err != nil {
+		return nil, errors.ErrInternalInstance.WithError(err)
+	}
+
+	aptPayments, err := count("appointment_payments",
+		"clinic_id = ? AND deleted_at IS NULL AND appointment_id IN (SELECT id FROM appointments WHERE patient_id = ? AND clinic_id = ?)",
+		clinicID, id, clinicID)
+	if err != nil {
+		return nil, errors.ErrInternalInstance.WithError(err)
+	}
+
+	planPayments, err := count("session_plan_payments",
+		`clinic_id = ? AND deleted_at IS NULL AND (
+			session_plan_id IN (SELECT id FROM session_plans WHERE patient_id = ? AND clinic_id = ?)
+			OR enrollment_id IN (SELECT id FROM session_plan_enrollments WHERE patient_id = ? AND clinic_id = ?)
+		)`,
+		clinicID, id, clinicID, id, clinicID)
+	if err != nil {
+		return nil, errors.ErrInternalInstance.WithError(err)
+	}
+
+	preview.PaymentsCount = aptPayments + planPayments
+
+	return preview, nil
 }
 
 // BulkDelete soft deletes multiple patients belonging to a clinic

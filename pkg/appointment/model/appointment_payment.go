@@ -82,6 +82,15 @@ func (p *AppointmentPayment) ToResponse() *AppointmentPaymentResponse {
 	}
 }
 
+// AppointmentDeletePreview describes what the UI should warn about before
+// deleting an appointment. Procedures are always removed in cascade; payments
+// are kept by default and only deleted when the user opts in.
+type AppointmentDeletePreview struct {
+	PaymentsCount   int     `json:"payments_count"`
+	PaymentsTotal   float64 `json:"payments_total"`
+	ProceduresCount int     `json:"procedures_count"`
+}
+
 // CreateAppointmentPaymentRequest represents the request to create a payment
 type CreateAppointmentPaymentRequest struct {
 	PaymentMethodID uuid.UUID `json:"payment_method_id" binding:"required"`

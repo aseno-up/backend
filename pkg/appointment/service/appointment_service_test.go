@@ -53,6 +53,12 @@ func (m *mockAppointmentRepo) GetByDay(_ context.Context, _ uuid.UUID, _ time.Ti
 	return nil, nil
 }
 func (m *mockAppointmentRepo) Delete(_ context.Context, _, _ uuid.UUID) error { return nil }
+func (m *mockAppointmentRepo) DeleteCascade(_ context.Context, _, _ uuid.UUID, _ bool) error {
+	return nil
+}
+func (m *mockAppointmentRepo) GetDeletePreview(_ context.Context, _, _ uuid.UUID) (*model.AppointmentDeletePreview, error) {
+	return &model.AppointmentDeletePreview{}, nil
+}
 func (m *mockAppointmentRepo) GetByPatient(_ context.Context, _, _ uuid.UUID, _ int) ([]*model.Appointment, error) {
 	return nil, nil
 }

@@ -89,6 +89,12 @@ func (m *mockMaterializeAppointmentRepo) Update(_ context.Context, _ *appointmen
 	return nil
 }
 func (m *mockMaterializeAppointmentRepo) Delete(_ context.Context, _, _ uuid.UUID) error { return nil }
+func (m *mockMaterializeAppointmentRepo) DeleteCascade(_ context.Context, _, _ uuid.UUID, _ bool) error {
+	return nil
+}
+func (m *mockMaterializeAppointmentRepo) GetDeletePreview(_ context.Context, _, _ uuid.UUID) (*appointment_model.AppointmentDeletePreview, error) {
+	return &appointment_model.AppointmentDeletePreview{}, nil
+}
 func (m *mockMaterializeAppointmentRepo) CheckConflict(_ context.Context, _, _ uuid.UUID, _, _ time.Time, _ *uuid.UUID) (bool, error) {
 	return false, nil
 }
@@ -151,7 +157,7 @@ func TestMaterialize_RejectsWhenSessionLimitReached(t *testing.T) {
 	planRepo := &mockMaterializePlanRepo{plan: plan}
 	aptRepo := &mockMaterializeAppointmentRepo{}
 
-	svc := NewMaterializeService(planRepo, aptRepo)
+	svc := NewMaterializeService(planRepo, aptRepo, nil)
 
 	_, err := svc.Materialize(context.Background(), clinicID, plan.ID, now.Format("2006-01-02"))
 	require.Error(t, err, "Should reject materialization when session limit reached")
@@ -178,7 +184,7 @@ func TestMaterialize_RejectsWhenPlanCancelled(t *testing.T) {
 	planRepo := &mockMaterializePlanRepo{plan: plan}
 	aptRepo := &mockMaterializeAppointmentRepo{}
 
-	svc := NewMaterializeService(planRepo, aptRepo)
+	svc := NewMaterializeService(planRepo, aptRepo, nil)
 
 	_, err := svc.Materialize(context.Background(), clinicID, plan.ID, now.Format("2006-01-02"))
 	require.Error(t, err, "Should reject materialization for cancelled plan")
@@ -208,7 +214,7 @@ func TestMaterialize_AllowsWhenUnderLimit(t *testing.T) {
 	planRepo := &mockMaterializePlanRepo{plan: plan}
 	aptRepo := &mockMaterializeAppointmentRepo{}
 
-	svc := NewMaterializeService(planRepo, aptRepo)
+	svc := NewMaterializeService(planRepo, aptRepo, nil)
 
 	apt, err := svc.Materialize(context.Background(), clinicID, plan.ID, monday.Format("2006-01-02"))
 	require.NoError(t, err, "Should allow materialization when under limit")
@@ -237,7 +243,7 @@ func TestMaterialize_AllowsIndeterminatePlan(t *testing.T) {
 	planRepo := &mockMaterializePlanRepo{plan: plan}
 	aptRepo := &mockMaterializeAppointmentRepo{}
 
-	svc := NewMaterializeService(planRepo, aptRepo)
+	svc := NewMaterializeService(planRepo, aptRepo, nil)
 
 	apt, err := svc.Materialize(context.Background(), clinicID, plan.ID, monday.Format("2006-01-02"))
 	require.NoError(t, err, "Indeterminate plan should always allow materialization")
@@ -268,7 +274,7 @@ func TestMaterialize_RejectsGroupPlan(t *testing.T) {
 	planRepo := &mockMaterializePlanRepo{plan: plan}
 	aptRepo := &mockMaterializeAppointmentRepo{}
 
-	svc := NewMaterializeService(planRepo, aptRepo)
+	svc := NewMaterializeService(planRepo, aptRepo, nil)
 
 	_, err := svc.Materialize(context.Background(), clinicID, plan.ID, monday.Format("2006-01-02"))
 	require.Error(t, err, "Should reject materialization for group plans")
@@ -300,7 +306,7 @@ func TestMaterialize_UsesDayTimesForAppointmentTime(t *testing.T) {
 	planRepo := &mockMaterializePlanRepo{plan: plan}
 	aptRepo := &mockMaterializeAppointmentRepo{}
 
-	svc := NewMaterializeService(planRepo, aptRepo)
+	svc := NewMaterializeService(planRepo, aptRepo, nil)
 
 	apt, err := svc.Materialize(context.Background(), clinicID, plan.ID, wednesday.Format("2006-01-02"))
 	require.NoError(t, err)
@@ -334,7 +340,7 @@ func TestMaterialize_IncludesProcedureFromSessionPlan(t *testing.T) {
 	planRepo := &mockMaterializePlanRepo{plan: plan}
 	aptRepo := &mockMaterializeAppointmentRepo{}
 
-	svc := NewMaterializeService(planRepo, aptRepo)
+	svc := NewMaterializeService(planRepo, aptRepo, nil)
 
 	_, err := svc.Materialize(context.Background(), clinicID, plan.ID, monday.Format("2006-01-02"))
 	require.NoError(t, err)
@@ -369,7 +375,7 @@ func TestMaterialize_NoProcedureWhenPlanHasNone(t *testing.T) {
 	planRepo := &mockMaterializePlanRepo{plan: plan}
 	aptRepo := &mockMaterializeAppointmentRepo{}
 
-	svc := NewMaterializeService(planRepo, aptRepo)
+	svc := NewMaterializeService(planRepo, aptRepo, nil)
 
 	_, err := svc.Materialize(context.Background(), clinicID, plan.ID, monday.Format("2006-01-02"))
 	require.NoError(t, err)
@@ -403,7 +409,7 @@ func TestRescheduleOccurrence_IncludesProcedureFromSessionPlan(t *testing.T) {
 	planRepo := &mockMaterializePlanRepo{plan: plan}
 	aptRepo := &mockMaterializeAppointmentRepo{}
 
-	svc := NewMaterializeService(planRepo, aptRepo)
+	svc := NewMaterializeService(planRepo, aptRepo, nil)
 
 	_, err := svc.RescheduleOccurrence(context.Background(), clinicID, plan.ID, monday.Format("2006-01-02"), wednesday)
 	require.NoError(t, err)
@@ -438,7 +444,7 @@ func TestCancelOccurrence_SetsIsExceptionAndCanceledStatus(t *testing.T) {
 	planRepo := &mockMaterializePlanRepo{plan: plan}
 	aptRepo := &mockMaterializeAppointmentRepo{}
 
-	svc := NewMaterializeService(planRepo, aptRepo)
+	svc := NewMaterializeService(planRepo, aptRepo, nil)
 
 	apt, err := svc.CancelOccurrence(context.Background(), clinicID, plan.ID, monday.Format("2006-01-02"))
 	require.NoError(t, err, "Should cancel a single occurrence")
@@ -471,7 +477,7 @@ func TestRescheduleOccurrence_SetsIsExceptionAndOriginalDate(t *testing.T) {
 	planRepo := &mockMaterializePlanRepo{plan: plan}
 	aptRepo := &mockMaterializeAppointmentRepo{}
 
-	svc := NewMaterializeService(planRepo, aptRepo)
+	svc := NewMaterializeService(planRepo, aptRepo, nil)
 
 	apt, err := svc.RescheduleOccurrence(context.Background(), clinicID, plan.ID, monday.Format("2006-01-02"), wednesday)
 	require.NoError(t, err, "Should reschedule a single occurrence")
