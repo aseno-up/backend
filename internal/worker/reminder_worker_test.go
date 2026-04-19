@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -10,7 +11,48 @@ import (
 	"github.com/aseno/backend/internal/config"
 	"github.com/aseno/backend/internal/queue"
 	appointment_model "github.com/aseno/backend/pkg/appointment/model"
+	systemlog_model "github.com/aseno/backend/pkg/systemlog/model"
+	systemlog_service "github.com/aseno/backend/pkg/systemlog/service"
 )
+
+// stubSystemLogService captures every entry emitted by the worker so tests
+// can assert structured events without hitting the database.
+type stubSystemLogService struct {
+	entries []systemlog_service.SystemLogEntry
+}
+
+func (s *stubSystemLogService) Log(_ context.Context, entry systemlog_service.SystemLogEntry) error {
+	s.entries = append(s.entries, entry)
+	return nil
+}
+
+// List is required by the SystemLogService interface but unused by the worker.
+// The stub returns an empty response so callers compile without duplicating
+// a full model dependency.
+func (s *stubSystemLogService) List(_ context.Context, _ *systemlog_model.SystemLogFilter) (*systemlog_model.SystemLogResponse, error) {
+	return &systemlog_model.SystemLogResponse{}, nil
+}
+
+func (s *stubSystemLogService) eventsFor(event string) []systemlog_service.SystemLogEntry {
+	var out []systemlog_service.SystemLogEntry
+	for _, e := range s.entries {
+		if e.Event == event {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// errorRepo wraps stubAppointmentRepo to force GetPendingReminders to fail,
+// exercising the list_candidates_failed branch.
+type errorRepo struct {
+	stubAppointmentRepo
+	listErr error
+}
+
+func (r *errorRepo) GetPendingReminders(_ context.Context, _ string, _ time.Time, _ time.Time) ([]*appointment_model.AppointmentWithClinic, error) {
+	return nil, r.listErr
+}
 
 type stubAppointmentRepo struct {
 	pending                []*appointment_model.AppointmentWithClinic
@@ -315,5 +357,106 @@ func TestReminderWorker_SubscriptionCached_WithinRun(t *testing.T) {
 	}
 	if checker.calls != 1 {
 		t.Errorf("expected subscription checker to be called once (cached), got %d", checker.calls)
+	}
+}
+
+func TestReminderWorker_SystemLog_EmitsReminderSentOnSuccess(t *testing.T) {
+	clinicID := uuid.New()
+	apt := buildAppointment(clinicID, 24*time.Hour)
+	apt.Patient.ID = uuid.New()
+	repo := &stubAppointmentRepo{
+		pending: []*appointment_model.AppointmentWithClinic{apt},
+	}
+	q := &stubQueue{}
+	sysLog := &stubSystemLogService{}
+
+	w := NewReminderWorker(newReminderConfig(), repo, q)
+	w.SetSystemLogService(sysLog)
+
+	_, err := w.processThreshold(context.Background(), config.ReminderThreshold{
+		Name:     "reminder_24h",
+		Type:     "reminder_24h",
+		Duration: 24 * time.Hour,
+	}, map[uuid.UUID]bool{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	sent := sysLog.eventsFor("reminder_sent")
+	if len(sent) != 1 {
+		t.Fatalf("expected 1 reminder_sent entry, got %d (all entries=%+v)", len(sent), sysLog.entries)
+	}
+	e := sent[0]
+	if e.Service != "reminder_worker" {
+		t.Errorf("expected service=reminder_worker, got %s", e.Service)
+	}
+	if e.Status != systemlog_model.LogStatusSuccess {
+		t.Errorf("expected status=success, got %s", e.Status)
+	}
+	if e.ClinicID == nil || *e.ClinicID != clinicID {
+		t.Errorf("expected clinic_id=%s in payload, got %v", clinicID, e.ClinicID)
+	}
+	payload, ok := e.Payload.(map[string]any)
+	if !ok {
+		t.Fatalf("expected payload to be map[string]any, got %T", e.Payload)
+	}
+	if payload["threshold"] != "reminder_24h" {
+		t.Errorf("expected threshold=reminder_24h in payload, got %v", payload["threshold"])
+	}
+	if payload["channel"] != "whatsapp" {
+		t.Errorf("expected channel=whatsapp in payload, got %v", payload["channel"])
+	}
+	if payload["appointment_id"] != apt.ID.String() {
+		t.Errorf("expected appointment_id=%s in payload, got %v", apt.ID, payload["appointment_id"])
+	}
+}
+
+func TestReminderWorker_SystemLog_EmitsListCandidatesFailedOnRepoError(t *testing.T) {
+	repo := &errorRepo{listErr: errors.New("boom")}
+	q := &stubQueue{}
+	sysLog := &stubSystemLogService{}
+
+	w := NewReminderWorker(newReminderConfig(), repo, q)
+	w.SetSystemLogService(sysLog)
+
+	_, err := w.processThreshold(context.Background(), config.ReminderThreshold{
+		Name:     "reminder_24h",
+		Type:     "reminder_24h",
+		Duration: 24 * time.Hour,
+	}, map[uuid.UUID]bool{})
+	if err == nil {
+		t.Fatal("expected processThreshold to surface the repo error")
+	}
+
+	failed := sysLog.eventsFor("list_candidates_failed")
+	if len(failed) != 1 {
+		t.Fatalf("expected 1 list_candidates_failed entry, got %d", len(failed))
+	}
+	if failed[0].Status != systemlog_model.LogStatusFailed {
+		t.Errorf("expected status=failed, got %s", failed[0].Status)
+	}
+	if failed[0].Error != "boom" {
+		t.Errorf("expected error='boom', got %q", failed[0].Error)
+	}
+}
+
+func TestReminderWorker_SystemLog_NilServiceIsSafe(t *testing.T) {
+	// Sanity check: wiring the worker without SetSystemLogService must not
+	// panic and must keep working (falls back to stdout-only for errors).
+	clinicID := uuid.New()
+	apt := buildAppointment(clinicID, 24*time.Hour)
+	apt.Patient.ID = uuid.New()
+	repo := &stubAppointmentRepo{
+		pending: []*appointment_model.AppointmentWithClinic{apt},
+	}
+	w := NewReminderWorker(newReminderConfig(), repo, &stubQueue{})
+
+	_, err := w.processThreshold(context.Background(), config.ReminderThreshold{
+		Name:     "reminder_24h",
+		Type:     "reminder_24h",
+		Duration: 24 * time.Hour,
+	}, map[uuid.UUID]bool{})
+	if err != nil {
+		t.Fatalf("nil SystemLogService must not cause errors, got: %v", err)
 	}
 }

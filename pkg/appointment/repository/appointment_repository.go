@@ -374,15 +374,22 @@ func (r *appointmentRepository) UpdateStatus(ctx context.Context, id, clinicID u
 func (r *appointmentRepository) GetPendingReminders(ctx context.Context, reminderType string, windowStart, windowEnd time.Time) ([]*model.AppointmentWithClinic, error) {
 	var results []*model.AppointmentWithClinic
 
-	// Determine which reminder field to check
-	var reminderField string
+	// Determine which reminder field to check (column on appointments) and the
+	// per-window opt-out flag (jsonb key on clinics.settings). The opt-out
+	// defaults to true so clinics that existed before the toggles were
+	// introduced keep receiving all three windows; a clinic disables a single
+	// window by setting its flag explicitly to false on the settings jsonb.
+	var reminderField, windowFlagKey string
 	switch reminderType {
 	case "48h":
 		reminderField = "reminder48h_sent_at"
+		windowFlagKey = "whatsapp_reminder_48h_enabled"
 	case "24h":
 		reminderField = "reminder24h_sent_at"
+		windowFlagKey = "whatsapp_reminder_24h_enabled"
 	case "2h":
 		reminderField = "reminder2h_sent_at"
+		windowFlagKey = "whatsapp_reminder_2h_enabled"
 	default:
 		return nil, errors.ErrValidationInstance.WithMessage("invalid reminder type")
 	}
@@ -406,6 +413,7 @@ func (r *appointmentRepository) GetPendingReminders(ctx context.Context, reminde
 			AND wc.instance IS NOT NULL
 			AND wc.instance != ''
 			AND COALESCE((c.settings->>'whatsapp_reminders_enabled')::boolean, false) = true
+			AND COALESCE((c.settings->>'` + windowFlagKey + `')::boolean, true) = true
 		ORDER BY a.start_time ASC
 		LIMIT 100
 	`

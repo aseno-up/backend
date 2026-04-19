@@ -141,6 +141,15 @@ func (s *clinicService) Update(ctx context.Context, id uuid.UUID, req *model.Upd
 		if req.Settings.EmailRemindersEnabled != nil {
 			clinic.Settings.EmailRemindersEnabled = *req.Settings.EmailRemindersEnabled
 		}
+		if req.Settings.WhatsAppReminder2hEnabled != nil {
+			clinic.Settings.WhatsAppReminder2hEnabled = req.Settings.WhatsAppReminder2hEnabled
+		}
+		if req.Settings.WhatsAppReminder24hEnabled != nil {
+			clinic.Settings.WhatsAppReminder24hEnabled = req.Settings.WhatsAppReminder24hEnabled
+		}
+		if req.Settings.WhatsAppReminder48hEnabled != nil {
+			clinic.Settings.WhatsAppReminder48hEnabled = req.Settings.WhatsAppReminder48hEnabled
+		}
 		if req.Settings.RequirePaymentBeforeBooking != nil {
 			clinic.Settings.RequirePaymentBeforeBooking = *req.Settings.RequirePaymentBeforeBooking
 		}

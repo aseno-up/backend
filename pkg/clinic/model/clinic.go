@@ -76,6 +76,15 @@ type ClinicSettings struct {
 	WhatsAppRemindersEnabled bool `json:"whatsapp_reminders_enabled"`
 	EmailRemindersEnabled    bool `json:"email_reminders_enabled"`
 
+	// Per-window appointment reminder toggles. Nil means "use default (enabled)"
+	// so clinics that existed before this field keep receiving all three
+	// windows. The master WhatsAppRemindersEnabled still gates the whole
+	// feature; these only let a clinic opt out of a specific window without
+	// turning everything off.
+	WhatsAppReminder2hEnabled  *bool `json:"whatsapp_reminder_2h_enabled,omitempty"`
+	WhatsAppReminder24hEnabled *bool `json:"whatsapp_reminder_24h_enabled,omitempty"`
+	WhatsAppReminder48hEnabled *bool `json:"whatsapp_reminder_48h_enabled,omitempty"`
+
 	// Payment settings
 	RequirePaymentBeforeBooking bool `json:"require_payment_before_booking"`
 
@@ -201,6 +210,37 @@ func (s *ClinicSettings) IsAIToolRescheduleEnabled() bool {
 	return *s.AIToolReschedule
 }
 
+// IsAppointmentReminderEnabled returns whether the given appointment-reminder
+// window (reminderType "2h", "24h" or "48h") should fire for this clinic. The
+// master WhatsAppRemindersEnabled is checked elsewhere; this call only answers
+// the per-window opt-out. Nil pointer defaults to true so clinics that existed
+// before the toggles were introduced keep receiving all three windows.
+// Unknown reminder types return false to prevent a typo from silently
+// bypassing the per-clinic gate.
+func (s *ClinicSettings) IsAppointmentReminderEnabled(reminderType string) bool {
+	var flag *bool
+	switch reminderType {
+	case "2h":
+		if s != nil {
+			flag = s.WhatsAppReminder2hEnabled
+		}
+	case "24h":
+		if s != nil {
+			flag = s.WhatsAppReminder24hEnabled
+		}
+	case "48h":
+		if s != nil {
+			flag = s.WhatsAppReminder48hEnabled
+		}
+	default:
+		return false
+	}
+	if flag == nil {
+		return true
+	}
+	return *flag
+}
+
 // TableName returns the table name for GORM
 func (Clinic) TableName() string {
 	return "clinics"
@@ -293,6 +333,13 @@ type UpdateClinicSettingsRequest struct {
 	RequireConfirmation       *bool  `json:"require_confirmation,omitempty"`
 	WhatsAppRemindersEnabled  *bool  `json:"whatsapp_reminders_enabled,omitempty"`
 	EmailRemindersEnabled     *bool  `json:"email_reminders_enabled,omitempty"`
+
+	// Per-window appointment reminder toggles. Nil keeps the current value on
+	// merge; false explicitly opts out of that window without touching the
+	// master switch.
+	WhatsAppReminder2hEnabled  *bool `json:"whatsapp_reminder_2h_enabled,omitempty"`
+	WhatsAppReminder24hEnabled *bool `json:"whatsapp_reminder_24h_enabled,omitempty"`
+	WhatsAppReminder48hEnabled *bool `json:"whatsapp_reminder_48h_enabled,omitempty"`
 
 	// Payment settings
 	RequirePaymentBeforeBooking *bool `json:"require_payment_before_booking,omitempty"`

@@ -428,3 +428,63 @@ func TestClinicSettings_IsAITool_EachFlagIsIndependent(t *testing.T) {
 	assert.True(t, s.IsAIToolConfirmEnabled(), "confirm unchanged (nil) must stay true")
 	assert.True(t, s.IsAIToolCancelEnabled(), "cancel unchanged (nil) must stay true")
 }
+
+func TestClinicSettings_IsAppointmentReminder_EnabledByDefault(t *testing.T) {
+	s := ClinicSettings{}
+	assert.True(t, s.IsAppointmentReminderEnabled("2h"), "nil pointer defaults to true")
+	assert.True(t, s.IsAppointmentReminderEnabled("24h"))
+	assert.True(t, s.IsAppointmentReminderEnabled("48h"))
+}
+
+func TestClinicSettings_IsAppointmentReminder_NilReceiver(t *testing.T) {
+	var s *ClinicSettings
+	assert.True(t, s.IsAppointmentReminderEnabled("2h"), "nil receiver must still default to true")
+	assert.True(t, s.IsAppointmentReminderEnabled("24h"))
+	assert.True(t, s.IsAppointmentReminderEnabled("48h"))
+}
+
+func TestClinicSettings_IsAppointmentReminder_RespectsExplicitValues(t *testing.T) {
+	tests := []struct {
+		name   string
+		ptr    *bool
+		wantOn bool
+	}{
+		{"nil defaults to true", nil, true},
+		{"true stays true", boolPtr(true), true},
+		{"false stays false", boolPtr(false), false},
+	}
+	for _, tt := range tests {
+		t.Run("2h: "+tt.name, func(t *testing.T) {
+			s := ClinicSettings{WhatsAppReminder2hEnabled: tt.ptr}
+			assert.Equal(t, tt.wantOn, s.IsAppointmentReminderEnabled("2h"))
+		})
+		t.Run("24h: "+tt.name, func(t *testing.T) {
+			s := ClinicSettings{WhatsAppReminder24hEnabled: tt.ptr}
+			assert.Equal(t, tt.wantOn, s.IsAppointmentReminderEnabled("24h"))
+		})
+		t.Run("48h: "+tt.name, func(t *testing.T) {
+			s := ClinicSettings{WhatsAppReminder48hEnabled: tt.ptr}
+			assert.Equal(t, tt.wantOn, s.IsAppointmentReminderEnabled("48h"))
+		})
+	}
+}
+
+func TestClinicSettings_IsAppointmentReminder_IndependentFlags(t *testing.T) {
+	// Disable only the 48h window; the other two must remain on by default.
+	s := ClinicSettings{WhatsAppReminder48hEnabled: boolPtr(false)}
+	assert.False(t, s.IsAppointmentReminderEnabled("48h"))
+	assert.True(t, s.IsAppointmentReminderEnabled("24h"), "24h unchanged (nil) stays true")
+	assert.True(t, s.IsAppointmentReminderEnabled("2h"), "2h unchanged (nil) stays true")
+}
+
+func TestClinicSettings_IsAppointmentReminder_UnknownType(t *testing.T) {
+	// Unknown reminder types must not silently enable sending — return false so
+	// a typo in the worker never ends up bypassing the per-clinic toggle.
+	s := ClinicSettings{
+		WhatsAppReminder2hEnabled:  boolPtr(true),
+		WhatsAppReminder24hEnabled: boolPtr(true),
+		WhatsAppReminder48hEnabled: boolPtr(true),
+	}
+	assert.False(t, s.IsAppointmentReminderEnabled("72h"))
+	assert.False(t, s.IsAppointmentReminderEnabled(""))
+}
