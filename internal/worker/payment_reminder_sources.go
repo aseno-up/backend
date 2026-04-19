@@ -67,34 +67,69 @@ type candidateRow struct {
 	EnrolledAt       time.Time  `gorm:"column:enrolled_at"`
 }
 
+// ListPaymentReminderCandidates returns candidates from two sources:
+//   - individual monthly session plans (enrollment_id is nil on the candidate)
+//   - active enrollments in group monthly plans whose parent plan is also active
+//
+// The queries are kept separate instead of UNION'd because:
+//   - UNION ALL requires both sides to agree on column types, which forced a
+//     Postgres-specific `NULL::uuid` cast for the individual side;
+//   - splitting makes each half simpler to read and to test under SQLite.
+//
+// Patients without a phone/whatsapp are kept in the result so the task layer
+// can still try email — filtering them out here would couple channel policy
+// to the repository.
 func (s *gormCandidateSource) ListPaymentReminderCandidates(ctx context.Context, clinicID uuid.UUID) ([]*PaymentReminderCandidate, error) {
-	// The UNION combines two candidate sources:
-	//   * individual monthly session plans (enrollment_id = NULL)
-	//   * active enrollments in group monthly plans
-	// Both are joined to patients and to the clinic's active WhatsApp
-	// instance. Patients without a phone/whatsapp are kept in the result so
-	// the in-memory layer can still try email — filtering them out here
-	// would couple channel policy to the repository.
+	waInstance, err := s.fetchActiveWhatsAppInstance(ctx, clinicID)
+	if err != nil {
+		return nil, err
+	}
+
+	out := make([]*PaymentReminderCandidate, 0, 16)
+
+	individuals, err := s.fetchIndividualCandidates(ctx, clinicID, waInstance)
+	if err != nil {
+		return nil, err
+	}
+	out = append(out, individuals...)
+
+	enrollments, err := s.fetchEnrollmentCandidates(ctx, clinicID, waInstance)
+	if err != nil {
+		return nil, err
+	}
+	out = append(out, enrollments...)
+
+	return out, nil
+}
+
+func (s *gormCandidateSource) fetchActiveWhatsAppInstance(ctx context.Context, clinicID uuid.UUID) (string, error) {
+	var instance string
+	err := s.db.WithContext(ctx).Raw(
+		`SELECT instance FROM whatsapp_connections
+		 WHERE clinic_id = ? AND is_active = true AND connected = true AND deleted_at IS NULL
+		 LIMIT 1`,
+		clinicID,
+	).Scan(&instance).Error
+	if err != nil {
+		return "", err
+	}
+	return instance, nil
+}
+
+func (s *gormCandidateSource) fetchIndividualCandidates(ctx context.Context, clinicID uuid.UUID, waInstance string) ([]*PaymentReminderCandidate, error) {
 	query := `
-		WITH wa AS (
-			SELECT instance FROM whatsapp_connections
-			WHERE clinic_id = ? AND is_active = true AND connected = true AND deleted_at IS NULL
-			LIMIT 1
-		)
 		SELECT
-			sp.clinic_id                             AS clinic_id,
-			sp.id                                    AS session_plan_id,
-			NULL::uuid                               AS enrollment_id,
-			sp.patient_id                            AS patient_id,
-			p.name                                   AS patient_name,
-			p.whatsapp                               AS patient_whatsapp,
-			p.phone                                  AS patient_phone,
-			p.email                                  AS patient_email,
-			sp.title                                 AS plan_title,
-			sp.billing_day                           AS billing_day,
+			sp.clinic_id                                     AS clinic_id,
+			sp.id                                            AS session_plan_id,
+			sp.patient_id                                    AS patient_id,
+			p.name                                           AS patient_name,
+			p.whatsapp                                       AS patient_whatsapp,
+			p.phone                                          AS patient_phone,
+			p.email                                          AS patient_email,
+			sp.title                                         AS plan_title,
+			sp.billing_day                                   AS billing_day,
 			COALESCE(sp.price_override, sp.session_price, 0) AS amount,
-			COALESCE((SELECT instance FROM wa), '')  AS whatsapp_instance,
-			sp.created_at                            AS enrolled_at
+			sp.created_at                                    AS enrolled_at
 		FROM session_plans sp
 		INNER JOIN patients p ON p.id = sp.patient_id AND p.deleted_at IS NULL
 		WHERE sp.clinic_id = ?
@@ -103,58 +138,87 @@ func (s *gormCandidateSource) ListPaymentReminderCandidates(ctx context.Context,
 		  AND sp.payment_mode = 'monthly'
 		  AND sp.type = 'individual'
 		  AND sp.billing_day IS NOT NULL
-		UNION ALL
+	`
+
+	var rows []candidateRow
+	if err := s.db.WithContext(ctx).Raw(query, clinicID).Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+
+	out := make([]*PaymentReminderCandidate, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, buildCandidate(r, nil, waInstance))
+	}
+	return out, nil
+}
+
+// fetchEnrollmentCandidates filters on:
+//   - enrollment is active, monthly, has a billing day, not soft-deleted;
+//   - left_at must be NULL — a patient who has left the group is not billed
+//     even if the status field was not flipped to cancelled/suspended;
+//   - parent plan must still be active — a cancelled or paused group plan
+//     must not produce reminders for its remaining enrollments.
+func (s *gormCandidateSource) fetchEnrollmentCandidates(ctx context.Context, clinicID uuid.UUID, waInstance string) ([]*PaymentReminderCandidate, error) {
+	query := `
 		SELECT
-			spe.clinic_id                            AS clinic_id,
-			spe.session_plan_id                      AS session_plan_id,
-			spe.id                                   AS enrollment_id,
-			spe.patient_id                           AS patient_id,
-			p.name                                   AS patient_name,
-			p.whatsapp                               AS patient_whatsapp,
-			p.phone                                  AS patient_phone,
-			p.email                                  AS patient_email,
-			sp.title                                 AS plan_title,
-			spe.billing_day                          AS billing_day,
-			COALESCE(spe.monthly_amount, 0)          AS amount,
-			COALESCE((SELECT instance FROM wa), '')  AS whatsapp_instance,
-			spe.joined_at                            AS enrolled_at
+			spe.clinic_id                    AS clinic_id,
+			spe.session_plan_id              AS session_plan_id,
+			spe.id                           AS enrollment_id,
+			spe.patient_id                   AS patient_id,
+			p.name                           AS patient_name,
+			p.whatsapp                       AS patient_whatsapp,
+			p.phone                          AS patient_phone,
+			p.email                          AS patient_email,
+			sp.title                         AS plan_title,
+			spe.billing_day                  AS billing_day,
+			COALESCE(spe.monthly_amount, 0)  AS amount,
+			spe.joined_at                    AS enrolled_at
 		FROM session_plan_enrollments spe
-		INNER JOIN session_plans sp ON sp.id = spe.session_plan_id AND sp.deleted_at IS NULL
+		INNER JOIN session_plans sp
+			ON sp.id = spe.session_plan_id
+			AND sp.deleted_at IS NULL
+			AND sp.status = 'active'
 		INNER JOIN patients p ON p.id = spe.patient_id AND p.deleted_at IS NULL
 		WHERE spe.clinic_id = ?
 		  AND spe.deleted_at IS NULL
 		  AND spe.status = 'active'
 		  AND spe.payment_mode = 'monthly'
 		  AND spe.billing_day IS NOT NULL
+		  AND spe.left_at IS NULL
 	`
 
 	var rows []candidateRow
-	if err := s.db.WithContext(ctx).Raw(query, clinicID, clinicID, clinicID).Scan(&rows).Error; err != nil {
+	if err := s.db.WithContext(ctx).Raw(query, clinicID).Scan(&rows).Error; err != nil {
 		return nil, err
 	}
 
 	out := make([]*PaymentReminderCandidate, 0, len(rows))
 	for _, r := range rows {
-		phone := r.PatientWhatsApp
-		if phone == "" {
-			phone = r.PatientPhone
-		}
-		out = append(out, &PaymentReminderCandidate{
-			ClinicID:         r.ClinicID,
-			SessionPlanID:    r.SessionPlanID,
-			EnrollmentID:     r.EnrollmentID,
-			PatientID:        r.PatientID,
-			PatientName:      r.PatientName,
-			PatientWhatsApp:  phone,
-			PatientEmail:     r.PatientEmail,
-			PlanTitle:        r.PlanTitle,
-			BillingDay:       r.BillingDay,
-			Amount:           r.Amount,
-			WhatsAppInstance: r.WhatsAppInstance,
-			EnrolledAt:       r.EnrolledAt,
-		})
+		enrollmentID := r.EnrollmentID
+		out = append(out, buildCandidate(r, enrollmentID, waInstance))
 	}
 	return out, nil
+}
+
+func buildCandidate(r candidateRow, enrollmentID *uuid.UUID, waInstance string) *PaymentReminderCandidate {
+	phone := r.PatientWhatsApp
+	if phone == "" {
+		phone = r.PatientPhone
+	}
+	return &PaymentReminderCandidate{
+		ClinicID:         r.ClinicID,
+		SessionPlanID:    r.SessionPlanID,
+		EnrollmentID:     enrollmentID,
+		PatientID:        r.PatientID,
+		PatientName:      r.PatientName,
+		PatientWhatsApp:  phone,
+		PatientEmail:     r.PatientEmail,
+		PlanTitle:        r.PlanTitle,
+		BillingDay:       r.BillingDay,
+		Amount:           r.Amount,
+		WhatsAppInstance: waInstance,
+		EnrolledAt:       r.EnrolledAt,
+	}
 }
 
 // gormTracker wires the "has this been paid / has this been reminded"
