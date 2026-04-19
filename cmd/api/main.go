@@ -671,6 +671,7 @@ func main() {
 		if whatsappService != nil && workerCfg.ReminderWorkerEnabled {
 			reminderWorker = worker.NewReminderWorker(workerCfg, appointmentRepo, messageQueue)
 			reminderWorker.SetSubscriptionChecker(&clinicSubscriptionCheckerAdapter{clinicRepo: clinicRepo})
+			reminderWorker.SetSystemLogService(systemLogSvc)
 			go reminderWorker.Start()
 
 			subscriptionChecker := &clinicSubscriptionCheckerAdapter{clinicRepo: clinicRepo}

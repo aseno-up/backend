@@ -13,6 +13,8 @@ import (
 	"github.com/aseno/backend/internal/queue"
 	appointment_model "github.com/aseno/backend/pkg/appointment/model"
 	appointment_repository "github.com/aseno/backend/pkg/appointment/repository"
+	systemlog_model "github.com/aseno/backend/pkg/systemlog/model"
+	systemlog_service "github.com/aseno/backend/pkg/systemlog/service"
 )
 
 // reminderAppointmentRepo captures the slice of the appointment repository used
@@ -44,6 +46,7 @@ type ReminderWorker struct {
 	appointmentRepo     reminderAppointmentRepo
 	queue               reminderQueue
 	subscriptionChecker ClinicSubscriptionChecker
+	systemLog           systemlog_service.SystemLogService
 	stopCh              chan struct{}
 }
 
@@ -70,6 +73,35 @@ var _ reminderQueue = (queue.Queue)(nil)
 // reminders for clinics whose subscription is no longer active.
 func (w *ReminderWorker) SetSubscriptionChecker(checker ClinicSubscriptionChecker) {
 	w.subscriptionChecker = checker
+}
+
+// SetSystemLogService wires the SystemLog service used to persist operational
+// events to the database. When nil the worker falls back to stdout-only
+// logging; callers wire this in main.go so dashboards can monitor the worker
+// (mirrors the pattern used by PaymentReminderTask).
+func (w *ReminderWorker) SetSystemLogService(svc systemlog_service.SystemLogService) {
+	w.systemLog = svc
+}
+
+// logEvent writes a structured record to the system_logs table when a log
+// service is wired; otherwise it falls back to stdout for errors only. Kept
+// as a method so the non-system fields (service name, static event tag) stay
+// consistent across call sites.
+func (w *ReminderWorker) logEvent(ctx context.Context, clinicID *uuid.UUID, event string, status systemlog_model.LogStatus, errMsg string, payload interface{}) {
+	if w.systemLog == nil {
+		if errMsg != "" {
+			logger.Printf("[Reminder] %s (clinic=%v): %s", event, clinicID, errMsg)
+		}
+		return
+	}
+	_ = w.systemLog.Log(ctx, systemlog_service.SystemLogEntry{
+		ClinicID: clinicID,
+		Service:  "reminder_worker",
+		Event:    event,
+		Status:   status,
+		Error:    errMsg,
+		Payload:  payload,
+	})
 }
 
 // Start starts the reminder worker
@@ -146,6 +178,9 @@ func (w *ReminderWorker) processThreshold(ctx context.Context, threshold config.
 
 	appointments, err := w.appointmentRepo.GetPendingReminders(ctx, threshold.Name, windowStart, windowEnd)
 	if err != nil {
+		w.logEvent(ctx, nil, "list_candidates_failed", systemlog_model.LogStatusFailed, err.Error(), map[string]any{
+			"threshold": threshold.Name,
+		})
 		return 0, fmt.Errorf("failed to get pending reminders: %w", err)
 	}
 
@@ -221,15 +256,28 @@ func (w *ReminderWorker) processThreshold(ctx context.Context, threshold config.
 			ScheduledAt:   time.Now(),
 		}
 
+		clinicID := apt.ClinicID
+		payload := map[string]any{
+			"appointment_id": apt.ID.String(),
+			"patient_id":     apt.Patient.ID.String(),
+			"threshold":      threshold.Name,
+			"channel":        "whatsapp",
+		}
+
 		// Enqueue the message
 		if err := w.queue.Publish(ctx, job); err != nil {
 			logger.Printf("Failed to enqueue reminder for appointment %s: %v", apt.ID, err)
+			w.logEvent(ctx, &clinicID, "enqueue_whatsapp_failed", systemlog_model.LogStatusFailed, err.Error(), payload)
 			continue
 		}
 
 		// Mark reminder as sent
 		if err := w.appointmentRepo.MarkReminderSent(ctx, apt.ClinicID, apt.ID, threshold.Name); err != nil {
 			logger.Printf("Failed to mark reminder sent for appointment %s: %v", apt.ID, err)
+			// Warning, not failed: the message is already in the queue. We just
+			// can't mark it locally, which means the next tick may try to
+			// re-enqueue the same reminder — worth surfacing on a dashboard.
+			w.logEvent(ctx, &clinicID, "mark_reminder_sent_failed", systemlog_model.LogStatusWarning, err.Error(), payload)
 		}
 
 		// Set confirmation timeout on the first reminder sent, regardless of
@@ -245,9 +293,11 @@ func (w *ReminderWorker) processThreshold(ctx context.Context, threshold config.
 			expiresAt := time.Now().Add(threshold.Duration / 2)
 			if err := w.appointmentRepo.SetConfirmationExpiresAt(ctx, apt.ClinicID, apt.ID, expiresAt); err != nil {
 				logger.Printf("Failed to set confirmation timeout for appointment %s: %v", apt.ID, err)
+				w.logEvent(ctx, &clinicID, "set_confirmation_expires_failed", systemlog_model.LogStatusWarning, err.Error(), payload)
 			}
 		}
 
+		w.logEvent(ctx, &clinicID, "reminder_sent", systemlog_model.LogStatusSuccess, "", payload)
 		enqueued++
 	}
 
@@ -272,6 +322,8 @@ func (w *ReminderWorker) isClinicSubscriptionActive(ctx context.Context, clinicI
 	active, err := w.subscriptionChecker.IsSubscriptionActive(ctx, clinicID)
 	if err != nil {
 		logger.Printf("[Reminder] Subscription check failed for clinic %s: %v — skipping", clinicID, err)
+		cid := clinicID
+		w.logEvent(ctx, &cid, "subscription_check_failed", systemlog_model.LogStatusFailed, err.Error(), nil)
 		subCache[clinicID] = false
 		return false
 	}
