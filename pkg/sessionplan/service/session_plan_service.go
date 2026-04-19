@@ -111,6 +111,18 @@ func (s *sessionPlanService) Create(ctx context.Context, clinicID uuid.UUID, req
 		paymentMode = model.PaymentModePerSession
 	}
 
+	// BillingDay is mandatory for individual monthly plans so the payment
+	// reminder worker can compute the due date. For group plans, billing
+	// day lives on the enrollment instead, so it must not be set here.
+	if planType == model.PlanTypeIndividual && paymentMode == model.PaymentModeMonthly {
+		if req.BillingDay == nil {
+			return nil, errors.ErrValidationInstance.WithMessage("billing_day is required for individual monthly plans")
+		}
+		if *req.BillingDay < 1 || *req.BillingDay > 31 {
+			return nil, errors.ErrValidationInstance.WithMessage("billing_day must be between 1 and 31")
+		}
+	}
+
 	// Calculate generate_until (2 weeks ahead by default)
 	generateUntil := time.Now().AddDate(0, 0, 14)
 
@@ -138,6 +150,7 @@ func (s *sessionPlanService) Create(ctx context.Context, clinicID uuid.UUID, req
 		StartDate:      startDate,
 		GenerateUntil:  generateUntil,
 		SessionPrice:   req.SessionPrice,
+		BillingDay:     req.BillingDay,
 		Notes:          req.Notes,
 	}
 
@@ -227,6 +240,12 @@ func (s *sessionPlanService) Update(ctx context.Context, clinicID, id uuid.UUID,
 	}
 	if req.DayTimes != nil {
 		plan.DayTimes = *req.DayTimes
+	}
+	if req.BillingDay != nil {
+		if *req.BillingDay < 1 || *req.BillingDay > 31 {
+			return nil, errors.ErrValidationInstance.WithMessage("billing_day must be between 1 and 31")
+		}
+		plan.BillingDay = req.BillingDay
 	}
 
 	// Recalculate RRULE if frequency or week_days changed

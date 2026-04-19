@@ -89,6 +89,20 @@ func (s *enrollmentService) Enroll(ctx context.Context, clinicID, sessionPlanID 
 
 	// If patient was previously cancelled, reactivate
 	if existing != nil && existing.Status == model.EnrollmentStatusCancelled {
+		// Same billing_day guard as below so reactivation into monthly also
+		// requires the field.
+		effectiveMode := req.PaymentMode
+		if effectiveMode == "" {
+			effectiveMode = existing.PaymentMode
+		}
+		if effectiveMode == model.PaymentModeMonthly {
+			if req.BillingDay == nil {
+				return nil, errors.ErrValidationInstance.WithMessage("billing_day is required for monthly enrollments")
+			}
+			if *req.BillingDay < 1 || *req.BillingDay > 31 {
+				return nil, errors.ErrValidationInstance.WithMessage("billing_day must be between 1 and 31")
+			}
+		}
 		existing.Status = model.EnrollmentStatusActive
 		existing.LeftAt = nil
 		existing.WeekDays = weekDays
@@ -110,6 +124,19 @@ func (s *enrollmentService) Enroll(ctx context.Context, clinicID, sessionPlanID 
 	paymentMode := req.PaymentMode
 	if paymentMode == "" {
 		paymentMode = model.PaymentModePerSession
+	}
+
+	// Monthly enrollments require a billing day so the payment reminder
+	// worker can compute the next due date. We validate it here (instead of
+	// relying solely on the frontend) because enrollments can be created
+	// from other callers too (e.g. import scripts).
+	if paymentMode == model.PaymentModeMonthly {
+		if req.BillingDay == nil {
+			return nil, errors.ErrValidationInstance.WithMessage("billing_day is required for monthly enrollments")
+		}
+		if *req.BillingDay < 1 || *req.BillingDay > 31 {
+			return nil, errors.ErrValidationInstance.WithMessage("billing_day must be between 1 and 31")
+		}
 	}
 
 	enrollment := &model.SessionPlanEnrollment{

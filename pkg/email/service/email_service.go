@@ -20,6 +20,18 @@ type EmailService interface {
 	SendBookingConfirmation(ctx context.Context, data *BookingConfirmationEmailData) error
 	SendPortalEmailVerification(ctx context.Context, data *PortalEmailVerificationData) error
 	SendLeadIsca(ctx context.Context, data *LeadIscaEmailData) error
+	SendPaymentReminder(ctx context.Context, data *PaymentReminderEmailData) error
+}
+
+// PaymentReminderEmailData carries the information needed to render the
+// monthly payment reminder email. Amount is optional (0 hides the value).
+type PaymentReminderEmailData struct {
+	RecipientEmail string
+	RecipientName  string
+	ClinicName     string
+	PlanTitle      string
+	DueDate        time.Time
+	Amount         float64
 }
 
 // InviteEmailData contains data for invite emails
@@ -688,4 +700,42 @@ func (s *noOpEmailService) SendLeadIsca(ctx context.Context, data *LeadIscaEmail
 	fmt.Printf("[EMAIL] NoOp: lead isca email to %s (%s) with %d attachments\n",
 		data.RecipientName, data.RecipientEmail, len(data.Attachments))
 	return nil
+}
+
+func (s *noOpEmailService) SendPaymentReminder(ctx context.Context, data *PaymentReminderEmailData) error {
+	fmt.Printf("[EMAIL] NoOp: payment reminder to %s (%s) for plan %s due %s\n",
+		data.RecipientName, data.RecipientEmail, data.PlanTitle, data.DueDate.Format("02/01/2006"))
+	return nil
+}
+
+// SendPaymentReminder sends a monthly payment due-date reminder via SMTP.
+func (s *smtpEmailService) SendPaymentReminder(ctx context.Context, data *PaymentReminderEmailData) error {
+	dateFormatted := data.DueDate.Format("02/01/2006")
+	amountLine := ""
+	if data.Amount > 0 {
+		amountLine = fmt.Sprintf(`<p style="margin:4px 0;color:#334155;font-size:14px;"><strong>Valor:</strong> R$ %.2f</p>`, data.Amount)
+	}
+	subject := fmt.Sprintf("Lembrete de mensalidade — %s", data.ClinicName)
+	body := fmt.Sprintf(`
+<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"></head>
+<body style="font-family:Arial,sans-serif;">
+	<div style="max-width:520px;margin:0 auto;padding:32px 24px;">
+		<h2 style="color:#0d1b2a;">Olá, %s!</h2>
+		<p style="color:#607d94;font-size:15px;line-height:1.6;">
+			Lembrete da mensalidade do plano <strong>%s</strong> da <strong>%s</strong>.
+		</p>
+		<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:16px;margin:20px 0;">
+			<p style="margin:4px 0;color:#334155;font-size:14px;"><strong>Vencimento:</strong> %s</p>
+			%s
+		</div>
+		<p style="color:#a0aec0;font-size:12px;text-align:center;">
+			Enviado por <strong>aseno</strong>
+		</p>
+	</div>
+</body>
+</html>`, data.RecipientName, data.PlanTitle, data.ClinicName, dateFormatted, amountLine)
+
+	return s.sendEmail(data.RecipientEmail, subject, body)
 }

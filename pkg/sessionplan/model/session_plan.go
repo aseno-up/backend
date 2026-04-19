@@ -108,6 +108,12 @@ type SessionPlan struct {
 	// Payment mode (new)
 	PaymentMode PaymentMode `json:"payment_mode" gorm:"size:20;not null;default:'per_session'"`
 
+	// BillingDay is the day of month (1-31) used to compute monthly payment due
+	// dates for individual monthly plans. Required when Type=individual and
+	// PaymentMode=monthly. For group plans, billing day is defined per
+	// enrollment instead.
+	BillingDay *int `json:"billing_day" gorm:"type:smallint"`
+
 	// Frequency configuration (legacy — kept for backward compat, new plans use RRule)
 	Frequency     Frequency     `json:"frequency" gorm:"size:20;not null"`
 	WeekDays      pq.Int64Array `json:"week_days" gorm:"type:integer[]"` // 0=Sunday, 1=Monday, etc.
@@ -236,6 +242,7 @@ type CreateSessionPlanRequest struct {
 	PriceOverride        *float64    `json:"price_override"` // Optional override of procedure price (new)
 	Capacity             *int        `json:"capacity"`       // Max patients for group (new)
 	PaymentMode          PaymentMode `json:"payment_mode"`   // per_session, upfront, monthly (new)
+	BillingDay           *int        `json:"billing_day"`    // Day of month (1-31) for individual monthly plans
 	RRule                string      `json:"rrule"`          // RFC 5545 RRULE string (new, optional — computed from frequency if empty)
 	DayTimes             DayTimesMap `json:"day_times"`      // Per-day times (new, optional — e.g. {"MO":"08:00","WE":"14:00"})
 	Notes                string      `json:"notes"`
@@ -256,6 +263,7 @@ type UpdateSessionPlanRequest struct {
 	DayTimes       *DayTimesMap `json:"day_times"`
 	ProfessionalID *uuid.UUID   `json:"professional_id"`
 	Capacity       *int         `json:"capacity" binding:"omitempty,min=1,max=50"`
+	BillingDay     *int         `json:"billing_day" binding:"omitempty,min=1,max=31"`
 }
 
 // SessionPlanResponse represents the response for a session plan

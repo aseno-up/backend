@@ -300,6 +300,45 @@ func (s *brevoEmailService) SendBookingConfirmation(ctx context.Context, data *B
 	return nil
 }
 
+// SendPaymentReminder sends a monthly payment due-date reminder using Brevo.
+func (s *brevoEmailService) SendPaymentReminder(ctx context.Context, data *PaymentReminderEmailData) error {
+	dateFormatted := data.DueDate.Format("02/01/2006")
+	amountLine := ""
+	if data.Amount > 0 {
+		amountLine = fmt.Sprintf(`<p style="margin:4px 0;color:#334155;font-size:14px;"><strong>Valor:</strong> R$ %.2f</p>`, data.Amount)
+	}
+
+	_, _, err := s.client.TransactionalEmailsApi.SendTransacEmail(ctx, lib.SendSmtpEmail{
+		Sender: &lib.SendSmtpEmailSender{
+			Name:  s.senderName,
+			Email: s.senderEmail,
+		},
+		To: []lib.SendSmtpEmailTo{
+			{Email: data.RecipientEmail, Name: data.RecipientName},
+		},
+		Subject: fmt.Sprintf("Lembrete de mensalidade — %s", data.ClinicName),
+		HtmlContent: fmt.Sprintf(`
+			<div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto;padding:32px 24px;">
+				<h2 style="color:#0d1b2a;margin-bottom:8px;">Lembrete de mensalidade</h2>
+				<p style="color:#607d94;font-size:15px;line-height:1.6;">
+					Olá, <strong>%s</strong>! Lembrete da mensalidade do plano <strong>%s</strong> da <strong>%s</strong>.
+				</p>
+				<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:16px;margin:20px 0;">
+					<p style="margin:4px 0;color:#334155;font-size:14px;"><strong>Vencimento:</strong> %s</p>
+					%s
+				</div>
+				<p style="color:#a0aec0;font-size:12px;margin-top:32px;text-align:center;">
+					Enviado por <strong>aseno</strong>
+				</p>
+			</div>
+		`, data.RecipientName, data.PlanTitle, data.ClinicName, dateFormatted, amountLine),
+	})
+	if err != nil {
+		return fmt.Errorf("failed to send payment reminder email via Brevo: %w", err)
+	}
+	return nil
+}
+
 // SendLeadIsca sends the lead isca email with spreadsheet attachments using Brevo
 func (s *brevoEmailService) SendLeadIsca(ctx context.Context, data *LeadIscaEmailData) error {
 	attachments := make([]lib.SendSmtpEmailAttachment, len(data.Attachments))

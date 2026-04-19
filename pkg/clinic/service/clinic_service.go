@@ -180,6 +180,22 @@ func (s *clinicService) Update(ctx context.Context, id uuid.UUID, req *model.Upd
 		if req.Settings.AIHumanTakeoverPauseHours != nil {
 			clinic.Settings.AIHumanTakeoverPauseHours = req.Settings.AIHumanTakeoverPauseHours
 		}
+
+		// Payment reminder settings
+		if req.Settings.PaymentReminderDaysBefore != nil {
+			d := *req.Settings.PaymentReminderDaysBefore
+			if d < 1 || d > 7 {
+				return nil, errors.ErrValidationInstance.WithMessage(
+					"payment_reminder_days_before must be between 1 and 7")
+			}
+			clinic.Settings.PaymentReminderDaysBefore = req.Settings.PaymentReminderDaysBefore
+		}
+		if req.Settings.PaymentReminderWhatsAppEnabled != nil {
+			clinic.Settings.PaymentReminderWhatsAppEnabled = req.Settings.PaymentReminderWhatsAppEnabled
+		}
+		if req.Settings.PaymentReminderEmailEnabled != nil {
+			clinic.Settings.PaymentReminderEmailEnabled = req.Settings.PaymentReminderEmailEnabled
+		}
 	}
 
 	// Save changes

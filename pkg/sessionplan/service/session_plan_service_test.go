@@ -287,3 +287,117 @@ func TestUpdate_DurationMins(t *testing.T) {
 func intPtr(v int) *int {
 	return &v
 }
+
+func TestCreate_IndividualMonthly_RequiresBillingDay(t *testing.T) {
+	repo := &mockPlanRepo{plan: basePlan()}
+	svc := NewSessionPlanService(repo, &mockAptRepo{})
+
+	procID := uuid.New()
+	req := &model.CreateSessionPlanRequest{
+		PatientID:     uuid.New(),
+		Title:         "Plano Mensal",
+		Type:          model.PlanTypeIndividual,
+		PaymentMode:   model.PaymentModeMonthly,
+		Frequency:     model.FrequencyWeekly,
+		PreferredTime: "09:00",
+		DurationMins:  50,
+		TotalSessions: 10,
+		StartDate:     "2026-05-15",
+		ProcedureID:   &procID,
+		// BillingDay intentionally omitted
+	}
+
+	_, err := svc.Create(context.Background(), uuid.New(), req)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "billing_day")
+}
+
+func TestCreate_IndividualMonthly_BillingDayOutOfRange(t *testing.T) {
+	repo := &mockPlanRepo{plan: basePlan()}
+	svc := NewSessionPlanService(repo, &mockAptRepo{})
+
+	procID := uuid.New()
+	bad := 32
+	req := &model.CreateSessionPlanRequest{
+		PatientID:     uuid.New(),
+		Title:         "Plano Mensal",
+		Type:          model.PlanTypeIndividual,
+		PaymentMode:   model.PaymentModeMonthly,
+		Frequency:     model.FrequencyWeekly,
+		PreferredTime: "09:00",
+		DurationMins:  50,
+		TotalSessions: 10,
+		StartDate:     "2026-05-15",
+		ProcedureID:   &procID,
+		BillingDay:    &bad,
+	}
+
+	_, err := svc.Create(context.Background(), uuid.New(), req)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "between 1 and 31")
+}
+
+func TestCreate_IndividualMonthly_ValidBillingDay(t *testing.T) {
+	repo := &mockPlanRepo{plan: basePlan()}
+	svc := NewSessionPlanService(repo, &mockAptRepo{})
+
+	procID := uuid.New()
+	day := 15
+	req := &model.CreateSessionPlanRequest{
+		PatientID:     uuid.New(),
+		Title:         "Plano Mensal",
+		Type:          model.PlanTypeIndividual,
+		PaymentMode:   model.PaymentModeMonthly,
+		Frequency:     model.FrequencyWeekly,
+		PreferredTime: "09:00",
+		DurationMins:  50,
+		TotalSessions: 10,
+		StartDate:     "2026-05-15",
+		ProcedureID:   &procID,
+		BillingDay:    &day,
+	}
+
+	_, err := svc.Create(context.Background(), uuid.New(), req)
+	require.NoError(t, err)
+}
+
+func TestCreate_IndividualPerSession_BillingDayNotRequired(t *testing.T) {
+	repo := &mockPlanRepo{plan: basePlan()}
+	svc := NewSessionPlanService(repo, &mockAptRepo{})
+
+	procID := uuid.New()
+	req := &model.CreateSessionPlanRequest{
+		PatientID:     uuid.New(),
+		Title:         "Plano Per Session",
+		Type:          model.PlanTypeIndividual,
+		PaymentMode:   model.PaymentModePerSession,
+		Frequency:     model.FrequencyWeekly,
+		PreferredTime: "09:00",
+		DurationMins:  50,
+		TotalSessions: 10,
+		StartDate:     "2026-05-15",
+		ProcedureID:   &procID,
+	}
+
+	_, err := svc.Create(context.Background(), uuid.New(), req)
+	require.NoError(t, err)
+}
+
+func TestUpdate_BillingDay(t *testing.T) {
+	plan := basePlan()
+	repo := &mockPlanRepo{plan: plan}
+	svc := NewSessionPlanService(repo, &mockAptRepo{})
+
+	day := 20
+	req := &model.UpdateSessionPlanRequest{
+		BillingDay: &day,
+	}
+
+	_, err := svc.Update(context.Background(), plan.ClinicID, plan.ID, req)
+	require.NoError(t, err)
+
+	updated := repo.updated
+	require.NotNil(t, updated)
+	require.NotNil(t, updated.BillingDay)
+	assert.Equal(t, 20, *updated.BillingDay)
+}

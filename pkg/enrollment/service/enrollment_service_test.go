@@ -300,6 +300,55 @@ func TestEnroll_ReactivationUpdatesWeekDays(t *testing.T) {
 	assert.Equal(t, pq.Int64Array{2, 4}, result.WeekDays)
 }
 
+func TestEnroll_MonthlyRequiresBillingDay(t *testing.T) {
+	plan := newGroupPlan(intPtr(5))
+	repo := &mockEnrollRepo{}
+	svc := NewEnrollmentService(repo, &mockSPRepo{plan: plan})
+
+	_, err := svc.Enroll(context.Background(), plan.ClinicID, plan.ID, &model.EnrollRequest{
+		PatientID:   uuid.New(),
+		WeekDays:    []int{1},
+		PaymentMode: model.PaymentModeMonthly,
+		// BillingDay intentionally omitted
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "billing_day")
+}
+
+func TestEnroll_MonthlyRejectsOutOfRangeBillingDay(t *testing.T) {
+	plan := newGroupPlan(intPtr(5))
+	repo := &mockEnrollRepo{}
+	svc := NewEnrollmentService(repo, &mockSPRepo{plan: plan})
+
+	bad := 32
+	_, err := svc.Enroll(context.Background(), plan.ClinicID, plan.ID, &model.EnrollRequest{
+		PatientID:   uuid.New(),
+		WeekDays:    []int{1},
+		PaymentMode: model.PaymentModeMonthly,
+		BillingDay:  &bad,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "between 1 and 31")
+}
+
+func TestEnroll_MonthlyAcceptsValidBillingDay(t *testing.T) {
+	plan := newGroupPlan(intPtr(5))
+	repo := &mockEnrollRepo{}
+	svc := NewEnrollmentService(repo, &mockSPRepo{plan: plan})
+
+	day := 10
+	enrollment, err := svc.Enroll(context.Background(), plan.ClinicID, plan.ID, &model.EnrollRequest{
+		PatientID:   uuid.New(),
+		WeekDays:    []int{1},
+		PaymentMode: model.PaymentModeMonthly,
+		BillingDay:  &day,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, enrollment)
+	require.NotNil(t, enrollment.BillingDay)
+	assert.Equal(t, 10, *enrollment.BillingDay)
+}
+
 func TestEnroll_RejectsActiveDuplicate(t *testing.T) {
 	plan := newGroupPlan(intPtr(5))
 	patientID := uuid.New()
