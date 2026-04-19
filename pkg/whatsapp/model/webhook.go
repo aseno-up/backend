@@ -88,6 +88,13 @@ type ParsedIncomingMessage struct {
 	IsFromMe   bool      `json:"is_from_me"`
 	Timestamp  time.Time `json:"timestamp"`
 	Instance   string    `json:"instance"`
+	// IsGroup is true when the message comes from a WhatsApp group chat (JID
+	// suffix @g.us on Evolution/WAHA). The webhook handler skips these before
+	// invoking the service — the AI agent and confirmation flows are built
+	// for 1-to-1 conversations and replying inside a group would spam all
+	// participants. Each provider parser sets this flag; default false keeps
+	// direct messages processed as before.
+	IsGroup bool `json:"is_group,omitempty"`
 	// Audio fields — set when the incoming message is an audio/voice note
 	IsAudio  bool   `json:"is_audio,omitempty"`
 	AudioURL string `json:"audio_url,omitempty"` // URL from provider (may require auth)

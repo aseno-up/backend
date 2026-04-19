@@ -157,6 +157,7 @@ type stubWhatsAppSvc struct {
 	statusState         string
 	statusErr           error
 	createInstanceCalls []string
+	handleIncomingCalls int
 }
 
 func (s *stubWhatsAppSvc) CreateInstance(_ context.Context, instance string) (*whatsapp_model.QRCodeData, error) {
@@ -173,6 +174,7 @@ func (s *stubWhatsAppSvc) SendReminderMessage(_ context.Context, _ string, _ *wh
 	return nil
 }
 func (s *stubWhatsAppSvc) HandleIncomingMessage(_ context.Context, _ uuid.UUID, _ *whatsapp_model.ParsedIncomingMessage) error {
+	s.handleIncomingCalls++
 	return nil
 }
 func (s *stubWhatsAppSvc) ProcessDelayedAI(_ context.Context, _ *whatsapp_model.ScheduledMessage) error {
@@ -321,6 +323,53 @@ func TestWebhook_InstanceDesconhecida(t *testing.T) {
 	var resp map[string]interface{}
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.Equal(t, "unknown_instance", resp["status"])
+}
+
+// TestWebhook_GroupMessage_IsSkipped garante que mensagens de grupo
+// (remoteJid terminando em @g.us) não acionam o service e retornam
+// skipped_group, para que o agente IA e os fluxos de confirmação não
+// respondam dentro de grupos.
+func TestWebhook_GroupMessage_IsSkipped(t *testing.T) {
+	clinicID := uuid.New()
+	instance := "clinica-grupo-xyz"
+
+	connRepo := newStubConnRepo()
+	_ = connRepo.UpsertInstance(context.Background(), clinicID, instance)
+
+	svc := &stubWhatsAppSvc{}
+	h := NewWhatsAppHandler(svc, &stubClinicRepo{}, connRepo, "", "evolution")
+
+	payload := map[string]interface{}{
+		"event":    "messages.upsert",
+		"instance": instance,
+		"data": map[string]interface{}{
+			"key": map[string]interface{}{
+				"remoteJid": "120363040123456789@g.us",
+				"fromMe":    false,
+				"id":        "MSG-GROUP",
+			},
+			"message": map[string]interface{}{
+				"conversation": "mensagem de grupo",
+			},
+			"messageTimestamp": 1000000001,
+		},
+	}
+	body, _ := json.Marshal(payload)
+
+	router := gin.New()
+	router.POST("/api/v1/whatsapp/webhook", h.Webhook)
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest(http.MethodPost, "/api/v1/whatsapp/webhook", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	var resp map[string]interface{}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, "skipped_group", resp["status"])
+	assert.Equal(t, 0, svc.handleIncomingCalls,
+		"service.HandleIncomingMessage must not be called for group messages")
 }
 
 // TestWebhook_InstanceConhecida processa o payload e retorna "processed".

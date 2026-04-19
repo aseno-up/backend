@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/aseno/backend/internal/logger"
@@ -425,6 +426,10 @@ func ParseWebhookPayload(data []byte) (*model.ParsedIncomingMessage, error) {
 	// fromMe is returned to the service so it can distinguish our own echoes
 	// (cache hit) from a human takeover via the WhatsApp app.
 
+	// Detect group chats by the @g.us JID suffix. The handler uses this flag
+	// to skip processing entirely — the service never sees group messages.
+	isGroup := strings.HasSuffix(payload.Payload.From, "@g.us")
+
 	// Extract phone number (remove @c.us suffix)
 	phone := payload.Payload.From
 	if len(phone) > 5 && phone[len(phone)-5:] == "@c.us" {
@@ -446,6 +451,7 @@ func ParseWebhookPayload(data []byte) (*model.ParsedIncomingMessage, error) {
 		IsFromMe:   payload.Payload.FromMe,
 		Timestamp:  time.Unix(payload.Payload.Timestamp, 0),
 		Instance:   payload.Session,
+		IsGroup:    isGroup,
 		IsAudio:    isAudio,
 	}, nil
 }

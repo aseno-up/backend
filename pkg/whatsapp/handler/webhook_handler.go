@@ -223,6 +223,15 @@ func (h *whatsAppHandler) processWebhook(c *gin.Context, provider string) {
 		return
 	}
 
+	// Group messages are ignored end-to-end. The AI agent and confirmation
+	// flows are built for 1-to-1 conversations; replying inside a group would
+	// spam all participants and confuse the intent classifier. Each provider
+	// parser sets IsGroup based on the JID suffix (@g.us).
+	if parsed.IsGroup {
+		c.JSON(http.StatusOK, gin.H{"status": "skipped_group"})
+		return
+	}
+
 	// Process the message
 	if err := h.service.HandleIncomingMessage(c.Request.Context(), conn.ClinicID, parsed); err != nil {
 		logger.Printf("Error handling incoming message: %v", err)

@@ -443,8 +443,13 @@ func ParseWebhookPayload(data []byte) (*model.ParsedIncomingMessage, error) {
 	// can decide whether the echo is our own outbound (cache hit) or a human
 	// takeover (clinic user typing via the WhatsApp app).
 
+	// Detect group chats by the @g.us JID suffix. The handler uses this flag
+	// to skip processing entirely — the service never sees group messages.
+	remoteJid := payload.Data.Key.RemoteJid
+	isGroup := strings.HasSuffix(remoteJid, "@g.us")
+
 	// Extract phone number (remove @s.whatsapp.net)
-	phone := payload.Data.Key.RemoteJid
+	phone := remoteJid
 	if len(phone) > 15 {
 		phone = phone[:len(phone)-15] // Remove @s.whatsapp.net
 	}
@@ -478,6 +483,7 @@ func ParseWebhookPayload(data []byte) (*model.ParsedIncomingMessage, error) {
 		IsFromMe:   payload.Data.Key.FromMe,
 		Timestamp:  time.Unix(payload.Data.MessageTimestamp, 0),
 		Instance:   payload.Instance,
+		IsGroup:    isGroup,
 		IsAudio:    isAudio,
 		AudioURL:   audioURL,
 	}, nil
