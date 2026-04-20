@@ -4,7 +4,6 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
-	"github.com/google/uuid"
 
 	"github.com/aseno/backend/internal/errors"
 	"github.com/aseno/backend/pkg/audit/model"
@@ -33,20 +32,18 @@ func (h *auditHandler) RegisterRoutes(router gin.IRouter) {
 	}
 }
 
+// List returns audit logs. The route is mounted under the dev-only admin
+// panel (see devOnlyMiddleware in cmd/api/main.go), so callers are already
+// restricted to ClinicTypeDev tenants; results span every tenant unless the
+// caller narrows with ?clinic_id=<uuid>.
 func (h *auditHandler) List(c *gin.Context) {
-	clinicID, exists := c.Get("clinic_id")
-	if !exists {
-		c.JSON(http.StatusUnauthorized, errors.ToResponse(errors.ErrUnauthorizedInstance))
-		return
-	}
-
 	var filter model.AuditLogFilter
 	if err := c.ShouldBindQuery(&filter); err != nil {
 		c.JSON(http.StatusBadRequest, errors.ToResponse(errors.ErrValidationInstance.WithError(err)))
 		return
 	}
 
-	result, err := h.service.List(c.Request.Context(), clinicID.(uuid.UUID), &filter)
+	result, err := h.service.List(c.Request.Context(), &filter)
 	if err != nil {
 		c.JSON(errors.GetStatusCode(err), errors.ToResponse(err))
 		return

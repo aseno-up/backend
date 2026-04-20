@@ -65,7 +65,7 @@ func (m *MockAuditService) LogFromGin(c *gin.Context, action audit_model.AuditAc
 	return nil
 }
 
-func (m *MockAuditService) List(ctx context.Context, clinicID uuid.UUID, filter *audit_model.AuditLogFilter) (*audit_model.AuditLogResponse, error) {
+func (m *MockAuditService) List(ctx context.Context, filter *audit_model.AuditLogFilter) (*audit_model.AuditLogResponse, error) {
 	return nil, nil
 }
 

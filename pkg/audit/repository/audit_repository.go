@@ -4,7 +4,6 @@ import (
 	"context"
 	"math"
 
-	"github.com/google/uuid"
 	"gorm.io/gorm"
 
 	"github.com/aseno/backend/internal/errors"
@@ -14,7 +13,7 @@ import (
 // AuditRepository defines the interface for audit log persistence
 type AuditRepository interface {
 	Create(ctx context.Context, log *model.AuditLog) error
-	List(ctx context.Context, clinicID uuid.UUID, filter *model.AuditLogFilter) (*model.AuditLogResponse, error)
+	List(ctx context.Context, filter *model.AuditLogFilter) (*model.AuditLogResponse, error)
 }
 
 type auditRepository struct {
@@ -33,12 +32,15 @@ func (r *auditRepository) Create(ctx context.Context, log *model.AuditLog) error
 	return nil
 }
 
-func (r *auditRepository) List(ctx context.Context, clinicID uuid.UUID, filter *model.AuditLogFilter) (*model.AuditLogResponse, error) {
+func (r *auditRepository) List(ctx context.Context, filter *model.AuditLogFilter) (*model.AuditLogResponse, error) {
 	var logs []model.AuditLog
 	var total int64
 
-	query := r.db.WithContext(ctx).Where("clinic_id = ?", clinicID)
+	query := r.db.WithContext(ctx).Model(&model.AuditLog{})
 
+	if filter.ClinicID != "" {
+		query = query.Where("audit_logs.clinic_id = ?", filter.ClinicID)
+	}
 	if filter.Action != "" {
 		query = query.Where("action = ?", filter.Action)
 	}
@@ -58,7 +60,7 @@ func (r *auditRepository) List(ctx context.Context, clinicID uuid.UUID, filter *
 		query = query.Where("created_at <= ?", filter.EndDate)
 	}
 
-	if err := query.Model(&model.AuditLog{}).Count(&total).Error; err != nil {
+	if err := query.Count(&total).Error; err != nil {
 		return nil, errors.ErrInternalInstance.WithError(err)
 	}
 
@@ -66,7 +68,15 @@ func (r *auditRepository) List(ctx context.Context, clinicID uuid.UUID, filter *
 	page := filter.GetPage()
 	offset := filter.GetOffset()
 
-	if err := query.Order("created_at DESC").Offset(offset).Limit(limit).Find(&logs).Error; err != nil {
+	// LEFT JOIN keeps rows whose clinic was deleted; the dev admin panel still
+	// shows the entry, just with an empty clinic_name.
+	if err := query.
+		Select("audit_logs.*, clinics.name AS clinic_name").
+		Joins("LEFT JOIN clinics ON clinics.id = audit_logs.clinic_id").
+		Order("audit_logs.created_at DESC").
+		Offset(offset).
+		Limit(limit).
+		Find(&logs).Error; err != nil {
 		return nil, errors.ErrInternalInstance.WithError(err)
 	}
 

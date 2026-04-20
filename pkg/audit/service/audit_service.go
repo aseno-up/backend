@@ -16,7 +16,7 @@ import (
 type AuditService interface {
 	Log(ctx context.Context, entry AuditEntry) error
 	LogFromGin(c *gin.Context, action model.AuditAction, entityType model.AuditEntityType, entityID string, oldData, newData interface{}) error
-	List(ctx context.Context, clinicID uuid.UUID, filter *model.AuditLogFilter) (*model.AuditLogResponse, error)
+	List(ctx context.Context, filter *model.AuditLogFilter) (*model.AuditLogResponse, error)
 }
 
 // AuditEntry represents a structured audit entry
@@ -113,6 +113,6 @@ func (s *auditService) LogFromGin(c *gin.Context, action model.AuditAction, enti
 	return s.Log(c.Request.Context(), entry)
 }
 
-func (s *auditService) List(ctx context.Context, clinicID uuid.UUID, filter *model.AuditLogFilter) (*model.AuditLogResponse, error) {
-	return s.repo.List(ctx, clinicID, filter)
+func (s *auditService) List(ctx context.Context, filter *model.AuditLogFilter) (*model.AuditLogResponse, error) {
+	return s.repo.List(ctx, filter)
 }

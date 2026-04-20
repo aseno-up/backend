@@ -7,6 +7,8 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/aseno/backend/internal/errors"
+	audit_model "github.com/aseno/backend/pkg/audit/model"
+	audit_service "github.com/aseno/backend/pkg/audit/service"
 	"github.com/aseno/backend/pkg/auth/model"
 	"github.com/aseno/backend/pkg/auth/service"
 )
@@ -31,13 +33,43 @@ type AuthHandler interface {
 // authHandler implements AuthHandler
 type authHandler struct {
 	authService service.AuthService
+	auditSvc    audit_service.AuditService
 }
 
 // NewAuthHandler creates a new auth handler
-func NewAuthHandler(authService service.AuthService) AuthHandler {
-	return &authHandler{
-		authService: authService,
+func NewAuthHandler(authService service.AuthService, opts ...func(*authHandler)) AuthHandler {
+	h := &authHandler{authService: authService}
+	for _, opt := range opts {
+		opt(h)
 	}
+	return h
+}
+
+// WithAuditService wires an audit service so login/logout leave a trail.
+func WithAuditService(svc audit_service.AuditService) func(*authHandler) {
+	return func(h *authHandler) {
+		h.auditSvc = svc
+	}
+}
+
+// recordAuthEvent emits an audit entry for a login/logout. Login endpoints are
+// public, so we can't rely on the gin context's clinic_id/user_id — we pull
+// those from the auth response instead.
+func (h *authHandler) recordAuthEvent(c *gin.Context, action audit_model.AuditAction, response *model.AuthResponse) {
+	if h.auditSvc == nil || response == nil || response.User == nil || response.Clinic == nil {
+		return
+	}
+	_ = h.auditSvc.Log(c.Request.Context(), audit_service.AuditEntry{
+		ClinicID:   response.Clinic.ID,
+		UserID:     response.User.ID,
+		UserEmail:  response.User.Email,
+		UserRole:   string(response.User.Role),
+		Action:     action,
+		EntityType: audit_model.AuditEntityUser,
+		EntityID:   response.User.ID.String(),
+		IP:         c.ClientIP(),
+		UserAgent:  c.Request.UserAgent(),
+	})
 }
 
 // RegisterRoutes registers authentication routes
@@ -124,6 +156,8 @@ func (h *authHandler) Login(c *gin.Context) {
 		return
 	}
 
+	h.recordAuthEvent(c, audit_model.AuditActionLogin, response)
+
 	// Set HttpOnly cookies
 	// MaxAge: 15 minutes for access token, 7 days for refresh token
 	// Secure: false (dev), HttpOnly: true
@@ -156,6 +190,8 @@ func (h *authHandler) GoogleLogin(c *gin.Context) {
 		c.JSON(statusCode, errors.ToResponse(err))
 		return
 	}
+
+	h.recordAuthEvent(c, audit_model.AuditActionLogin, response)
 
 	// Set HttpOnly cookies
 	c.SetCookie("access_token", response.AccessToken, 900, "/", "", false, true)
@@ -221,6 +257,13 @@ func (h *authHandler) Logout(c *gin.Context) {
 		statusCode := errors.GetStatusCode(err)
 		c.JSON(statusCode, errors.ToResponse(err))
 		return
+	}
+
+	// Logout lives on the protected group, so the auth middleware has already
+	// populated clinic_id/user_id/email/user_role on the gin context, which is
+	// exactly what LogFromGin expects.
+	if h.auditSvc != nil {
+		_ = h.auditSvc.LogFromGin(c, audit_model.AuditActionLogout, audit_model.AuditEntityUser, userID.(uuid.UUID).String(), nil, nil)
 	}
 
 	// Clear cookies

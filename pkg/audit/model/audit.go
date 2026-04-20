@@ -41,10 +41,14 @@ const (
 	AuditEntityPatientWhatsAppConn   AuditEntityType = "PATIENT_WHATSAPP_CONNECTION"
 )
 
-// AuditLog represents an audit trail entry
+// AuditLog represents an audit trail entry.
+// ClinicName is populated via a JOIN in the repository's List query so the
+// dev-clinic admin panel can show which tenant each entry belongs to; it's
+// never persisted or written back.
 type AuditLog struct {
 	ID         uuid.UUID       `json:"id" gorm:"type:uuid;primary_key;default:gen_random_uuid()"`
 	ClinicID   uuid.UUID       `json:"clinic_id" gorm:"type:uuid;not null;index"`
+	ClinicName string          `json:"clinic_name,omitempty" gorm:"->;-:migration"`
 	UserID     uuid.UUID       `json:"user_id" gorm:"type:uuid;not null;index"`
 	UserEmail  string          `json:"user_email" gorm:"type:varchar(255)"`
 	UserRole   string          `json:"user_role" gorm:"type:varchar(50)"`
@@ -63,7 +67,9 @@ func (AuditLog) TableName() string {
 	return "audit_logs"
 }
 
-// AuditLogFilter represents filters for listing audit logs
+// AuditLogFilter represents filters for listing audit logs.
+// ClinicID is optional: when empty, the repository returns records across all
+// tenants (relied on by the dev-clinic admin panel for cross-tenant support).
 type AuditLogFilter struct {
 	Page       int             `form:"page"`
 	Limit      int             `form:"limit"`
@@ -71,6 +77,7 @@ type AuditLogFilter struct {
 	EntityType AuditEntityType `form:"entity_type"`
 	UserID     string          `form:"user_id"`
 	EntityID   string          `form:"entity_id"`
+	ClinicID   string          `form:"clinic_id"`
 	StartDate  string          `form:"start_date"`
 	EndDate    string          `form:"end_date"`
 }

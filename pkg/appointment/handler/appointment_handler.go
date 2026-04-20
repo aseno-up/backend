@@ -106,6 +106,10 @@ func (h *appointmentHandler) Create(c *gin.Context) {
 		return
 	}
 
+	if h.auditSvc != nil {
+		_ = h.auditSvc.LogFromGin(c, audit_model.AuditActionCreate, audit_model.AuditEntityAppointment, appointment.ID.String(), nil, appointment)
+	}
+
 	c.JSON(http.StatusCreated, appointment)
 }
 
