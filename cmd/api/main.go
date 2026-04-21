@@ -242,6 +242,7 @@ func main() {
 	leadRepo := lead_repository.NewLeadRepository(db.GetDB())
 	paymentMethodRepo := paymentmethod_repository.NewPaymentMethodRepository(db.GetDB())
 	appointmentPaymentRepo := appointment_repository.NewAppointmentPaymentRepository(db.GetDB())
+	appointmentReceiptTokenRepo := appointment_repository.NewAppointmentReceiptTokenRepository(db.GetDB())
 	specialtyRepo := specialty_repository.NewSpecialtyRepository(db.GetDB())
 
 	// Seed default settings (if not exist)
@@ -814,6 +815,19 @@ func main() {
 	specialtyHandler := specialty_handler.NewSpecialtyHandler(specialtyService, auditSvc)
 	appointmentPaymentHandler := appointment_handler.NewAppointmentPaymentHandler(appointmentPaymentService, auditSvc)
 
+	// Public receipt (share link) — token issuance is authenticated,
+	// reading is public. Uses narrow interfaces so tests don't touch the
+	// full repositories.
+	appointmentReceiptService := appointment_service.NewAppointmentReceiptService(
+		appointmentReceiptTokenRepo,
+		appointmentRepo,
+		appointmentPaymentRepo,
+		clinicRepo,
+		cfg.GetFrontendURL(),
+	)
+	appointmentReceiptHandler := appointment_handler.NewAppointmentReceiptHandler(appointmentReceiptService)
+	publicReceiptHandler := public_handler.NewPublicReceiptHandler(appointmentReceiptService)
+
 	// Initialize WhatsApp handler (if service is configured)
 	var whatsappHandler whatsapp_handler.WhatsAppHandler
 	if whatsappService != nil {
@@ -991,6 +1005,8 @@ func main() {
 		leadIscaHdlr,
 		paymentMethodHandler,
 		appointmentPaymentHandler,
+		appointmentReceiptHandler,
+		publicReceiptHandler,
 		specialtyHandler,
 		commissionHandler,
 		portalHdlr,
@@ -1091,6 +1107,8 @@ func setupRouter(
 	leadIscaHandler lead_handler.LeadIscaHandler,
 	paymentMethodHandler *paymentmethod_handler.PaymentMethodHandler,
 	appointmentPaymentHandler appointment_handler.AppointmentPaymentHandler,
+	appointmentReceiptHandler appointment_handler.AppointmentReceiptHandler,
+	publicReceiptHandler public_handler.PublicReceiptHandler,
 	specialtyHandler *specialty_handler.SpecialtyHandler,
 	commissionHandler commission_handler.CommissionHandler,
 	portalHandler *portalaccount_handler.PortalHandler,
@@ -1136,6 +1154,9 @@ func setupRouter(
 
 		// Public config routes (no auth required - landing page)
 		publicHandler.RegisterRoutes(v1)
+
+		// Public appointment receipt (share link) — no auth required
+		publicReceiptHandler.RegisterRoutes(v1)
 
 		// Public lead isca routes (no auth required - lead capture)
 		leadIscaHandler.RegisterRoutes(v1)
@@ -1216,6 +1237,8 @@ func setupRouter(
 				appointmentHandler.RegisterRoutes(appointmentsProtected)
 				// Payment sub-routes registered on the same /appointments group to avoid wildcard conflict
 				appointmentPaymentHandler.RegisterRoutes(appointmentsProtected.Group("/appointments"))
+				// Receipt-token endpoint (shares the same /appointments group)
+				appointmentReceiptHandler.RegisterRoutes(appointmentsProtected.Group("/appointments"))
 				// Attendance sub-routes
 				attendanceHandler.RegisterRoutes(appointmentsProtected)
 			}
@@ -1465,6 +1488,8 @@ func runMigrations(db *database.Database) error {
 		// Payment methods and appointment payments
 		&paymentmethod_model.PaymentMethod{},
 		&appointment_model.AppointmentPayment{},
+		// Public receipt share tokens
+		&appointment_model.AppointmentReceiptToken{},
 		// Specialties and portal accounts
 		&specialty_model.Specialty{},
 		&professional_model.ProfessionalSpecialty{},
