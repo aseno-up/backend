@@ -37,6 +37,7 @@ type Account struct {
 	AsaasCustomerID        string             `json:"-"`
 	PlanID                 *uuid.UUID         `json:"plan_id,omitempty" gorm:"type:uuid;index"`
 	Plan                   *plan_model.Plan   `json:"plan,omitempty" gorm:"foreignKey:PlanID"`
+	PlanVariant            plan_model.PlanVariant `json:"plan_variant" gorm:"type:varchar(16);not null;default:''"`
 	SubscriptionStatus     SubscriptionStatus `json:"subscription_status" gorm:"default:'trial'"`
 	TrialEndsAt            *time.Time         `json:"trial_ends_at"`
 	SubscriptionEndsAt     *time.Time         `json:"subscription_ends_at"`
@@ -72,9 +73,10 @@ func (a *Account) IsSubscriptionActive() bool {
 
 // AccountResponse represents the API response for an account
 type AccountResponse struct {
-	ID                     uuid.UUID          `json:"id"`
-	OwnerID                uuid.UUID          `json:"owner_id"`
-	Plan                   *plan_model.Plan   `json:"plan,omitempty"`
+	ID                     uuid.UUID              `json:"id"`
+	OwnerID                uuid.UUID              `json:"owner_id"`
+	Plan                   *plan_model.Plan       `json:"plan,omitempty"`
+	PlanVariant            plan_model.PlanVariant `json:"plan_variant"`
 	SubscriptionStatus     SubscriptionStatus `json:"subscription_status"`
 	TrialEndsAt            *time.Time         `json:"trial_ends_at,omitempty"`
 	SubscriptionEndsAt     *time.Time         `json:"subscription_ends_at,omitempty"`
@@ -91,6 +93,7 @@ func (a *Account) ToResponse() *AccountResponse {
 		ID:                     a.ID,
 		OwnerID:                a.OwnerID,
 		Plan:                   a.Plan,
+		PlanVariant:            a.PlanVariant,
 		SubscriptionStatus:     a.SubscriptionStatus,
 		TrialEndsAt:            a.TrialEndsAt,
 		SubscriptionEndsAt:     a.SubscriptionEndsAt,

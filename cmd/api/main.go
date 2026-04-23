@@ -771,7 +771,11 @@ func main() {
 
 	// Initialize handlers
 	healthHandler := health_handler.NewHealthHandler(db)
-	authHandler := auth_handler.NewAuthHandler(authService, auth_handler.WithAuditService(auditSvc))
+	authHandler := auth_handler.NewAuthHandler(
+		authService,
+		auth_handler.WithAuditService(auditSvc),
+		auth_handler.WithSystemLogService(systemLogSvc),
+	)
 	professionalHandler := professional_handler.NewProfessionalHandler(professionalService, inviteSvc, auditSvc)
 	professionalProcedureHandler := professional_handler.NewProfessionalProcedureHandler(professionalProcedureService, auditSvc)
 	commissionHandler := commission_handler.NewCommissionHandler(commissionSvc, auditSvc)

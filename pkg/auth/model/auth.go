@@ -54,6 +54,7 @@ type RegisterRequest struct {
 	// Optional: Plan selection from landing page
 	Plan    string `json:"plan"`    // trial, basic, professional, advanced
 	Billing string `json:"billing"` // monthly, annually
+	Variant string `json:"variant"` // "solo" for single-professional discounted contract, empty for clinic
 	// Optional: Payment info for paid plans
 	Document   string `json:"document"` // CPF or CNPJ for Asaas
 	OfferToken string `json:"offer_token"`

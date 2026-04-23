@@ -38,7 +38,7 @@ func (m *MockPaymentService) CreateCustomerForClinic(ctx context.Context, clinic
 	return args.Error(0)
 }
 
-func (m *MockPaymentService) CreateSubscriptionForClinic(ctx context.Context, clinicID uuid.UUID, planID uuid.UUID, offerToken *string, billing string, units int) error {
+func (m *MockPaymentService) CreateSubscriptionForClinic(ctx context.Context, clinicID uuid.UUID, planID uuid.UUID, offerToken *string, billing string, variant string, units int) error {
 	args := m.Called(ctx, clinicID, planID, offerToken, billing)
 	return args.Error(0)
 }

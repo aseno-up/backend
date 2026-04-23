@@ -22,6 +22,7 @@ import (
 	clinicmember_repository "github.com/aseno/backend/pkg/clinicmember/repository"
 	email_service "github.com/aseno/backend/pkg/email/service"
 	payment_model "github.com/aseno/backend/pkg/payment/model"
+	plan_model "github.com/aseno/backend/pkg/plan/model"
 	plan_repo "github.com/aseno/backend/pkg/plan/repository"
 	professional_model "github.com/aseno/backend/pkg/professional/model"
 	professional_repository "github.com/aseno/backend/pkg/professional/repository"
@@ -58,7 +59,7 @@ type GoogleAuthClient interface {
 // PaymentService defines minimal interface for payment operations during registration
 type PaymentService interface {
 	CreateCustomerForClinic(ctx context.Context, clinicID uuid.UUID, req *payment_model.CreateCustomerRequest) error
-	CreateSubscriptionForClinic(ctx context.Context, clinicID uuid.UUID, planID uuid.UUID, offerToken *string, billing string, units int) error
+	CreateSubscriptionForClinic(ctx context.Context, clinicID uuid.UUID, planID uuid.UUID, offerToken *string, billing string, variant string, units int) error
 }
 
 // TemplateSeedService defines minimal interface for seeding default templates on clinic creation
@@ -279,15 +280,29 @@ func (s *authService) Register(ctx context.Context, req *model.RegisterRequest) 
 	accountID := uuid.New()
 	clinicID := uuid.New()
 
+	planVariant := plan_model.NormalizeVariant(req.Variant)
+	// Solo variant (single professional) is not compatible with the per-unit advanced plan.
+	if planVariant.IsSolo() && plan.Slug == "advanced" {
+		return nil, errors.ErrBadRequestInstance.WithMessage("O plano Avançado não possui modalidade autônomo")
+	}
+
+	maxClinics := plan.MaxClinics
+	maxProfessionals := plan.MaxProfessionals
+	if planVariant.IsSolo() {
+		maxClinics = 1
+		maxProfessionals = plan_model.SoloMaxProfessionals
+	}
+
 	// Create Account (don't set Plan association to avoid GORM upsert conflict)
 	account := &account_model.Account{
 		ID:                     accountID,
 		OwnerID:                userID,
 		PlanID:                 &plan.ID,
+		PlanVariant:            planVariant,
 		SubscriptionStatus:     subscriptionStatus,
 		TrialEndsAt:            trialEndsAt,
-		MaxClinics:             plan.MaxClinics,
-		MaxProfessionals:       plan.MaxProfessionals,
+		MaxClinics:             maxClinics,
+		MaxProfessionals:       maxProfessionals,
 		MaxWhatsappConnections: plan.MaxWhatsappConnections,
 		MaxGoogleCalendars:     plan.MaxGoogleCalendars,
 	}
@@ -430,7 +445,7 @@ func (s *authService) Register(ctx context.Context, req *model.RegisterRequest) 
 						offerToken = &req.OfferToken
 					}
 
-					if err := s.paymentService.CreateSubscriptionForClinic(ctx, clinic.ID, planID, offerToken, req.Billing, req.Units); err != nil {
+					if err := s.paymentService.CreateSubscriptionForClinic(ctx, clinic.ID, planID, offerToken, req.Billing, req.Variant, req.Units); err != nil {
 						// Log error but don't fail registration
 						fmt.Printf("[AUTH] Failed to create Asaas subscription for clinic %s: %v\n", clinic.ID, err)
 					} else {

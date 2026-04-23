@@ -83,8 +83,12 @@ type PlanConfigResponse struct {
 	LimitProfessionals int      `json:"limit_professionals"` // -1 = unlimited
 	PriceMonthly       int      `json:"price_monthly"`
 	PriceYearly        int      `json:"price_yearly"`
-	ExcessPrice        int      `json:"excess_price_per_professional"`
-	Features           []string `json:"features"`
+	// SoloPriceMonthly / SoloPriceYearly are the discounted prices for a single-professional
+	// contract. A value of 0 means this plan does not offer a solo variant for that cycle.
+	SoloPriceMonthly int      `json:"solo_price_monthly"`
+	SoloPriceYearly  int      `json:"solo_price_yearly"`
+	ExcessPrice      int      `json:"excess_price_per_professional"`
+	Features         []string `json:"features"`
 }
 
 // PublicConfigResponse represents the public configuration response
@@ -145,12 +149,19 @@ func (h *publicHandler) GetConfig(c *gin.Context) {
 	if err == nil && len(dbPlans) > 0 {
 		for _, p := range dbPlans {
 			var priceMonthly, priceYearly float64
+			var soloMonthly, soloYearly float64
 			for _, cycle := range p.Cycles {
 				switch cycle.CycleType {
 				case plan_model.CycleTypeMonthly:
 					priceMonthly = cycle.PriceBRL
+					if cycle.SoloPriceBRL != nil {
+						soloMonthly = *cycle.SoloPriceBRL
+					}
 				case plan_model.CycleTypeYearly:
 					priceYearly = cycle.PriceBRL
+					if cycle.SoloPriceBRL != nil {
+						soloYearly = *cycle.SoloPriceBRL
+					}
 				}
 			}
 
@@ -164,10 +175,18 @@ func (h *publicHandler) GetConfig(c *gin.Context) {
 				excessPrice = h.settings.GetExcessPrice(ctx)
 			}
 
+			// Solo variant is incompatible with advanced (per-unit) plan.
+			if p.Slug == "advanced" {
+				soloMonthly = 0
+				soloYearly = 0
+			}
+
 			response.Plans[p.Slug] = PlanConfigResponse{
 				LimitProfessionals: p.MaxProfessionals,
 				PriceMonthly:       int(priceMonthly),
 				PriceYearly:        int(priceYearly),
+				SoloPriceMonthly:   int(soloMonthly),
+				SoloPriceYearly:    int(soloYearly),
 				ExcessPrice:        excessPrice,
 				Features:           features,
 			}

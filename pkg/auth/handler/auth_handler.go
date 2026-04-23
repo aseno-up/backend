@@ -2,6 +2,7 @@ package handler
 
 import (
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -11,6 +12,8 @@ import (
 	audit_service "github.com/aseno/backend/pkg/audit/service"
 	"github.com/aseno/backend/pkg/auth/model"
 	"github.com/aseno/backend/pkg/auth/service"
+	systemlog_model "github.com/aseno/backend/pkg/systemlog/model"
+	systemlog_service "github.com/aseno/backend/pkg/systemlog/service"
 )
 
 // AuthHandler defines the interface for authentication handlers
@@ -32,8 +35,9 @@ type AuthHandler interface {
 
 // authHandler implements AuthHandler
 type authHandler struct {
-	authService service.AuthService
-	auditSvc    audit_service.AuditService
+	authService  service.AuthService
+	auditSvc     audit_service.AuditService
+	systemLogSvc systemlog_service.SystemLogService
 }
 
 // NewAuthHandler creates a new auth handler
@@ -50,6 +54,31 @@ func WithAuditService(svc audit_service.AuditService) func(*authHandler) {
 	return func(h *authHandler) {
 		h.auditSvc = svc
 	}
+}
+
+// WithSystemLogService wires a system log service so anonymous auth failures
+// (failed register / failed reset-password) can be inspected without tying
+// them to a tenant. AuditLog cannot be used for these because it requires a
+// clinic_id/user_id, which don't exist for these events.
+func WithSystemLogService(svc systemlog_service.SystemLogService) func(*authHandler) {
+	return func(h *authHandler) {
+		h.systemLogSvc = svc
+	}
+}
+
+// recordAuthSystemEvent logs an auth event to the system log (used for anonymous
+// or failed events that cannot be tied to a clinic_id in the audit log).
+func (h *authHandler) recordAuthSystemEvent(c *gin.Context, event string, status systemlog_model.LogStatus, payload interface{}, errMsg string) {
+	if h.systemLogSvc == nil {
+		return
+	}
+	_ = h.systemLogSvc.Log(c.Request.Context(), systemlog_service.SystemLogEntry{
+		Service: "auth",
+		Event:   event,
+		Status:  status,
+		Payload: payload,
+		Error:   errMsg,
+	})
 }
 
 // recordAuthEvent emits an audit entry for a login/logout. Login endpoints are
@@ -112,16 +141,36 @@ func (h *authHandler) RegisterProtectedRoutes(router gin.IRouter) {
 func (h *authHandler) Register(c *gin.Context) {
 	var req model.RegisterRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
+		h.recordAuthSystemEvent(c, "register_validation_failed", systemlog_model.LogStatusFailed, gin.H{
+			"ip":         c.ClientIP(),
+			"user_agent": c.Request.UserAgent(),
+		}, err.Error())
 		c.JSON(http.StatusBadRequest, errors.ToResponse(errors.ErrValidationInstance.WithError(err)))
 		return
 	}
 
 	response, err := h.authService.Register(c.Request.Context(), &req)
 	if err != nil {
+		// Capture failed registration so admins can inspect attempts that never
+		// produced a clinic (duplicate email, invalid plan, etc).
+		h.recordAuthSystemEvent(c, "register_failed", systemlog_model.LogStatusFailed, gin.H{
+			"email":       req.Email,
+			"name":        req.Name,
+			"clinic_name": req.ClinicName,
+			"plan":        req.Plan,
+			"billing":     req.Billing,
+			"variant":     req.Variant,
+			"phone":       req.Phone,
+			"ip":          c.ClientIP(),
+			"user_agent":  c.Request.UserAgent(),
+		}, err.Error())
 		statusCode := errors.GetStatusCode(err)
 		c.JSON(statusCode, errors.ToResponse(err))
 		return
 	}
+
+	// Successful registration is an auditable tenant event.
+	h.recordRegisterAudit(c, response, &req)
 
 	// Set HttpOnly cookies
 	// MaxAge: 15 minutes for access token, 7 days for refresh token
@@ -130,6 +179,36 @@ func (h *authHandler) Register(c *gin.Context) {
 	c.SetCookie("refresh_token", response.RefreshToken, 604800, "/", "", false, true)
 
 	c.JSON(http.StatusCreated, response)
+}
+
+// recordRegisterAudit writes the successful registration to the audit log.
+// We deliberately omit the password and document (CPF/CNPJ) from new_data —
+// email, name, clinic name, plan and phone are enough to trace who signed up.
+func (h *authHandler) recordRegisterAudit(c *gin.Context, response *model.AuthResponse, req *model.RegisterRequest) {
+	if h.auditSvc == nil || response == nil || response.User == nil || response.Clinic == nil {
+		return
+	}
+	_ = h.auditSvc.Log(c.Request.Context(), audit_service.AuditEntry{
+		ClinicID:   response.Clinic.ID,
+		UserID:     response.User.ID,
+		UserEmail:  response.User.Email,
+		UserRole:   string(response.User.Role),
+		Action:     audit_model.AuditActionCreate,
+		EntityType: audit_model.AuditEntityUser,
+		EntityID:   response.User.ID.String(),
+		NewData: gin.H{
+			"email":       response.User.Email,
+			"name":        response.User.Name,
+			"phone":       req.Phone,
+			"clinic_name": req.ClinicName,
+			"plan":        req.Plan,
+			"billing":     req.Billing,
+			"variant":     req.Variant,
+			"source":      "register",
+		},
+		IP:        c.ClientIP(),
+		UserAgent: c.Request.UserAgent(),
+	})
 }
 
 // Login handles user login
@@ -151,6 +230,11 @@ func (h *authHandler) Login(c *gin.Context) {
 
 	response, err := h.authService.Login(c.Request.Context(), &req)
 	if err != nil {
+		h.recordAuthSystemEvent(c, "login_failed", systemlog_model.LogStatusFailed, gin.H{
+			"email":      req.Email,
+			"ip":         c.ClientIP(),
+			"user_agent": c.Request.UserAgent(),
+		}, err.Error())
 		statusCode := errors.GetStatusCode(err)
 		c.JSON(statusCode, errors.ToResponse(err))
 		return
@@ -186,9 +270,44 @@ func (h *authHandler) GoogleLogin(c *gin.Context) {
 
 	response, err := h.authService.GoogleLogin(c.Request.Context(), &req)
 	if err != nil {
+		h.recordAuthSystemEvent(c, "google_login_failed", systemlog_model.LogStatusFailed, gin.H{
+			"plan":       req.Plan,
+			"billing":    req.Billing,
+			"ip":         c.ClientIP(),
+			"user_agent": c.Request.UserAgent(),
+		}, err.Error())
 		statusCode := errors.GetStatusCode(err)
 		c.JSON(statusCode, errors.ToResponse(err))
 		return
+	}
+
+	// If the user was created in the last 10 seconds, this Google call was the
+	// registration — emit a CREATE audit on top of the LOGIN event so the
+	// sign-up is visible in the tenant audit trail.
+	if response != nil && response.User != nil && response.Clinic != nil {
+		if time.Since(response.User.CreatedAt) < 10*time.Second {
+			_ = h.auditSvc // guard nil check happens inside
+			if h.auditSvc != nil {
+				_ = h.auditSvc.Log(c.Request.Context(), audit_service.AuditEntry{
+					ClinicID:   response.Clinic.ID,
+					UserID:     response.User.ID,
+					UserEmail:  response.User.Email,
+					UserRole:   string(response.User.Role),
+					Action:     audit_model.AuditActionCreate,
+					EntityType: audit_model.AuditEntityUser,
+					EntityID:   response.User.ID.String(),
+					NewData: gin.H{
+						"email":   response.User.Email,
+						"name":    response.User.Name,
+						"plan":    req.Plan,
+						"billing": req.Billing,
+						"source":  "google",
+					},
+					IP:        c.ClientIP(),
+					UserAgent: c.Request.UserAgent(),
+				})
+			}
+		}
 	}
 
 	h.recordAuthEvent(c, audit_model.AuditActionLogin, response)
@@ -366,6 +485,11 @@ func (h *authHandler) ChangePassword(c *gin.Context) {
 		return
 	}
 
+	// Authenticated endpoint — middleware has populated user context.
+	if h.auditSvc != nil {
+		_ = h.auditSvc.LogFromGin(c, audit_model.AuditActionUpdate, audit_model.AuditEntityUser, userID.(uuid.UUID).String(), nil, gin.H{"field": "password"})
+	}
+
 	c.JSON(http.StatusOK, gin.H{"message": "Password changed successfully"})
 }
 
@@ -386,10 +510,24 @@ func (h *authHandler) RequestPasswordReset(c *gin.Context) {
 	}
 
 	if err := h.authService.RequestPasswordReset(c.Request.Context(), &req); err != nil {
+		h.recordAuthSystemEvent(c, "password_reset_requested_failed", systemlog_model.LogStatusFailed, gin.H{
+			"email":      req.Email,
+			"ip":         c.ClientIP(),
+			"user_agent": c.Request.UserAgent(),
+		}, err.Error())
 		statusCode := errors.GetStatusCode(err)
 		c.JSON(statusCode, errors.ToResponse(err))
 		return
 	}
+
+	// Public endpoint, no user context in gin — record to system log so admins
+	// can still inspect who requested resets, even when the email doesn't match
+	// any account (the service returns success either way for privacy).
+	h.recordAuthSystemEvent(c, "password_reset_requested", systemlog_model.LogStatusSuccess, gin.H{
+		"email":      req.Email,
+		"ip":         c.ClientIP(),
+		"user_agent": c.Request.UserAgent(),
+	}, "")
 
 	c.JSON(http.StatusOK, gin.H{"message": "If an account exists with this email, instructions have been sent."})
 }
@@ -412,10 +550,19 @@ func (h *authHandler) ResetPassword(c *gin.Context) {
 	}
 
 	if err := h.authService.ResetPassword(c.Request.Context(), &req); err != nil {
+		h.recordAuthSystemEvent(c, "password_reset_failed", systemlog_model.LogStatusFailed, gin.H{
+			"ip":         c.ClientIP(),
+			"user_agent": c.Request.UserAgent(),
+		}, err.Error())
 		statusCode := errors.GetStatusCode(err)
 		c.JSON(statusCode, errors.ToResponse(err))
 		return
 	}
+
+	h.recordAuthSystemEvent(c, "password_reset_completed", systemlog_model.LogStatusSuccess, gin.H{
+		"ip":         c.ClientIP(),
+		"user_agent": c.Request.UserAgent(),
+	}, "")
 
 	c.JSON(http.StatusOK, gin.H{"message": "Password successfully reset."})
 }
@@ -437,10 +584,19 @@ func (h *authHandler) VerifyEmail(c *gin.Context) {
 	}
 
 	if err := h.authService.VerifyEmail(c.Request.Context(), req.Token); err != nil {
+		h.recordAuthSystemEvent(c, "email_verification_failed", systemlog_model.LogStatusFailed, gin.H{
+			"ip":         c.ClientIP(),
+			"user_agent": c.Request.UserAgent(),
+		}, err.Error())
 		statusCode := errors.GetStatusCode(err)
 		c.JSON(statusCode, errors.ToResponse(err))
 		return
 	}
+
+	h.recordAuthSystemEvent(c, "email_verified", systemlog_model.LogStatusSuccess, gin.H{
+		"ip":         c.ClientIP(),
+		"user_agent": c.Request.UserAgent(),
+	}, "")
 
 	c.JSON(http.StatusOK, gin.H{"message": "Email verified successfully."})
 }

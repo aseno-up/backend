@@ -92,12 +92,12 @@ type PaymentService interface {
 	CreateSubscription(ctx context.Context, clinicID uuid.UUID, req *CreateSubscriptionInput) (*model.Subscription, error)
 	GetSubscription(ctx context.Context, clinicID uuid.UUID) (*model.Subscription, error)
 	CancelSubscription(ctx context.Context, clinicID uuid.UUID) error
-	SwitchPlan(ctx context.Context, clinicID uuid.UUID, newPlan string, billingType string, cycle string, offerToken *string, creditCard *model.CreditCardInfo, creditCardHolder *model.CreditCardHolderInfo, units int) (*model.Subscription, error)
+	SwitchPlan(ctx context.Context, clinicID uuid.UUID, newPlan string, billingType string, cycle string, variant string, offerToken *string, creditCard *model.CreditCardInfo, creditCardHolder *model.CreditCardHolderInfo, units int) (*model.Subscription, error)
 	GetSubscriptionPayments(ctx context.Context, clinicID uuid.UUID) (*model.PaymentListResponse, error)
 
 	// Helper methods for registration flow
 	CreateCustomerForClinic(ctx context.Context, clinicID uuid.UUID, req *model.CreateCustomerRequest) error
-	CreateSubscriptionForClinic(ctx context.Context, clinicID uuid.UUID, planID uuid.UUID, offerToken *string, billing string, units int) error
+	CreateSubscriptionForClinic(ctx context.Context, clinicID uuid.UUID, planID uuid.UUID, offerToken *string, billing string, variant string, units int) error
 
 	// Webhook handling
 	HandleWebhook(ctx context.Context, payload *model.AsaasWebhookPayload) error
@@ -131,7 +131,8 @@ type CreateSubscriptionInput struct {
 	PlanID      uuid.UUID
 	OfferToken  *string
 	Cycle       model.BillingCycle
-	Units       int // number of units (clinics) contracted; required for "advanced" (min 2)
+	Variant     string // "solo" for single-professional discounted contract; empty = clinic
+	Units       int    // number of units (clinics) contracted; required for "advanced" (min 2)
 }
 
 // paymentService implements PaymentService
@@ -444,17 +445,23 @@ func (s *paymentService) CreateSubscription(ctx context.Context, clinicID uuid.U
 		planCycleType = plan_model.CycleTypeMonthly
 	}
 
+	planVariant := plan_model.NormalizeVariant(req.Variant)
+
 	var offer *plan_model.Offer
-	if req.OfferToken != nil && *req.OfferToken != "" {
+	if !planVariant.IsSolo() && req.OfferToken != nil && *req.OfferToken != "" {
 		o, err := s.planService.ValidateOffer(ctx, *req.OfferToken)
 		if err == nil {
 			offer = o
 		}
 	}
 
-	value, err := s.planService.CalculateBestPrice(ctx, plan, offer, planCycleType)
+	value, err := s.planService.ResolvePrice(ctx, plan, offer, planCycleType, planVariant)
 	if err != nil {
 		return nil, errors.ErrBadRequestInstance.WithMessage(err.Error())
+	}
+
+	if planVariant.IsSolo() && plan.Slug == "advanced" {
+		return nil, errors.ErrValidationInstance.WithMessage("O plano Avançado não possui modalidade autônomo")
 	}
 
 	// Advanced plan: bill per contracted unit, require at least 2.
@@ -500,7 +507,7 @@ func (s *paymentService) CreateSubscription(ctx context.Context, clinicID uuid.U
 		_ = s.planService.UseOffer(ctx, *offerID)
 	}
 
-	// Calculate absolute limits based on Plan or Custom via Offer
+	// Calculate absolute limits based on Plan or Custom via Offer (solo variant overrides below)
 	maxClinics := plan.MaxClinics
 	maxProfessionals := plan.MaxProfessionals
 	if offer != nil {
@@ -513,6 +520,10 @@ func (s *paymentService) CreateSubscription(ctx context.Context, clinicID uuid.U
 	}
 	if plan.Slug == "advanced" {
 		maxClinics = req.Units
+	}
+	if planVariant.IsSolo() {
+		maxProfessionals = plan_model.SoloMaxProfessionals
+		maxClinics = 1
 	}
 
 	// Save subscription to database
@@ -529,6 +540,7 @@ func (s *paymentService) CreateSubscription(ctx context.Context, clinicID uuid.U
 		ExternalRef:         asaasSub.ExternalRef,
 
 		PlanID:                     &plan.ID,
+		PlanVariant:                planVariant,
 		OfferID:                    offerID,
 		PriceAtContract:            value,
 		MaxClinicsAtContract:       maxClinics,
@@ -798,7 +810,8 @@ func (s *paymentService) CreateCustomerForClinic(ctx context.Context, clinicID u
 }
 
 // CreateSubscriptionForClinic creates an Asaas subscription for a clinic during registration
-func (s *paymentService) CreateSubscriptionForClinic(ctx context.Context, clinicID uuid.UUID, planID uuid.UUID, offerToken *string, billing string, units int) error {
+func (s *paymentService) CreateSubscriptionForClinic(ctx context.Context, clinicID uuid.UUID, planID uuid.UUID, offerToken *string, billing string, variant string, units int) error {
+	planVariant := plan_model.NormalizeVariant(variant)
 	clinic, err := s.clinicRepo.GetByID(ctx, clinicID)
 	if err != nil {
 		return err
@@ -828,16 +841,20 @@ func (s *paymentService) CreateSubscriptionForClinic(ctx context.Context, clinic
 	}
 
 	var offer *plan_model.Offer
-	if offerToken != nil && *offerToken != "" {
+	if !planVariant.IsSolo() && offerToken != nil && *offerToken != "" {
 		o, err := s.planService.ValidateOffer(ctx, *offerToken)
 		if err == nil {
 			offer = o
 		}
 	}
 
-	value, err := s.planService.CalculateBestPrice(ctx, plan, offer, planCycleType)
+	value, err := s.planService.ResolvePrice(ctx, plan, offer, planCycleType, planVariant)
 	if err != nil {
 		return errors.ErrBadRequestInstance.WithMessage(err.Error())
+	}
+
+	if planVariant.IsSolo() && plan.Slug == "advanced" {
+		return errors.ErrValidationInstance.WithMessage("O plano Avançado não possui modalidade autônomo")
 	}
 
 	// Advanced plan: bill per contracted unit, require at least 2.
@@ -880,7 +897,7 @@ func (s *paymentService) CreateSubscriptionForClinic(ctx context.Context, clinic
 		_ = s.planService.UseOffer(ctx, *offerID)
 	}
 
-	// Calculate absolute limits based on Plan or Custom via Offer
+	// Calculate absolute limits based on Plan or Custom via Offer (solo overrides below)
 	maxClinics := plan.MaxClinics
 	maxProfessionals := plan.MaxProfessionals
 	if offer != nil {
@@ -893,6 +910,10 @@ func (s *paymentService) CreateSubscriptionForClinic(ctx context.Context, clinic
 	}
 	if plan.Slug == "advanced" {
 		maxClinics = units
+	}
+	if planVariant.IsSolo() {
+		maxProfessionals = plan_model.SoloMaxProfessionals
+		maxClinics = 1
 	}
 
 	// Save subscription in database
@@ -908,6 +929,7 @@ func (s *paymentService) CreateSubscriptionForClinic(ctx context.Context, clinic
 		Description:         asaasSubscription.Description,
 
 		PlanID:                     &plan.ID,
+		PlanVariant:                planVariant,
 		OfferID:                    offerID,
 		PriceAtContract:            value,
 		MaxClinicsAtContract:       maxClinics,
@@ -922,7 +944,8 @@ func (s *paymentService) CreateSubscriptionForClinic(ctx context.Context, clinic
 // SwitchPlan handles plan switching: cancels current subscription and creates new one
 // For trial/expired accounts: creates immediate subscription
 // For active accounts: cancels current, creates new with nextDueDate = current period end
-func (s *paymentService) SwitchPlan(ctx context.Context, clinicID uuid.UUID, newPlan string, billingType string, cycle string, offerToken *string, creditCard *model.CreditCardInfo, creditCardHolder *model.CreditCardHolderInfo, units int) (*model.Subscription, error) {
+func (s *paymentService) SwitchPlan(ctx context.Context, clinicID uuid.UUID, newPlan string, billingType string, cycle string, variant string, offerToken *string, creditCard *model.CreditCardInfo, creditCardHolder *model.CreditCardHolderInfo, units int) (*model.Subscription, error) {
+	planVariant := plan_model.NormalizeVariant(variant)
 	clinic, err := s.clinicRepo.GetByID(ctx, clinicID)
 	if err != nil {
 		return nil, errors.ErrNotFoundInstance.WithMessage("Clinic not found")
@@ -967,18 +990,23 @@ func (s *paymentService) SwitchPlan(ctx context.Context, clinicID uuid.UUID, new
 		asaasCycle = model.BillingCycleMonthly
 	}
 
-	// Validate offer if provided
+	// Validate offer if provided (offers do not apply to solo variant)
 	var offer *plan_model.Offer
-	if offerToken != nil && *offerToken != "" {
+	if !planVariant.IsSolo() && offerToken != nil && *offerToken != "" {
 		o, err := s.planService.ValidateOffer(ctx, *offerToken)
 		if err == nil {
 			offer = o
 		}
 	}
 
-	value, err := s.planService.CalculateBestPrice(ctx, plan, offer, cycleType)
+	value, err := s.planService.ResolvePrice(ctx, plan, offer, cycleType, planVariant)
 	if err != nil {
 		return nil, errors.ErrInternalInstance.WithMessage("Falha ao calcular o preço do plano").WithError(err)
+	}
+
+	// Solo variant is not compatible with the advanced plan (which is per-unit).
+	if planVariant.IsSolo() && plan.Slug == "advanced" {
+		return nil, errors.ErrValidationInstance.WithMessage("O plano Avançado não possui modalidade autônomo")
 	}
 
 	// Advanced plan: bill per contracted unit, require at least 2.
@@ -1069,6 +1097,7 @@ func (s *paymentService) SwitchPlan(ctx context.Context, clinicID uuid.UUID, new
 
 		// Price Lock fields
 		PlanID:                     &plan.ID,
+		PlanVariant:                planVariant,
 		PriceAtContract:            value,
 		MaxClinicsAtContract:       plan.MaxClinics,
 		MaxProfessionalsAtContract: plan.MaxProfessionals,
@@ -1076,8 +1105,14 @@ func (s *paymentService) SwitchPlan(ctx context.Context, clinicID uuid.UUID, new
 		MaxGoogleAtContract:        plan.MaxGoogleCalendars,
 	}
 
-	// Apply offer-level overrides and track offer usage
-	if offer != nil {
+	// Solo variant: single professional, single clinic, regardless of plan defaults.
+	if planVariant.IsSolo() {
+		subscription.MaxProfessionalsAtContract = plan_model.SoloMaxProfessionals
+		subscription.MaxClinicsAtContract = 1
+	}
+
+	// Apply offer-level overrides and track offer usage (solo ignores offers)
+	if offer != nil && !planVariant.IsSolo() {
 		subscription.OfferID = &offer.ID
 		_ = s.planService.UseOffer(ctx, offer.ID)
 		if offer.CustomMaxClinics != nil {
@@ -1100,7 +1135,17 @@ func (s *paymentService) SwitchPlan(ctx context.Context, clinicID uuid.UUID, new
 		account, err := s.accountRepo.GetByID(ctx, clinic.AccountID)
 		if err == nil && plan != nil {
 			account.PlanID = &plan.ID
+			account.PlanVariant = planVariant
 			account.SubscriptionStatus = account_model.SubscriptionStatusPending
+			if planVariant.IsSolo() {
+				account.MaxProfessionals = plan_model.SoloMaxProfessionals
+				account.MaxClinics = 1
+			} else {
+				account.MaxProfessionals = subscription.MaxProfessionalsAtContract
+				account.MaxClinics = subscription.MaxClinicsAtContract
+			}
+			account.MaxWhatsappConnections = subscription.MaxWhatsappAtContract
+			account.MaxGoogleCalendars = subscription.MaxGoogleAtContract
 			if err := s.accountRepo.Update(ctx, account); err != nil {
 				logger.Errorf("[PAYMENT] Error updating account plan: %v", err)
 			}

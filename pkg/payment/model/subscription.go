@@ -3,6 +3,7 @@ package model
 import (
 	"time"
 
+	plan_model "github.com/aseno/backend/pkg/plan/model"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
@@ -12,8 +13,9 @@ type Subscription struct {
 	ID                  uuid.UUID          `json:"id" gorm:"type:uuid;primary_key;default:gen_random_uuid()"`
 	AccountID           uuid.UUID          `json:"account_id" gorm:"type:uuid;index"`
 	CustomerID          uuid.UUID          `json:"customer_id" gorm:"type:uuid;not null;index"`
-	PlanID              *uuid.UUID         `json:"plan_id,omitempty" gorm:"type:uuid"`
-	OfferID             *uuid.UUID         `json:"offer_id,omitempty" gorm:"type:uuid"`
+	PlanID              *uuid.UUID              `json:"plan_id,omitempty" gorm:"type:uuid"`
+	PlanVariant         plan_model.PlanVariant  `json:"plan_variant" gorm:"type:varchar(16);not null;default:''"`
+	OfferID             *uuid.UUID              `json:"offer_id,omitempty" gorm:"type:uuid"`
 	AsaasSubscriptionID string             `json:"asaas_subscription_id" gorm:"uniqueIndex;not null"`
 	Value               float64            `json:"value" gorm:"not null"`
 	Status              SubscriptionStatus `json:"status" gorm:"not null;default:'ACTIVE'"`

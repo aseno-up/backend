@@ -10,10 +10,12 @@ import (
 )
 
 var (
-	ErrOfferInvalid      = errors.New("offer is invalid or expired")
-	ErrOfferNotFound     = errors.New("offer not found")
-	ErrOfferPlanMismatch = errors.New("offer is not valid for this plan")
-	ErrPlanNotFound      = errors.New("plan not found")
+	ErrOfferInvalid       = errors.New("offer is invalid or expired")
+	ErrOfferNotFound      = errors.New("offer not found")
+	ErrOfferPlanMismatch  = errors.New("offer is not valid for this plan")
+	ErrPlanNotFound       = errors.New("plan not found")
+	ErrSoloNotAvailable   = errors.New("plan does not offer a solo variant for this cycle")
+	ErrCycleNotSupported  = errors.New("plan does not support the requested billing cycle")
 )
 
 type PlanService interface {
@@ -22,6 +24,7 @@ type PlanService interface {
 	GetBySlug(ctx context.Context, slug string) (*model.Plan, error)
 	ValidateOffer(ctx context.Context, token string) (*model.Offer, error)
 	CalculateBestPrice(ctx context.Context, plan *model.Plan, offer *model.Offer, cycleType model.CycleType) (float64, error)
+	ResolvePrice(ctx context.Context, plan *model.Plan, offer *model.Offer, cycleType model.CycleType, variant model.PlanVariant) (float64, error)
 	UseOffer(ctx context.Context, offerID uuid.UUID) error
 	CreatePlan(ctx context.Context, plan *model.Plan) error
 	UpdatePlan(ctx context.Context, plan *model.Plan) error
@@ -66,25 +69,32 @@ func (s *planService) ValidateOffer(ctx context.Context, token string) (*model.O
 }
 
 func (s *planService) CalculateBestPrice(ctx context.Context, plan *model.Plan, offer *model.Offer, cycleType model.CycleType) (float64, error) {
-	var bestPrice float64 = -1
+	return s.ResolvePrice(ctx, plan, offer, cycleType, model.PlanVariantClinic)
+}
 
-	// Check if plan has this cycle
+// ResolvePrice returns the price for a plan/cycle/variant combination.
+// For solo variant the cycle must have SoloPriceBRL set and offers are ignored.
+// For clinic variant the existing offer-vs-standard price rule is preserved.
+func (s *planService) ResolvePrice(ctx context.Context, plan *model.Plan, offer *model.Offer, cycleType model.CycleType, variant model.PlanVariant) (float64, error) {
 	var planCycle *model.PlanCycle
-	for _, c := range plan.Cycles {
-		if c.CycleType == cycleType {
-			planCycle = &c
+	for i := range plan.Cycles {
+		if plan.Cycles[i].CycleType == cycleType {
+			planCycle = &plan.Cycles[i]
 			break
 		}
 	}
-
 	if planCycle == nil {
-		return 0, errors.New("plan does not support the requested billing cycle")
+		return 0, ErrCycleNotSupported
 	}
-	bestPrice = planCycle.PriceBRL
 
-	// Prioridade: Preço customizado da oferta (OfferCycle) -> Preço padrão (PlanCycle)
+	if variant.IsSolo() {
+		if planCycle.SoloPriceBRL == nil {
+			return 0, ErrSoloNotAvailable
+		}
+		return *planCycle.SoloPriceBRL, nil
+	}
+
 	if offer != nil && offer.IsValid() {
-		// Validate that the offer is for this plan
 		if offer.PlanID != plan.ID {
 			return 0, ErrOfferPlanMismatch
 		}
@@ -95,7 +105,7 @@ func (s *planService) CalculateBestPrice(ctx context.Context, plan *model.Plan, 
 		}
 	}
 
-	return bestPrice, nil
+	return planCycle.PriceBRL, nil
 }
 
 func (s *planService) UseOffer(ctx context.Context, offerID uuid.UUID) error {

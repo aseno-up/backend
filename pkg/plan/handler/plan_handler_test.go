@@ -47,6 +47,11 @@ func (m *MockPlanService) CalculateBestPrice(ctx context.Context, plan *model.Pl
 	return args.Get(0).(float64), args.Error(1)
 }
 
+func (m *MockPlanService) ResolvePrice(ctx context.Context, plan *model.Plan, offer *model.Offer, cycleType model.CycleType, variant model.PlanVariant) (float64, error) {
+	args := m.Called(ctx, plan, offer, cycleType, variant)
+	return args.Get(0).(float64), args.Error(1)
+}
+
 func (m *MockPlanService) UseOffer(ctx context.Context, offerID uuid.UUID) error     { return nil }
 func (m *MockPlanService) CreatePlan(ctx context.Context, plan *model.Plan) error    { return nil }
 func (m *MockPlanService) UpdatePlan(ctx context.Context, plan *model.Plan) error    { return nil }
