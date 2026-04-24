@@ -52,6 +52,9 @@ type FinancialTransaction struct {
 	CreatedAt time.Time  `json:"created_at"`
 	UpdatedAt time.Time  `json:"updated_at"`
 	DeletedAt *time.Time `json:"deleted_at,omitempty" gorm:"index"`
+
+	// Loaded via Preload so the Lançamentos screen can show name/color.
+	Category *FinancialCategory `json:"-" gorm:"foreignKey:CategoryID;references:ID"`
 }
 
 func (FinancialTransaction) TableName() string {
@@ -133,7 +136,7 @@ type CashFlowSummary struct {
 }
 
 func (t *FinancialTransaction) ToResponse() *TransactionResponse {
-	return &TransactionResponse{
+	resp := &TransactionResponse{
 		ID:              t.ID,
 		Type:            t.Type,
 		CategoryID:      t.CategoryID,
@@ -151,4 +154,9 @@ func (t *FinancialTransaction) ToResponse() *TransactionResponse {
 		PaymentMethodID: t.PaymentMethodID,
 		CreatedAt:       t.CreatedAt,
 	}
+	if t.Category != nil {
+		resp.CategoryName = t.Category.Name
+		resp.CategoryColor = t.Category.Color
+	}
+	return resp
 }

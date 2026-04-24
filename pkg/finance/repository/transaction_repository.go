@@ -48,6 +48,7 @@ func (r *transactionRepository) Create(ctx context.Context, t *model.FinancialTr
 func (r *transactionRepository) GetByID(ctx context.Context, id, clinicID uuid.UUID) (*model.FinancialTransaction, error) {
 	var tx model.FinancialTransaction
 	err := r.db.WithContext(ctx).
+		Preload("Category").
 		Where("id = ? AND clinic_id = ? AND deleted_at IS NULL", id, clinicID).
 		First(&tx).Error
 	if err != nil {
@@ -93,6 +94,7 @@ func (r *transactionRepository) Delete(ctx context.Context, id, clinicID uuid.UU
 
 func (r *transactionRepository) List(ctx context.Context, clinicID uuid.UUID, filter model.TransactionFilter) ([]model.FinancialTransaction, error) {
 	q := r.db.WithContext(ctx).
+		Preload("Category").
 		Where("clinic_id = ? AND deleted_at IS NULL", clinicID)
 
 	if filter.From != nil {
@@ -124,6 +126,7 @@ func (r *transactionRepository) List(ctx context.Context, clinicID uuid.UUID, fi
 func (r *transactionRepository) GetByAppointmentPaymentID(ctx context.Context, appointmentPaymentID, clinicID uuid.UUID) (*model.FinancialTransaction, error) {
 	var tx model.FinancialTransaction
 	err := r.db.WithContext(ctx).
+		Preload("Category").
 		Where("appointment_payment_id = ? AND clinic_id = ? AND deleted_at IS NULL", appointmentPaymentID, clinicID).
 		First(&tx).Error
 	if err != nil {
@@ -148,6 +151,7 @@ func (r *transactionRepository) DeleteByAppointmentPaymentID(ctx context.Context
 func (r *transactionRepository) GetBySessionPlanPaymentID(ctx context.Context, sessionPlanPaymentID, clinicID uuid.UUID) (*model.FinancialTransaction, error) {
 	var tx model.FinancialTransaction
 	err := r.db.WithContext(ctx).
+		Preload("Category").
 		Where("session_plan_payment_id = ? AND clinic_id = ? AND deleted_at IS NULL", sessionPlanPaymentID, clinicID).
 		First(&tx).Error
 	if err != nil {
