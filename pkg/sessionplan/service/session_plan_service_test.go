@@ -122,6 +122,29 @@ func (m *mockAptRepo) UpdatePaymentStatus(_ context.Context, _ uuid.UUID, _ appo
 	return nil
 }
 
+// --- Mock PlanPaymentLister + FinancePlanUpserter ---
+
+type mockPlanPaymentLister struct {
+	payments []*model.SessionPlanPayment
+}
+
+func (m *mockPlanPaymentLister) GetByPlan(_ context.Context, _, _ uuid.UUID) ([]*model.SessionPlanPayment, error) {
+	return m.payments, nil
+}
+
+type mockPlanFinanceUpserter struct {
+	deletedIDs []uuid.UUID
+}
+
+func (m *mockPlanFinanceUpserter) UpsertFromSessionPlanPayment(_ context.Context, _ *model.SessionPlanPayment, _ uuid.UUID, _, _ string) error {
+	return nil
+}
+
+func (m *mockPlanFinanceUpserter) DeleteFromSessionPlanPayment(_ context.Context, sessionPlanPaymentID, _ uuid.UUID) error {
+	m.deletedIDs = append(m.deletedIDs, sessionPlanPaymentID)
+	return nil
+}
+
 // --- Tests ---
 
 func basePlan() *model.SessionPlan {
@@ -400,4 +423,42 @@ func TestUpdate_BillingDay(t *testing.T) {
 	require.NotNil(t, updated)
 	require.NotNil(t, updated.BillingDay)
 	assert.Equal(t, 20, *updated.BillingDay)
+}
+
+// Regression: deleting a session plan that has payments must also drop the
+// corresponding rows from financial_transactions. Same bug as appointments —
+// the plan delete path only touches the plan row; orphan finance rows keep
+// showing up on the Lançamentos tab.
+func TestDelete_CleansFinanceForEachPlanPayment(t *testing.T) {
+	plan := basePlan()
+	repo := &mockPlanRepo{plan: plan}
+
+	pay1 := &model.SessionPlanPayment{ID: uuid.New(), ClinicID: plan.ClinicID, SessionPlanID: plan.ID}
+	pay2 := &model.SessionPlanPayment{ID: uuid.New(), ClinicID: plan.ClinicID, SessionPlanID: plan.ID}
+	lister := &mockPlanPaymentLister{payments: []*model.SessionPlanPayment{pay1, pay2}}
+	finance := &mockPlanFinanceUpserter{}
+
+	svc := NewSessionPlanService(repo, &mockAptRepo{})
+	svc.SetPaymentLister(lister)
+	svc.SetFinanceUpserter(finance)
+
+	err := svc.Delete(context.Background(), plan.ClinicID, plan.ID)
+	require.NoError(t, err)
+
+	assert.ElementsMatch(t,
+		[]uuid.UUID{pay1.ID, pay2.ID},
+		finance.deletedIDs,
+		"every plan payment must have its finance row cleaned up",
+	)
+}
+
+// Defensive: without the hooks wired (legacy call sites, older tests) Delete
+// must still succeed — the cleanup is best-effort, not a blocking step.
+func TestDelete_WithoutHooks_Succeeds(t *testing.T) {
+	plan := basePlan()
+	repo := &mockPlanRepo{plan: plan}
+	svc := NewSessionPlanService(repo, &mockAptRepo{})
+
+	err := svc.Delete(context.Background(), plan.ClinicID, plan.ID)
+	require.NoError(t, err)
 }

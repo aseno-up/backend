@@ -413,6 +413,8 @@ func main() {
 	appointmentPaymentService := appointment_service.NewAppointmentPaymentService(appointmentPaymentRepo, appointmentRepo, paymentMethodRepo)
 	financeSvc := finance_service.NewFinanceService(financeTransactionRepo, financeCategoryRepo)
 	appointmentPaymentService.SetFinanceUpserter(financeSvc)
+	appointmentService.SetPaymentLister(appointmentPaymentRepo)
+	appointmentService.SetFinanceUpserter(financeSvc)
 	commissionSvc.SetFinanceCommissionUpserter(financeSvc)
 
 	// Initialize message log service
@@ -899,6 +901,8 @@ func main() {
 	planPaymentRepo := sessionplan_repository.NewPlanPaymentRepository(db.GetDB())
 	planPaymentSvc := sessionplan_service.NewPlanPaymentService(planPaymentRepo, sessionPlanRepo, appointmentPaymentRepo)
 	planPaymentSvc.SetFinancePlanUpserter(financeSvc)
+	sessionPlanService.SetPaymentLister(planPaymentRepo)
+	sessionPlanService.SetFinanceUpserter(financeSvc)
 	planPaymentHdlr := sessionplan_handler.NewPlanPaymentHandler(planPaymentSvc)
 
 	// Wire plan payment repo into group attendance for guest payments

@@ -9,6 +9,7 @@ import (
 	"github.com/lib/pq"
 
 	"github.com/aseno/backend/internal/errors"
+	"github.com/aseno/backend/internal/logger"
 	appointment_repository "github.com/aseno/backend/pkg/appointment/repository"
 	"github.com/aseno/backend/pkg/pagination"
 	"github.com/aseno/backend/pkg/sessionplan/model"
@@ -28,12 +29,30 @@ type SessionPlanService interface {
 	Delete(ctx context.Context, clinicID, id uuid.UUID) error
 	BulkCancel(ctx context.Context, clinicID uuid.UUID, ids []uuid.UUID) error
 	OnAppointmentCompleted(ctx context.Context, clinicID uuid.UUID, appointmentID uuid.UUID) error
+
+	// SetPaymentLister wires the source used to load the plan payments before
+	// a plan is deleted, so their matching finance rows can be cleaned up.
+	SetPaymentLister(lister PlanPaymentLister)
+
+	// SetFinanceUpserter wires the finance sink used to drop the
+	// `financial_transactions` rows associated with plan payments removed when
+	// the plan is deleted.
+	SetFinanceUpserter(u FinancePlanUpserter)
+}
+
+// PlanPaymentLister exposes just the "list payments for a session plan"
+// capability so the session-plan service can enumerate the payments that are
+// about to be dropped and clean up their finance counterparts.
+type PlanPaymentLister interface {
+	GetByPlan(ctx context.Context, clinicID, sessionPlanID uuid.UUID) ([]*model.SessionPlanPayment, error)
 }
 
 // sessionPlanService implements SessionPlanService
 type sessionPlanService struct {
 	repo            repository.SessionPlanRepository
 	appointmentRepo appointment_repository.AppointmentRepository
+	paymentLister   PlanPaymentLister
+	financeUpserter FinancePlanUpserter
 }
 
 // NewSessionPlanService creates a new session plan service
@@ -315,9 +334,46 @@ func (s *sessionPlanService) Cancel(ctx context.Context, clinicID, id uuid.UUID)
 	return s.repo.UpdateStatus(ctx, clinicID, id, model.PlanStatusCancelled)
 }
 
-// Delete deletes a session plan
+// SetPaymentLister wires the plan-payment list source used during delete cascade.
+func (s *sessionPlanService) SetPaymentLister(lister PlanPaymentLister) {
+	s.paymentLister = lister
+}
+
+// SetFinanceUpserter wires the finance sink used during delete cascade.
+func (s *sessionPlanService) SetFinanceUpserter(u FinancePlanUpserter) {
+	s.financeUpserter = u
+}
+
+// Delete deletes a session plan and cleans up any `financial_transactions`
+// rows linked to its payments. Without this cleanup the finance rows would
+// stay orphaned and keep showing on the Lançamentos tab as income for a plan
+// that no longer exists.
 func (s *sessionPlanService) Delete(ctx context.Context, clinicID, id uuid.UUID) error {
-	return s.repo.Delete(ctx, clinicID, id)
+	var paymentIDs []uuid.UUID
+	if s.paymentLister != nil {
+		payments, listErr := s.paymentLister.GetByPlan(ctx, clinicID, id)
+		if listErr == nil {
+			paymentIDs = make([]uuid.UUID, 0, len(payments))
+			for _, p := range payments {
+				paymentIDs = append(paymentIDs, p.ID)
+			}
+		} else {
+			logger.Printf("[SessionPlan Delete] list payments failed for %s: %v", id, listErr)
+		}
+	}
+
+	if err := s.repo.Delete(ctx, clinicID, id); err != nil {
+		return err
+	}
+
+	if s.financeUpserter != nil {
+		for _, pid := range paymentIDs {
+			if err := s.financeUpserter.DeleteFromSessionPlanPayment(ctx, pid, clinicID); err != nil {
+				logger.Printf("[SessionPlan Delete] finance cleanup failed for payment %s: %v", pid, err)
+			}
+		}
+	}
+	return nil
 }
 
 // BulkCancel cancels multiple session plans

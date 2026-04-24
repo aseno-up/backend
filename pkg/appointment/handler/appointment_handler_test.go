@@ -79,6 +79,8 @@ func (m *mockAppointmentService) SetPatientRiskCalculator(_ service.PatientRiskC
 func (m *mockAppointmentService) SetCommissionCalculator(_ service.CommissionCalculator)     {}
 func (m *mockAppointmentService) SetCalendarService(_ calendar_service.CalendarService)      {}
 func (m *mockAppointmentService) SetSessionPlanHandler(_ service.SessionPlanCompletionHandler) {}
+func (m *mockAppointmentService) SetPaymentLister(_ service.PaymentLister)                     {}
+func (m *mockAppointmentService) SetFinanceUpserter(_ service.FinanceUpserter)                 {}
 func (m *mockAppointmentService) SuggestSmartSlots(ctx context.Context, clinicID, professionalID uuid.UUID, date time.Time, days int, durationMinutes int) ([]*model.SmartSlotSuggestion, error) {
 	return nil, nil
 }

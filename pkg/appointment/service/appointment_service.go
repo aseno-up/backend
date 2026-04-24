@@ -65,8 +65,26 @@ type AppointmentService interface {
 	// SetSessionPlanHandler sets the handler for session plan updates on appointment completion
 	SetSessionPlanHandler(handler SessionPlanCompletionHandler)
 
+	// SetPaymentLister wires the source used to load the payments under an
+	// appointment before it is deleted, so the linked finance rows can be
+	// cleaned up.
+	SetPaymentLister(lister PaymentLister)
+
+	// SetFinanceUpserter wires the finance sink used to drop the
+	// `financial_transactions` rows associated with payments removed in
+	// cascade with the appointment.
+	SetFinanceUpserter(u FinanceUpserter)
+
 	// SuggestSmartSlots suggests best time slots based on historical data
 	SuggestSmartSlots(ctx context.Context, clinicID, professionalID uuid.UUID, date time.Time, days int, durationMinutes int) ([]*model.SmartSlotSuggestion, error)
+}
+
+// PaymentLister exposes just the "list payments for an appointment" capability
+// so the appointment service can enumerate the payments that are about to be
+// dropped and clean up their finance counterparts. Narrow interface to keep
+// tests mock-friendly and avoid a wider dependency on the full payment repo.
+type PaymentLister interface {
+	ListByAppointment(appointmentID, clinicID uuid.UUID) ([]*model.AppointmentPayment, error)
 }
 
 // ProfessionalInfoProvider provides professional information
@@ -94,6 +112,8 @@ type appointmentService struct {
 	commissionCalculator CommissionCalculator
 	calendarService      calendar_service.CalendarService
 	sessionPlanHandler   SessionPlanCompletionHandler
+	paymentLister        PaymentLister
+	financeUpserter      FinanceUpserter
 }
 
 // NewAppointmentService creates a new appointment service
@@ -159,6 +179,16 @@ func (s *appointmentService) SetCalendarService(service calendar_service.Calenda
 // SetSessionPlanHandler sets the handler for session plan updates on appointment completion
 func (s *appointmentService) SetSessionPlanHandler(handler SessionPlanCompletionHandler) {
 	s.sessionPlanHandler = handler
+}
+
+// SetPaymentLister wires the payment list source used during delete cascade.
+func (s *appointmentService) SetPaymentLister(lister PaymentLister) {
+	s.paymentLister = lister
+}
+
+// SetFinanceUpserter wires the finance sink used during delete cascade.
+func (s *appointmentService) SetFinanceUpserter(u FinanceUpserter) {
+	s.financeUpserter = u
 }
 
 // toCalendarData converts an appointment to calendar sync data
@@ -744,10 +774,46 @@ func (s *appointmentService) Delete(ctx context.Context, id, clinicID uuid.UUID,
 	if err != nil {
 		return err
 	}
-	if apt.SessionPlanID != nil {
-		return s.repo.SoftDeleteAsCanceledException(ctx, id, clinicID, deletePayments)
+
+	// Snapshot the payment IDs before the cascade runs so we can drop the
+	// matching finance rows afterwards. When deletePayments=false the
+	// repository keeps the payment rows intact as financial history and the
+	// finance side must stay untouched — so we only collect IDs when the
+	// caller opted to remove the payments too.
+	var paymentIDs []uuid.UUID
+	if deletePayments && s.paymentLister != nil {
+		payments, listErr := s.paymentLister.ListByAppointment(id, clinicID)
+		if listErr == nil {
+			paymentIDs = make([]uuid.UUID, 0, len(payments))
+			for _, p := range payments {
+				paymentIDs = append(paymentIDs, p.ID)
+			}
+		} else {
+			logger.Printf("[Appointment Delete] list payments failed for %s: %v", id, listErr)
+		}
 	}
-	return s.repo.DeleteCascade(ctx, id, clinicID, deletePayments)
+
+	if apt.SessionPlanID != nil {
+		if err := s.repo.SoftDeleteAsCanceledException(ctx, id, clinicID, deletePayments); err != nil {
+			return err
+		}
+	} else {
+		if err := s.repo.DeleteCascade(ctx, id, clinicID, deletePayments); err != nil {
+			return err
+		}
+	}
+
+	// Clean up the finance rows that mirror the deleted payments. Best-effort:
+	// a failure here does not undo the appointment delete — the payment row
+	// is already gone, so we only log and move on.
+	if s.financeUpserter != nil {
+		for _, pid := range paymentIDs {
+			if err := s.financeUpserter.DeleteFromAppointmentPayment(ctx, pid, clinicID); err != nil {
+				logger.Printf("[Appointment Delete] finance cleanup failed for payment %s: %v", pid, err)
+			}
+		}
+	}
+	return nil
 }
 
 // GetDeletePreview returns counts the UI uses to warn the user before

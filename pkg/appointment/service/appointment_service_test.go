@@ -228,6 +228,111 @@ func TestDelete_RegularAppointmentStillHardDeletes(t *testing.T) {
 	assert.False(t, repo.tombstoneCalled, "Regular appointments have no RRULE to suppress, so no tombstone is needed")
 }
 
+// --- Mock PaymentLister + FinanceUpserter --------------------------------
+
+type mockPaymentLister struct {
+	payments []*model.AppointmentPayment
+}
+
+func (m *mockPaymentLister) ListByAppointment(appointmentID, _ uuid.UUID) ([]*model.AppointmentPayment, error) {
+	out := make([]*model.AppointmentPayment, 0, len(m.payments))
+	for _, p := range m.payments {
+		if p.AppointmentID == appointmentID {
+			out = append(out, p)
+		}
+	}
+	return out, nil
+}
+
+type mockDeleteFinanceUpserter struct {
+	deletedPaymentIDs []uuid.UUID
+}
+
+func (m *mockDeleteFinanceUpserter) UpsertFromAppointmentPayment(_ context.Context, _ *model.Appointment, _ *model.AppointmentPayment, _ uuid.UUID) error {
+	return nil
+}
+
+func (m *mockDeleteFinanceUpserter) DeleteFromAppointmentPayment(_ context.Context, appointmentPaymentID, _ uuid.UUID) error {
+	m.deletedPaymentIDs = append(m.deletedPaymentIDs, appointmentPaymentID)
+	return nil
+}
+
+// Regression: deleting an appointment that has payments, with deletePayments=true,
+// must also remove the corresponding rows from financial_transactions. Otherwise
+// the Lançamentos tab keeps showing income entries for appointments that no
+// longer exist.
+func TestDelete_RegularAppointment_CleansFinanceWhenPaymentsDeleted(t *testing.T) {
+	apt := newAppointment(model.AppointmentStatusConfirmed)
+	apt.SessionPlanID = nil
+
+	pay1 := &model.AppointmentPayment{ID: uuid.New(), ClinicID: apt.ClinicID, AppointmentID: apt.ID, Amount: 100}
+	pay2 := &model.AppointmentPayment{ID: uuid.New(), ClinicID: apt.ClinicID, AppointmentID: apt.ID, Amount: 50}
+
+	repo := &mockAppointmentRepo{appointment: apt}
+	paymentLister := &mockPaymentLister{payments: []*model.AppointmentPayment{pay1, pay2}}
+	finance := &mockDeleteFinanceUpserter{}
+
+	svc := buildService(repo)
+	svc.SetPaymentLister(paymentLister)
+	svc.SetFinanceUpserter(finance)
+
+	err := svc.Delete(context.Background(), apt.ID, apt.ClinicID, true)
+	require.NoError(t, err)
+
+	assert.True(t, repo.hardDeleteCalled)
+	assert.ElementsMatch(t,
+		[]uuid.UUID{pay1.ID, pay2.ID},
+		finance.deletedPaymentIDs,
+		"finance rows for every payment under the appointment must be cleaned up",
+	)
+}
+
+// deletePayments=false preserves the payments as financial history per the
+// existing repository contract — the finance rows must stay too.
+func TestDelete_RegularAppointment_KeepsFinanceWhenPaymentsKept(t *testing.T) {
+	apt := newAppointment(model.AppointmentStatusConfirmed)
+	apt.SessionPlanID = nil
+
+	pay := &model.AppointmentPayment{ID: uuid.New(), ClinicID: apt.ClinicID, AppointmentID: apt.ID, Amount: 100}
+
+	repo := &mockAppointmentRepo{appointment: apt}
+	paymentLister := &mockPaymentLister{payments: []*model.AppointmentPayment{pay}}
+	finance := &mockDeleteFinanceUpserter{}
+
+	svc := buildService(repo)
+	svc.SetPaymentLister(paymentLister)
+	svc.SetFinanceUpserter(finance)
+
+	err := svc.Delete(context.Background(), apt.ID, apt.ClinicID, false)
+	require.NoError(t, err)
+
+	assert.Empty(t, finance.deletedPaymentIDs,
+		"when the caller opts to keep payments, finance rows must be preserved too")
+}
+
+// Session-plan path uses the tombstone delete — same cleanup rule must apply.
+func TestDelete_SessionPlanAppointment_CleansFinanceWhenPaymentsDeleted(t *testing.T) {
+	planID := uuid.New()
+	apt := newAppointment(model.AppointmentStatusPending)
+	apt.SessionPlanID = &planID
+
+	pay := &model.AppointmentPayment{ID: uuid.New(), ClinicID: apt.ClinicID, AppointmentID: apt.ID, Amount: 200}
+
+	repo := &mockAppointmentRepo{appointment: apt}
+	paymentLister := &mockPaymentLister{payments: []*model.AppointmentPayment{pay}}
+	finance := &mockDeleteFinanceUpserter{}
+
+	svc := buildService(repo)
+	svc.SetPaymentLister(paymentLister)
+	svc.SetFinanceUpserter(finance)
+
+	err := svc.Delete(context.Background(), apt.ID, apt.ClinicID, true)
+	require.NoError(t, err)
+
+	assert.True(t, repo.tombstoneCalled)
+	assert.Equal(t, []uuid.UUID{pay.ID}, finance.deletedPaymentIDs)
+}
+
 // Cenário 5: Complete NÃO deve incrementar sessions_done diretamente —
 // o handler do endpoint já chama AutoRecordPresent que faz o incremento via attendance.
 // Se Complete também incrementar, sessions_done é contado duas vezes (bug de contagem dupla).
