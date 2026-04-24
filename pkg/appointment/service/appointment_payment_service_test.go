@@ -409,3 +409,125 @@ func TestCreatePayment_InvalidAppointment(t *testing.T) {
 
 	assert.Error(t, err)
 }
+
+// --- FinanceUpserter hook ---
+
+type mockFinanceUpserter struct {
+	upserts    int
+	deletes    int
+	lastAmount float64
+	lastMethod uuid.UUID
+	lastAptID  uuid.UUID
+	lastClinic uuid.UUID
+	lastPlanID *uuid.UUID
+	lastPmtID  uuid.UUID
+}
+
+func (m *mockFinanceUpserter) UpsertFromAppointmentPayment(_ context.Context, apt *model.Appointment, payment *model.AppointmentPayment, clinicID uuid.UUID) error {
+	m.upserts++
+	m.lastAmount = payment.Amount + payment.Discount
+	m.lastMethod = payment.PaymentMethodID
+	m.lastAptID = apt.ID
+	m.lastClinic = clinicID
+	m.lastPlanID = apt.SessionPlanID
+	m.lastPmtID = payment.ID
+	return nil
+}
+
+func (m *mockFinanceUpserter) DeleteFromAppointmentPayment(_ context.Context, appointmentPaymentID, _ uuid.UUID) error {
+	m.deletes++
+	m.lastPmtID = appointmentPaymentID
+	return nil
+}
+
+func TestCreatePayment_SyncsFinanceWhenHookSet(t *testing.T) {
+	clinicID := uuid.New()
+	aptID := uuid.New()
+	apt := &model.Appointment{ID: aptID, ClinicID: clinicID, Price: 250}
+
+	paymentRepo := &mockPaymentRepo{}
+	aptRepo := &mockAptRepoForPayment{appointment: apt}
+	svc := newPaymentService(paymentRepo, aptRepo, defaultPixMethod)
+
+	hook := &mockFinanceUpserter{}
+	svc.SetFinanceUpserter(hook)
+
+	_, err := svc.Create(context.Background(), clinicID, aptID, &model.CreateAppointmentPaymentRequest{
+		PaymentMethodID: defaultPixMethod.ID,
+		Amount:          250,
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, 1, hook.upserts, "finance hook upsert should be called once after create")
+	assert.Equal(t, 250.0, hook.lastAmount)
+	assert.Equal(t, clinicID, hook.lastClinic)
+	assert.Equal(t, defaultPixMethod.ID, hook.lastMethod)
+	assert.Equal(t, aptID, hook.lastAptID)
+	assert.Nil(t, hook.lastPlanID, "plain appointment shouldn't carry a session plan id")
+}
+
+func TestCreatePayment_RoutesToSessionPlanWhenLinked(t *testing.T) {
+	clinicID := uuid.New()
+	aptID := uuid.New()
+	planID := uuid.New()
+	apt := &model.Appointment{ID: aptID, ClinicID: clinicID, Price: 150, SessionPlanID: &planID}
+
+	paymentRepo := &mockPaymentRepo{}
+	aptRepo := &mockAptRepoForPayment{appointment: apt}
+	svc := newPaymentService(paymentRepo, aptRepo, defaultPixMethod)
+
+	hook := &mockFinanceUpserter{}
+	svc.SetFinanceUpserter(hook)
+
+	_, err := svc.Create(context.Background(), clinicID, aptID, &model.CreateAppointmentPaymentRequest{
+		PaymentMethodID: defaultPixMethod.ID,
+		Amount:          150,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, hook.lastPlanID, "plan-linked appointment should carry the session plan id to finance")
+	assert.Equal(t, planID, *hook.lastPlanID)
+}
+
+func TestDeletePayment_CallsFinanceDelete(t *testing.T) {
+	clinicID := uuid.New()
+	aptID := uuid.New()
+	apt := &model.Appointment{ID: aptID, ClinicID: clinicID, Price: 100}
+
+	paymentRepo := &mockPaymentRepo{}
+	aptRepo := &mockAptRepoForPayment{appointment: apt}
+	svc := newPaymentService(paymentRepo, aptRepo, defaultPixMethod)
+
+	// Seed one payment first (without hook, so upserts counter stays clean)
+	resp, err := svc.Create(context.Background(), clinicID, aptID, &model.CreateAppointmentPaymentRequest{
+		PaymentMethodID: defaultPixMethod.ID,
+		Amount:          100,
+	})
+	require.NoError(t, err)
+
+	hook := &mockFinanceUpserter{}
+	svc.SetFinanceUpserter(hook)
+
+	require.NoError(t, svc.Delete(context.Background(), clinicID, resp.ID))
+
+	assert.Equal(t, 0, hook.upserts, "delete must not issue an upsert")
+	require.Equal(t, 1, hook.deletes, "delete must drop the specific payment's finance row")
+	assert.Equal(t, resp.ID, hook.lastPmtID)
+}
+
+func TestPayment_NilHookDoesNotPanic(t *testing.T) {
+	clinicID := uuid.New()
+	aptID := uuid.New()
+	apt := &model.Appointment{ID: aptID, ClinicID: clinicID, Price: 100}
+
+	paymentRepo := &mockPaymentRepo{}
+	aptRepo := &mockAptRepoForPayment{appointment: apt}
+	svc := newPaymentService(paymentRepo, aptRepo, defaultPixMethod)
+
+	// Do not call SetFinanceUpserter — hook stays nil.
+	_, err := svc.Create(context.Background(), clinicID, aptID, &model.CreateAppointmentPaymentRequest{
+		PaymentMethodID: defaultPixMethod.ID,
+		Amount:          100,
+	})
+	require.NoError(t, err)
+}

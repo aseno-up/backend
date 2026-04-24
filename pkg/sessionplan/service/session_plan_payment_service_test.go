@@ -201,6 +201,58 @@ func TestCreatePlanPayment_PerSession_ReturnsError(t *testing.T) {
 	require.Error(t, err, "should reject payment creation for per_session plans")
 }
 
+func TestCreatePlanPayment_IndividualMonthly_Works(t *testing.T) {
+	clinicID := uuid.New()
+	planID := uuid.New()
+
+	plan := &model.SessionPlan{
+		ID:          planID,
+		ClinicID:    clinicID,
+		PaymentMode: model.PaymentModeMonthly,
+	}
+
+	planRepo := &mockPlanRepo{plan: plan}
+	planPaymentRepo := &mockPlanPaymentRepo{}
+	aptPaymentRepo := &mockAppointmentPaymentRepo{}
+
+	svc := NewPlanPaymentService(planPaymentRepo, planRepo, aptPaymentRepo)
+
+	payment, err := svc.CreatePlanPayment(context.Background(), clinicID, planID, &model.CreatePlanPaymentRequest{
+		PaymentMethodID: uuid.New(),
+		Amount:          120.0,
+		ReferenceMonth:  "2026-04",
+	})
+
+	require.NoError(t, err, "individual monthly plans should accept a payment when reference_month is provided")
+	require.NotNil(t, payment)
+	assert.Equal(t, "2026-04", payment.ReferenceMonth, "reference_month should be persisted so monthly reminders and reports can find it")
+}
+
+func TestCreatePlanPayment_IndividualMonthly_RequiresReferenceMonth(t *testing.T) {
+	clinicID := uuid.New()
+	planID := uuid.New()
+
+	plan := &model.SessionPlan{
+		ID:          planID,
+		ClinicID:    clinicID,
+		PaymentMode: model.PaymentModeMonthly,
+	}
+
+	planRepo := &mockPlanRepo{plan: plan}
+	planPaymentRepo := &mockPlanPaymentRepo{}
+	aptPaymentRepo := &mockAppointmentPaymentRepo{}
+
+	svc := NewPlanPaymentService(planPaymentRepo, planRepo, aptPaymentRepo)
+
+	_, err := svc.CreatePlanPayment(context.Background(), clinicID, planID, &model.CreatePlanPaymentRequest{
+		PaymentMethodID: uuid.New(),
+		Amount:          120.0,
+		// ReferenceMonth omitted on purpose
+	})
+
+	require.Error(t, err, "monthly plan payment without reference_month must fail — otherwise reminders can't find it")
+}
+
 func TestGetPlanPayments_PerSession_NoAppointmentPayments_ReturnsEmpty(t *testing.T) {
 	clinicID := uuid.New()
 	planID := uuid.New()

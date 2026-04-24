@@ -27,12 +27,24 @@ type PlanPaymentService interface {
 	IsPlanFullyPaid(ctx context.Context, clinicID, sessionPlanID uuid.UUID) (bool, error)
 
 	DeletePayment(ctx context.Context, clinicID, paymentID uuid.UUID) error
+
+	SetFinancePlanUpserter(u FinancePlanUpserter)
+}
+
+// FinancePlanUpserter is a narrow port into the finance module. Upfront/monthly
+// plan payments live in session_plan_payments (separate table from appointment
+// payments), so they need their own hook to appear in Caixa/Lançamentos as
+// source='session_plan'.
+type FinancePlanUpserter interface {
+	UpsertFromSessionPlanPayment(ctx context.Context, payment *model.SessionPlanPayment, clinicID uuid.UUID, planTitle, patientName string) error
+	DeleteFromSessionPlanPayment(ctx context.Context, sessionPlanPaymentID, clinicID uuid.UUID) error
 }
 
 type planPaymentService struct {
-	paymentRepo    repository.PlanPaymentRepository
-	planRepo       repository.SessionPlanRepository
-	aptPaymentRepo appointment_repository.AppointmentPaymentRepository
+	paymentRepo     repository.PlanPaymentRepository
+	planRepo        repository.SessionPlanRepository
+	aptPaymentRepo  appointment_repository.AppointmentPaymentRepository
+	financeUpserter FinancePlanUpserter
 }
 
 // NewPlanPaymentService creates a new plan payment service
@@ -48,15 +60,56 @@ func NewPlanPaymentService(
 	}
 }
 
-// CreatePlanPayment creates a payment for an individual plan (upfront)
+func (s *planPaymentService) SetFinancePlanUpserter(u FinancePlanUpserter) {
+	s.financeUpserter = u
+}
+
+func (s *planPaymentService) syncFinanceUpsert(ctx context.Context, payment *model.SessionPlanPayment, clinicID uuid.UUID) {
+	if s.financeUpserter == nil {
+		return
+	}
+	// Best-effort: pull plan title + patient name so the Caixa/Lançamentos
+	// row identifies WHO paid, not just which plan. Fall back silently when
+	// the lookup fails so the payment flow never breaks.
+	// For group plans (PatientID empty), patientName stays empty and the
+	// finance description falls back to just the plan title.
+	var planTitle, patientName string
+	if plan, err := s.planRepo.GetByID(ctx, clinicID, payment.SessionPlanID); err == nil && plan != nil {
+		planTitle = plan.Title
+		patientName = plan.PatientName // populated by repo.loadRelations
+	}
+	_ = s.financeUpserter.UpsertFromSessionPlanPayment(ctx, payment, clinicID, planTitle, patientName)
+}
+
+func (s *planPaymentService) syncFinanceDelete(ctx context.Context, paymentID, clinicID uuid.UUID) {
+	if s.financeUpserter == nil {
+		return
+	}
+	_ = s.financeUpserter.DeleteFromSessionPlanPayment(ctx, paymentID, clinicID)
+}
+
+// CreatePlanPayment creates a payment for an individual plan.
+// Supports upfront (a única parcela total) and monthly (uma parcela por mês
+// de referência — `reference_month` no formato YYYY-MM). Planos per_session
+// são pagos via appointment_payment, então não passam por aqui.
 func (s *planPaymentService) CreatePlanPayment(ctx context.Context, clinicID, sessionPlanID uuid.UUID, req *model.CreatePlanPaymentRequest) (*model.SessionPlanPayment, error) {
 	plan, err := s.planRepo.GetByID(ctx, clinicID, sessionPlanID)
 	if err != nil {
 		return nil, err
 	}
 
-	if plan.PaymentMode != model.PaymentModeUpfront {
-		return nil, errors.ErrValidationInstance.WithMessage("Plan payment is only available for upfront payment mode")
+	switch plan.PaymentMode {
+	case model.PaymentModeUpfront:
+		// ok
+	case model.PaymentModeMonthly:
+		if req.ReferenceMonth == "" {
+			return nil, errors.ErrValidationInstance.WithMessage("Informe o mês de referência (reference_month) para planos mensais.")
+		}
+		if _, err := time.Parse("2006-01", req.ReferenceMonth); err != nil {
+			return nil, errors.ErrValidationInstance.WithMessage("Formato de reference_month inválido. Use YYYY-MM.")
+		}
+	default:
+		return nil, errors.ErrValidationInstance.WithMessage("Este plano é pago por sessão; registre o pagamento no agendamento.")
 	}
 
 	installments := req.Installments
@@ -71,6 +124,7 @@ func (s *planPaymentService) CreatePlanPayment(ctx context.Context, clinicID, se
 		Amount:          req.Amount,
 		Discount:        req.Discount,
 		Installments:    installments,
+		ReferenceMonth:  req.ReferenceMonth,
 		Notes:           req.Notes,
 		PaidAt:          resolvePaidAt(req.PaidAt),
 	}
@@ -78,6 +132,8 @@ func (s *planPaymentService) CreatePlanPayment(ctx context.Context, clinicID, se
 	if err := s.paymentRepo.Create(ctx, payment); err != nil {
 		return nil, err
 	}
+
+	s.syncFinanceUpsert(ctx, payment, clinicID)
 
 	return payment, nil
 }
@@ -202,6 +258,8 @@ func (s *planPaymentService) CreateEnrollmentPayment(ctx context.Context, clinic
 		return nil, err
 	}
 
+	s.syncFinanceUpsert(ctx, payment, clinicID)
+
 	return payment, nil
 }
 
@@ -241,5 +299,9 @@ func (s *planPaymentService) IsPlanFullyPaid(ctx context.Context, clinicID, sess
 
 // DeletePayment deletes a plan payment
 func (s *planPaymentService) DeletePayment(ctx context.Context, clinicID, paymentID uuid.UUID) error {
-	return s.paymentRepo.Delete(ctx, clinicID, paymentID)
+	if err := s.paymentRepo.Delete(ctx, clinicID, paymentID); err != nil {
+		return err
+	}
+	s.syncFinanceDelete(ctx, paymentID, clinicID)
+	return nil
 }

@@ -16,6 +16,7 @@ type CommissionRepository interface {
 	Create(ctx context.Context, commission *model.Commission) error
 	GetByAppointmentID(ctx context.Context, appointmentID, clinicID uuid.UUID) (*model.Commission, error)
 	GetBySessionPlanAndDate(ctx context.Context, sessionPlanID, clinicID uuid.UUID, date string) ([]model.Commission, error)
+	GetByIDs(ctx context.Context, ids []uuid.UUID, clinicID uuid.UUID) ([]model.Commission, error)
 	ListByProfessional(ctx context.Context, professionalID, clinicID uuid.UUID, from, to time.Time) ([]model.Commission, error)
 	Summary(ctx context.Context, clinicID uuid.UUID, from, to time.Time) ([]model.ProfessionalCommissionSummary, error)
 	BulkMarkPaid(ctx context.Context, ids []uuid.UUID, clinicID uuid.UUID) error
@@ -50,6 +51,20 @@ func (r *commissionRepository) GetByAppointmentID(ctx context.Context, appointme
 		return nil, errors.ErrInternalInstance.WithError(err)
 	}
 	return &c, nil
+}
+
+func (r *commissionRepository) GetByIDs(ctx context.Context, ids []uuid.UUID, clinicID uuid.UUID) ([]model.Commission, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	var results []model.Commission
+	err := r.db.WithContext(ctx).
+		Where("id IN ? AND clinic_id = ? AND deleted_at IS NULL", ids, clinicID).
+		Find(&results).Error
+	if err != nil {
+		return nil, errors.ErrInternalInstance.WithError(err)
+	}
+	return results, nil
 }
 
 func (r *commissionRepository) ListByProfessional(ctx context.Context, professionalID, clinicID uuid.UUID, from, to time.Time) ([]model.Commission, error) {

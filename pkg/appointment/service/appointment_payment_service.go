@@ -23,12 +23,24 @@ type AppointmentPaymentService interface {
 	Update(ctx context.Context, clinicID, paymentID uuid.UUID, req *model.CreateAppointmentPaymentRequest) (*model.AppointmentPaymentResponse, error)
 	Delete(ctx context.Context, clinicID, paymentID uuid.UUID) error
 	ListByAppointment(ctx context.Context, clinicID, appointmentID uuid.UUID) ([]*model.AppointmentPaymentResponse, error)
+	SetFinanceUpserter(u FinanceUpserter)
+}
+
+// FinanceUpserter is a narrow port into the finance module. Each payment event
+// (signal, installment, final) produces its own finance row — the finance
+// module identifies the row by appointment_payment.id so re-saving/editing
+// stays idempotent. Kept as an interface so this package doesn't import
+// finance (avoids a cycle).
+type FinanceUpserter interface {
+	UpsertFromAppointmentPayment(ctx context.Context, apt *model.Appointment, payment *model.AppointmentPayment, clinicID uuid.UUID) error
+	DeleteFromAppointmentPayment(ctx context.Context, appointmentPaymentID, clinicID uuid.UUID) error
 }
 
 type appointmentPaymentService struct {
 	paymentRepo       repository.AppointmentPaymentRepository
 	appointmentRepo   repository.AppointmentRepository
 	paymentMethodRepo paymentmethod_repository.PaymentMethodRepository
+	financeUpserter   FinanceUpserter
 }
 
 func NewAppointmentPaymentService(
@@ -41,6 +53,31 @@ func NewAppointmentPaymentService(
 		appointmentRepo:   appointmentRepo,
 		paymentMethodRepo: paymentMethodRepo,
 	}
+}
+
+// SetFinanceUpserter wires the finance module so that payment mutations sync
+// their corresponding `financial_transactions` row. Left nil in tests and
+// early bootstrap — all hook calls short-circuit when it is unset.
+func (s *appointmentPaymentService) SetFinanceUpserter(u FinanceUpserter) {
+	s.financeUpserter = u
+}
+
+// syncFinanceUpsert pushes a single payment event into finance — 1 finance row
+// per appointment_payment, identified by payment.id. Called after Create/Update
+// where the payment is the one that changed.
+func (s *appointmentPaymentService) syncFinanceUpsert(ctx context.Context, apt *model.Appointment, payment *model.AppointmentPayment) {
+	if s.financeUpserter == nil {
+		return
+	}
+	_ = s.financeUpserter.UpsertFromAppointmentPayment(ctx, apt, payment, apt.ClinicID)
+}
+
+// syncFinanceDelete removes the finance row associated with a deleted payment.
+func (s *appointmentPaymentService) syncFinanceDelete(ctx context.Context, paymentID, clinicID uuid.UUID) {
+	if s.financeUpserter == nil {
+		return
+	}
+	_ = s.financeUpserter.DeleteFromAppointmentPayment(ctx, paymentID, clinicID)
 }
 
 func (s *appointmentPaymentService) validatePayment(ctx context.Context, clinicID uuid.UUID, apt *model.Appointment, req *model.CreateAppointmentPaymentRequest, excludePaymentID *uuid.UUID) error {
@@ -121,6 +158,8 @@ func (s *appointmentPaymentService) Create(ctx context.Context, clinicID, appoin
 		return nil, err
 	}
 
+	s.syncFinanceUpsert(ctx, apt, payment)
+
 	// Reload with preloaded payment method
 	created, err := s.paymentRepo.GetByID(payment.ID, clinicID)
 	if err != nil {
@@ -161,6 +200,7 @@ func (s *appointmentPaymentService) Update(ctx context.Context, clinicID, paymen
 	}
 
 	_ = s.updatePaymentStatus(ctx, apt)
+	s.syncFinanceUpsert(ctx, apt, payment)
 
 	return payment.ToResponse(), nil
 }
@@ -174,6 +214,8 @@ func (s *appointmentPaymentService) Delete(ctx context.Context, clinicID, paymen
 	if err := s.paymentRepo.Delete(paymentID, clinicID); err != nil {
 		return err
 	}
+
+	s.syncFinanceDelete(ctx, paymentID, clinicID)
 
 	// Update appointment payment_status
 	apt, err := s.appointmentRepo.GetByID(ctx, payment.AppointmentID, clinicID)

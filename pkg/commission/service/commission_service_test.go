@@ -57,6 +57,14 @@ func (m *mockCommissionRepo) DeleteBySessionPlanAndDate(ctx context.Context, ses
 	return m.Called(ctx, sessionPlanID, clinicID, date).Error(0)
 }
 
+func (m *mockCommissionRepo) GetByIDs(ctx context.Context, ids []uuid.UUID, clinicID uuid.UUID) ([]model.Commission, error) {
+	args := m.Called(ctx, ids, clinicID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]model.Commission), args.Error(1)
+}
+
 // --- Mock: ProfessionalProcedureLookup ---
 
 type mockPPLookup struct{ mock.Mock }

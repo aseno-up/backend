@@ -73,6 +73,10 @@ import (
 	featureflag_model "github.com/aseno/backend/pkg/featureflag/model"
 	featureflag_repository "github.com/aseno/backend/pkg/featureflag/repository"
 	featureflag_service "github.com/aseno/backend/pkg/featureflag/service"
+	finance_handler "github.com/aseno/backend/pkg/finance/handler"
+	finance_model "github.com/aseno/backend/pkg/finance/model"
+	finance_repository "github.com/aseno/backend/pkg/finance/repository"
+	finance_service "github.com/aseno/backend/pkg/finance/service"
 	health_handler "github.com/aseno/backend/pkg/health/handler"
 	invite_handler "github.com/aseno/backend/pkg/invite/handler"
 	invite_model "github.com/aseno/backend/pkg/invite/model"
@@ -244,6 +248,8 @@ func main() {
 	appointmentPaymentRepo := appointment_repository.NewAppointmentPaymentRepository(db.GetDB())
 	appointmentReceiptTokenRepo := appointment_repository.NewAppointmentReceiptTokenRepository(db.GetDB())
 	specialtyRepo := specialty_repository.NewSpecialtyRepository(db.GetDB())
+	financeTransactionRepo := finance_repository.NewTransactionRepository(db.GetDB())
+	financeCategoryRepo := finance_repository.NewCategoryRepository(db.GetDB())
 
 	// Seed default settings (if not exist)
 	if err := settingsRepo.SeedDefaults(context.Background()); err != nil {
@@ -405,6 +411,9 @@ func main() {
 	paymentMethodService := paymentmethod_service.NewPaymentMethodService(paymentMethodRepo)
 	specialtyService := specialty_service.NewSpecialtyService(specialtyRepo)
 	appointmentPaymentService := appointment_service.NewAppointmentPaymentService(appointmentPaymentRepo, appointmentRepo, paymentMethodRepo)
+	financeSvc := finance_service.NewFinanceService(financeTransactionRepo, financeCategoryRepo)
+	appointmentPaymentService.SetFinanceUpserter(financeSvc)
+	commissionSvc.SetFinanceCommissionUpserter(financeSvc)
 
 	// Initialize message log service
 	messageLogService := whatsapp_service.NewMessageLogService(messageLogRepo)
@@ -818,6 +827,7 @@ func main() {
 	paymentMethodHandler := paymentmethod_handler.NewPaymentMethodHandler(paymentMethodService, auditSvc)
 	specialtyHandler := specialty_handler.NewSpecialtyHandler(specialtyService, auditSvc)
 	appointmentPaymentHandler := appointment_handler.NewAppointmentPaymentHandler(appointmentPaymentService, auditSvc)
+	financeHandler := finance_handler.NewFinanceHandler(financeSvc, auditSvc)
 
 	// Public receipt (share link) — token issuance is authenticated,
 	// reading is public. Uses narrow interfaces so tests don't touch the
@@ -888,6 +898,7 @@ func main() {
 	// Initialize Plan Payment service and handler
 	planPaymentRepo := sessionplan_repository.NewPlanPaymentRepository(db.GetDB())
 	planPaymentSvc := sessionplan_service.NewPlanPaymentService(planPaymentRepo, sessionPlanRepo, appointmentPaymentRepo)
+	planPaymentSvc.SetFinancePlanUpserter(financeSvc)
 	planPaymentHdlr := sessionplan_handler.NewPlanPaymentHandler(planPaymentSvc)
 
 	// Wire plan payment repo into group attendance for guest payments
@@ -1013,6 +1024,7 @@ func main() {
 		publicReceiptHandler,
 		specialtyHandler,
 		commissionHandler,
+		financeHandler,
 		portalHdlr,
 		marketplaceHdlr,
 		attendanceHdlr,
@@ -1115,6 +1127,7 @@ func setupRouter(
 	publicReceiptHandler public_handler.PublicReceiptHandler,
 	specialtyHandler *specialty_handler.SpecialtyHandler,
 	commissionHandler commission_handler.CommissionHandler,
+	financeHandler finance_handler.FinanceHandler,
 	portalHandler *portalaccount_handler.PortalHandler,
 	marketplaceHandler marketplace_handler.MarketplaceHandler,
 	attendanceHandler attendance_handler.AttendanceHandler,
@@ -1258,6 +1271,9 @@ func setupRouter(
 
 			// Commission routes (financial reports)
 			commissionHandler.RegisterRoutes(protected)
+
+			// Finance routes (manual income/expense + auto-generated from appointments)
+			financeHandler.RegisterRoutes(protected)
 
 			// Plan routes (protected endpoints inside PlanHandler/OfferHandler for admins)
 			planHandler.RegisterRoutes(protected, authMiddleware)
@@ -1504,11 +1520,32 @@ func runMigrations(db *database.Database) error {
 		&marketplace_model.Subaccount{},
 		&marketplace_model.SplitConfig{},
 		&marketplace_model.ClinicPayment{},
+		// Finance (contas a pagar/receber + fluxo de caixa)
+		&finance_model.FinancialCategory{},
+		&finance_model.FinancialTransaction{},
 	}
 
 	if err := db.AutoMigrate(models...); err != nil {
 		return err
 	}
+
+	// Finance hooks now key by the specific payment event — one finance row per
+	// appointment_payment (signal, installment, final) and per session_plan_payment
+	// (upfront/monthly). Legacy aggregate indexes are dropped so replaying the
+	// hook on an edit/delete hits the right row.
+	db.GetDB().Exec(`DROP INDEX IF EXISTS idx_financial_tx_appointment_unique`)
+	db.GetDB().Exec(`DROP INDEX IF EXISTS idx_financial_tx_commission_unique`)
+
+	db.GetDB().Exec(`
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_financial_tx_appointment_payment_unique
+		ON financial_transactions (appointment_payment_id)
+		WHERE appointment_payment_id IS NOT NULL AND deleted_at IS NULL
+	`)
+	db.GetDB().Exec(`
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_financial_tx_session_plan_payment_unique
+		ON financial_transactions (session_plan_payment_id)
+		WHERE session_plan_payment_id IS NOT NULL AND deleted_at IS NULL
+	`)
 
 	// Drop legacy unique index on commissions.appointment_id (now nullable for group sessions)
 	db.GetDB().Exec(`DROP INDEX IF EXISTS idx_commissions_appointment_id`)

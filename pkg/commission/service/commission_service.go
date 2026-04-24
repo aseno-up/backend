@@ -60,12 +60,25 @@ type CommissionService interface {
 
 	// VoidByGroupSession removes commission for a group session date.
 	VoidByGroupSession(ctx context.Context, sessionPlanID, clinicID uuid.UUID, date string) error
+
+	// SetFinanceCommissionUpserter wires the finance module so that paying
+	// commissions reflects as an aggregated expense row per professional/month.
+	SetFinanceCommissionUpserter(u FinanceCommissionUpserter)
+}
+
+// FinanceCommissionUpserter is a narrow port into the finance module. Each
+// "Pagar" action (BulkMarkPaid / MarkAllPendingPaid) produces one expense row
+// with paid_at=now, description carrying the session count + date range.
+// Not aggregated across pay events so Caixa's daily totals stay truthful.
+type FinanceCommissionUpserter interface {
+	CreateFromCommissionBatch(ctx context.Context, clinicID, professionalID uuid.UUID, totalPaid float64, professionalName string, sessionCount int, earliest, latest time.Time) error
 }
 
 type commissionService struct {
-	repo      repository.CommissionRepository
-	ppLookup  ProfessionalProcedureLookup
-	aptLookup AppointmentLookup
+	repo            repository.CommissionRepository
+	ppLookup        ProfessionalProcedureLookup
+	aptLookup       AppointmentLookup
+	financeUpserter FinanceCommissionUpserter
 }
 
 func NewCommissionService(
@@ -78,6 +91,10 @@ func NewCommissionService(
 		ppLookup:  ppLookup,
 		aptLookup: aptLookup,
 	}
+}
+
+func (s *commissionService) SetFinanceCommissionUpserter(u FinanceCommissionUpserter) {
+	s.financeUpserter = u
 }
 
 func (s *commissionService) CalculateAndStore(ctx context.Context, appointment *appointmentModel.Appointment, clinicID uuid.UUID) error {
@@ -222,7 +239,28 @@ func (s *commissionService) BulkMarkPaid(ctx context.Context, ids []uuid.UUID, c
 	if len(ids) == 0 {
 		return errors.ErrValidationInstance.WithMessage("Nenhuma comissao selecionada.")
 	}
-	return s.repo.BulkMarkPaid(ctx, ids, clinicID)
+
+	// Only the pending rows actually transition to paid; ignore already-paid
+	// entries so the finance hook doesn't double-count on a replay.
+	fetched, err := s.repo.GetByIDs(ctx, ids, clinicID)
+	if err != nil {
+		return err
+	}
+	pending := filterPending(fetched)
+	if len(pending) == 0 {
+		return nil
+	}
+
+	pendingIDs := make([]uuid.UUID, len(pending))
+	for i, c := range pending {
+		pendingIDs[i] = c.ID
+	}
+
+	if err := s.repo.BulkMarkPaid(ctx, pendingIDs, clinicID); err != nil {
+		return err
+	}
+	s.syncFinanceForCommissions(ctx, pending, clinicID)
+	return nil
 }
 
 func (s *commissionService) MarkAllPendingPaid(ctx context.Context, professionalID, clinicID uuid.UUID, from, to time.Time) error {
@@ -231,18 +269,115 @@ func (s *commissionService) MarkAllPendingPaid(ctx context.Context, professional
 		return err
 	}
 
-	var pendingIDs []uuid.UUID
-	for _, c := range commissions {
-		if c.Status == model.CommissionStatusPending {
-			pendingIDs = append(pendingIDs, c.ID)
-		}
-	}
-
-	if len(pendingIDs) == 0 {
+	pending := filterPending(commissions)
+	if len(pending) == 0 {
 		return nil
 	}
 
-	return s.repo.BulkMarkPaid(ctx, pendingIDs, clinicID)
+	pendingIDs := make([]uuid.UUID, len(pending))
+	for i, c := range pending {
+		pendingIDs[i] = c.ID
+	}
+
+	if err := s.repo.BulkMarkPaid(ctx, pendingIDs, clinicID); err != nil {
+		return err
+	}
+	s.syncFinanceForCommissions(ctx, pending, clinicID)
+	return nil
+}
+
+func filterPending(in []model.Commission) []model.Commission {
+	out := make([]model.Commission, 0, len(in))
+	for _, c := range in {
+		if c.Status == model.CommissionStatusPending {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// syncFinanceForCommissions inserts one finance expense row per professional
+// touched in this pay event. Each call (BulkMarkPaid / MarkAllPendingPaid)
+// produces fresh rows dated "now" — Caixa's daily breakdown matches reality.
+//
+// Only commissions that were PENDING when the batch ran get counted, so
+// replaying the same ids (most are already paid) doesn't double-count.
+//
+// Description carries the session count + date range so the finance row
+// explains itself without requiring a drill-down to the Repasse tab.
+//
+// Errors are logged but not returned: the user-facing pay flow must not fail
+// because the finance sync misbehaved.
+func (s *commissionService) syncFinanceForCommissions(ctx context.Context, paidCommissions []model.Commission, clinicID uuid.UUID) {
+	if s.financeUpserter == nil || len(paidCommissions) == 0 {
+		return
+	}
+
+	// Group by professional — typically a single professional per pay event,
+	// but MarkAllPendingPaid across a period with multiple profs could span
+	// more than one.
+	type bucket struct {
+		total    float64
+		count    int
+		earliest time.Time
+		latest   time.Time
+		name     string
+	}
+	byProf := make(map[uuid.UUID]*bucket)
+
+	for _, c := range paidCommissions {
+		b := byProf[c.ProfessionalID]
+		if b == nil {
+			b = &bucket{}
+			byProf[c.ProfessionalID] = b
+		}
+		b.total += c.CommissionValue
+		b.count++
+		// Session date: prefer explicit SessionDate for group sessions, else
+		// fall back to CreatedAt (correlates with the appointment date in the
+		// per-session flow).
+		sessionTime := c.CreatedAt
+		if c.SessionDate != "" {
+			if parsed, err := time.Parse("2006-01-02", c.SessionDate); err == nil {
+				sessionTime = parsed
+			}
+		}
+		if b.earliest.IsZero() || sessionTime.Before(b.earliest) {
+			b.earliest = sessionTime
+		}
+		if sessionTime.After(b.latest) {
+			b.latest = sessionTime
+		}
+	}
+
+	// Fetch professional names via a summary covering all involved sessions.
+	// We use the widest span so one call resolves every prof touched here.
+	var minTime, maxTime time.Time
+	for _, b := range byProf {
+		if minTime.IsZero() || b.earliest.Before(minTime) {
+			minTime = b.earliest
+		}
+		if b.latest.After(maxTime) {
+			maxTime = b.latest
+		}
+	}
+	if !minTime.IsZero() && !maxTime.IsZero() {
+		// Summary uses half-open range; widen `to` to include the last session day.
+		to := maxTime.AddDate(0, 0, 1)
+		if rows, err := s.repo.Summary(ctx, clinicID, minTime, to); err == nil {
+			for _, row := range rows {
+				if b := byProf[row.ProfessionalID]; b != nil {
+					b.name = row.ProfessionalName
+				}
+			}
+		}
+	}
+
+	for profID, b := range byProf {
+		if err := s.financeUpserter.CreateFromCommissionBatch(ctx, clinicID, profID, b.total, b.name, b.count, b.earliest, b.latest); err != nil {
+			log.Printf("commission: finance sync: insert failed for prof=%s: %v", profID, err)
+		}
+	}
 }
 
 func (s *commissionService) CalculateAndStoreForGroupSession(ctx context.Context, input *GroupSessionCommissionInput, clinicID uuid.UUID) error {
