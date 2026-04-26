@@ -116,6 +116,16 @@ func (m *mockGroupEnrollmentRepo) UpdateStatus(_ context.Context, _, enrollmentI
 	return nil
 }
 
+func (m *mockGroupEnrollmentRepo) CountActiveBySlot(_ context.Context, _, _, _ uuid.UUID) (int64, error) {
+	return 0, nil
+}
+func (m *mockGroupEnrollmentRepo) SetEnrollmentSlots(_ context.Context, _ uuid.UUID, _ []uuid.UUID) error {
+	return nil
+}
+func (m *mockGroupEnrollmentRepo) GetSlotIDsByEnrollment(_ context.Context, _ uuid.UUID) ([]uuid.UUID, error) {
+	return nil, nil
+}
+
 // --- Mock Plan Payment Repo ---
 
 type mockPlanPaymentRepo struct {

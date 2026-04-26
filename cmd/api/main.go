@@ -97,6 +97,10 @@ import (
 	notification_repository "github.com/aseno/backend/pkg/notification/repository"
 	notification_service "github.com/aseno/backend/pkg/notification/service"
 	"github.com/aseno/backend/pkg/pagination"
+	partnernetwork_handler "github.com/aseno/backend/pkg/partnernetwork/handler"
+	partnernetwork_model "github.com/aseno/backend/pkg/partnernetwork/model"
+	partnernetwork_repository "github.com/aseno/backend/pkg/partnernetwork/repository"
+	partnernetwork_service "github.com/aseno/backend/pkg/partnernetwork/service"
 	patient_handler "github.com/aseno/backend/pkg/patient/handler"
 	patient_model "github.com/aseno/backend/pkg/patient/model"
 	patient_repository "github.com/aseno/backend/pkg/patient/repository"
@@ -133,6 +137,7 @@ import (
 	professional_service "github.com/aseno/backend/pkg/professional/service"
 	public_handler "github.com/aseno/backend/pkg/public/handler"
 	sessionplan_handler "github.com/aseno/backend/pkg/sessionplan/handler"
+	sessionplan_migration "github.com/aseno/backend/pkg/sessionplan/migration"
 	sessionplan_model "github.com/aseno/backend/pkg/sessionplan/model"
 	sessionplan_repository "github.com/aseno/backend/pkg/sessionplan/repository"
 	sessionplan_service "github.com/aseno/backend/pkg/sessionplan/service"
@@ -227,6 +232,7 @@ func main() {
 	calendarIntegrationRepo := calendar_repository.NewIntegrationRepository(db.GetDB())
 	calendarSyncRepo := calendar_repository.NewSyncRepository(db.GetDB())
 	sessionPlanRepo := sessionplan_repository.NewSessionPlanRepository(db.GetDB())
+	sessionPlanSlotRepo := sessionplan_repository.NewSessionPlanSlotRepository(db.GetDB())
 	inviteRepo := invite_repository.NewInviteRepository(db.GetDB())
 	patientRecordRepo := patientrecord_repository.NewPatientRecordRepository(db.GetDB())
 	planRepo := plan_repository.NewPlanRepository(db.GetDB())
@@ -248,6 +254,8 @@ func main() {
 	appointmentPaymentRepo := appointment_repository.NewAppointmentPaymentRepository(db.GetDB())
 	appointmentReceiptTokenRepo := appointment_repository.NewAppointmentReceiptTokenRepository(db.GetDB())
 	specialtyRepo := specialty_repository.NewSpecialtyRepository(db.GetDB())
+	partnerNetworkRepo := partnernetwork_repository.NewPartnerNetworkRepository(db.GetDB())
+	partnerPlanRepo := partnernetwork_repository.NewPartnerPlanRepository(db.GetDB())
 	financeTransactionRepo := finance_repository.NewTransactionRepository(db.GetDB())
 	financeCategoryRepo := finance_repository.NewCategoryRepository(db.GetDB())
 
@@ -410,6 +418,8 @@ func main() {
 	procedureService := procedure_service.NewProcedureService(procedureRepo)
 	paymentMethodService := paymentmethod_service.NewPaymentMethodService(paymentMethodRepo)
 	specialtyService := specialty_service.NewSpecialtyService(specialtyRepo)
+	partnerNetworkService := partnernetwork_service.NewPartnerNetworkService(partnerNetworkRepo)
+	partnerPlanService := partnernetwork_service.NewPartnerPlanService(partnerPlanRepo, partnerNetworkRepo)
 	appointmentPaymentService := appointment_service.NewAppointmentPaymentService(appointmentPaymentRepo, appointmentRepo, paymentMethodRepo)
 	financeSvc := finance_service.NewFinanceService(financeTransactionRepo, financeCategoryRepo)
 	appointmentPaymentService.SetFinanceUpserter(financeSvc)
@@ -797,6 +807,8 @@ func main() {
 	// Initialize Enrollment service and handler
 	enrollmentRepo := enrollment_repository.NewEnrollmentRepository(db.GetDB())
 	enrollmentSvc := enrollment_service.NewEnrollmentService(enrollmentRepo, sessionPlanRepo)
+	enrollmentSvc.SetSlotProvider(sessionPlanSlotRepo)
+	enrollmentSvc.SetPartnerPlanProvider(partnerPlanRepo)
 	enrollmentHdlr := enrollment_handler.NewEnrollmentHandler(enrollmentSvc)
 
 	// Initialize Attendance service and handler
@@ -828,6 +840,8 @@ func main() {
 	procedureHandler := procedure_handler.NewProcedureHandler(procedureService)
 	paymentMethodHandler := paymentmethod_handler.NewPaymentMethodHandler(paymentMethodService, auditSvc)
 	specialtyHandler := specialty_handler.NewSpecialtyHandler(specialtyService, auditSvc)
+	partnerNetworkHandler := partnernetwork_handler.NewPartnerNetworkHandler(partnerNetworkService, auditSvc)
+	partnerPlanHandler := partnernetwork_handler.NewPartnerPlanHandler(partnerPlanService, auditSvc)
 	appointmentPaymentHandler := appointment_handler.NewAppointmentPaymentHandler(appointmentPaymentService, auditSvc)
 	financeHandler := finance_handler.NewFinanceHandler(financeSvc, auditSvc)
 
@@ -894,8 +908,11 @@ func main() {
 
 	// Initialize Session Plan handler with calendar facade and materialize service
 	calendarFacade := sessionplan_service.NewCalendarFacade(sessionPlanRepo, appointmentRepo, enrollmentRepo)
+	calendarFacade.SetSlotRepo(sessionPlanSlotRepo)
 	materializeSvc := sessionplan_service.NewMaterializeService(sessionPlanRepo, appointmentRepo, professionalRepo)
 	sessionPlanHandler := sessionplan_handler.NewSessionPlanHandler(sessionPlanService, calendarFacade, materializeSvc, auditSvc)
+	sessionPlanSlotService := sessionplan_service.NewSessionPlanSlotService(sessionPlanRepo, sessionPlanSlotRepo)
+	sessionPlanSlotHandler := sessionplan_handler.NewSessionPlanSlotHandler(sessionPlanSlotService, auditSvc)
 
 	// Initialize Plan Payment service and handler
 	planPaymentRepo := sessionplan_repository.NewPlanPaymentRepository(db.GetDB())
@@ -1002,6 +1019,7 @@ func main() {
 		paymentHandler,
 		calendarHandler,
 		sessionPlanHandler,
+		sessionPlanSlotHandler,
 		inviteHdlr,
 		userHdlr,
 		patientRecordHdlr,
@@ -1027,6 +1045,8 @@ func main() {
 		appointmentReceiptHandler,
 		publicReceiptHandler,
 		specialtyHandler,
+		partnerNetworkHandler,
+		partnerPlanHandler,
 		commissionHandler,
 		financeHandler,
 		portalHdlr,
@@ -1105,6 +1125,7 @@ func setupRouter(
 	paymentHandler payment_handler.PaymentHandler,
 	calendarHandler calendar_handler.CalendarHandler,
 	sessionPlanHandler sessionplan_handler.SessionPlanHandler,
+	sessionPlanSlotHandler *sessionplan_handler.SessionPlanSlotHandler,
 	inviteHandler invite_handler.InviteHandler,
 	userHandler user_handler.UserHandler,
 	patientRecordHandler patientrecord_handler.PatientRecordHandler,
@@ -1130,6 +1151,8 @@ func setupRouter(
 	appointmentReceiptHandler appointment_handler.AppointmentReceiptHandler,
 	publicReceiptHandler public_handler.PublicReceiptHandler,
 	specialtyHandler *specialty_handler.SpecialtyHandler,
+	partnerNetworkHandler *partnernetwork_handler.PartnerNetworkHandler,
+	partnerPlanHandler *partnernetwork_handler.PartnerPlanHandler,
 	commissionHandler commission_handler.CommissionHandler,
 	financeHandler finance_handler.FinanceHandler,
 	portalHandler *portalaccount_handler.PortalHandler,
@@ -1273,6 +1296,10 @@ func setupRouter(
 			// Specialty routes (settings)
 			specialtyHandler.RegisterRoutes(protected)
 
+			// Partner network / plan routes (convênios — settings)
+			partnerNetworkHandler.RegisterRoutes(protected)
+			partnerPlanHandler.RegisterRoutes(protected)
+
 			// Commission routes (financial reports)
 			commissionHandler.RegisterRoutes(protected)
 
@@ -1295,6 +1322,7 @@ func setupRouter(
 
 			// Session Plan routes
 			sessionPlanHandler.RegisterRoutes(protected)
+			sessionPlanSlotHandler.RegisterRoutes(protected)
 
 			// Enrollment routes (group session plan enrollments)
 			enrollmentHandler.RegisterRoutes(protected)
@@ -1473,10 +1501,12 @@ func runMigrations(db *database.Database) error {
 		&calendar_model.CalendarIntegration{},
 		&calendar_model.CalendarSync{},
 		&sessionplan_model.SessionPlan{},
+		&sessionplan_model.SessionPlanSlot{},
 		&attendance_model.AppointmentAttendance{},
 		&attendance_model.GroupSessionAttendance{},
 		&attendance_model.GroupSessionProfessional{},
 		&enrollment_model.SessionPlanEnrollment{},
+		&enrollment_model.EnrollmentSlot{},
 		&sessionplan_model.SessionPlanPayment{},
 		&sessionplan_model.SessionPlanPaymentReminder{},
 		&invite_model.Invite{},
@@ -1516,6 +1546,8 @@ func runMigrations(db *database.Database) error {
 		&appointment_model.AppointmentReceiptToken{},
 		// Specialties and portal accounts
 		&specialty_model.Specialty{},
+		&partnernetwork_model.PartnerNetwork{},
+		&partnernetwork_model.PartnerPlan{},
 		&professional_model.ProfessionalSpecialty{},
 		&professional_model.ProfessionalProcedure{},
 		&commission_model.Commission{},
@@ -1531,6 +1563,12 @@ func runMigrations(db *database.Database) error {
 
 	if err := db.AutoMigrate(models...); err != nil {
 		return err
+	}
+
+	// Backfill SessionPlanSlot rows for legacy group plans created before the
+	// slot model existed. Idempotent — only runs for plans with no slots yet.
+	if err := sessionplan_migration.PortGroupPlansToSlots(context.Background(), db.GetDB()); err != nil {
+		logger.Printf("Warning: PortGroupPlansToSlots failed: %v", err)
 	}
 
 	// Finance hooks now key by the specific payment event — one finance row per

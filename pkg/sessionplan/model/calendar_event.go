@@ -26,8 +26,9 @@ type CalendarEvent struct {
 	VirtualDate string `json:"virtual_date,omitempty"` // YYYY-MM-DD key for materialization
 
 	// Group-only fields
-	EnrolledCount int  `json:"enrolled_count,omitempty"`
-	Capacity      *int `json:"capacity,omitempty"`
+	EnrolledCount int        `json:"enrolled_count,omitempty"`
+	Capacity      *int       `json:"capacity,omitempty"`
+	SlotID        *uuid.UUID `json:"slot_id,omitempty"` // populated for slot-based group events
 
 	// Real appointment fields (only when IsVirtual=false)
 	AppointmentID *uuid.UUID `json:"id,omitempty"`

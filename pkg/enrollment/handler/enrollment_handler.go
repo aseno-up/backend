@@ -15,6 +15,7 @@ import (
 type EnrollmentHandler interface {
 	RegisterRoutes(router gin.IRouter)
 	Enroll(c *gin.Context)
+	Update(c *gin.Context)
 	ListByPlan(c *gin.Context)
 	Suspend(c *gin.Context)
 	Reactivate(c *gin.Context)
@@ -36,10 +37,38 @@ func (h *enrollmentHandler) RegisterRoutes(router gin.IRouter) {
 	{
 		plans.POST("/:id/enrollments", h.Enroll)
 		plans.GET("/:id/enrollments", h.ListByPlan)
+		plans.PUT("/:id/enrollments/:enrollment_id", h.Update)
 		plans.PUT("/:id/enrollments/:enrollment_id/suspend", h.Suspend)
 		plans.PUT("/:id/enrollments/:enrollment_id/reactivate", h.Reactivate)
 		plans.PUT("/:id/enrollments/:enrollment_id/cancel", h.Cancel)
 	}
+}
+
+// Update applies partial changes to an existing enrollment (slots, weekdays,
+// partner plan, payment fields).
+func (h *enrollmentHandler) Update(c *gin.Context) {
+	clinicID, exists := c.Get("clinic_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, errors.ToResponse(errors.ErrUnauthorizedInstance))
+		return
+	}
+	enrollmentID, err := uuid.Parse(c.Param("enrollment_id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, errors.ToResponse(errors.ErrValidationInstance.WithMessage("Invalid enrollment ID")))
+		return
+	}
+	var req model.EnrollUpdateRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, errors.ToResponse(errors.ErrValidationInstance.WithError(err)))
+		return
+	}
+	enrollment, err := h.service.Update(c.Request.Context(), clinicID.(uuid.UUID), enrollmentID, &req)
+	if err != nil {
+		statusCode := errors.GetStatusCode(err)
+		c.JSON(statusCode, errors.ToResponse(err))
+		return
+	}
+	c.JSON(http.StatusOK, enrollment.ToResponse())
 }
 
 // Enroll enrolls a patient in a group session plan

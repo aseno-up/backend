@@ -95,8 +95,16 @@ type SessionPlan struct {
 	RRule   string     `json:"rrule" gorm:"type:text"`        // RFC 5545 RRULE string, e.g. "FREQ=WEEKLY;BYDAY=MO,WE"
 	DtStart *time.Time `json:"dtstart" gorm:"type:timestamp"` // Start datetime (replaces start_date + preferred_time)
 
-	// Per-day times (new) — different time per weekday, e.g. {"MO":"08:00","WE":"14:00"}
+	// Per-day times (legacy) — different time per weekday, e.g. {"MO":"08:00","WE":"14:00"}.
+	// Used by individual plans and by group plans created before SessionPlanSlot.
+	// New group plans should use Slots instead.
 	DayTimes DayTimesMap `json:"day_times" gorm:"type:jsonb"`
+
+	// Slots define (weekday, start_time, capacity, professional_id) tuples for
+	// group plans that run multiple times per day. Loaded via GORM relation.
+	// When non-empty for a Type=group plan, calendar/enrollment use slots
+	// instead of DayTimes + WeekDays.
+	Slots []SessionPlanSlot `json:"slots,omitempty" gorm:"foreignKey:SessionPlanID"`
 
 	// Procedure link (new)
 	ProcedureID   *uuid.UUID `json:"procedure_id" gorm:"type:uuid;index"`

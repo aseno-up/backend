@@ -232,6 +232,15 @@ func (m *mockEnrollmentRepo) CountActiveByPlanAndWeekDay(_ context.Context, _, _
 func (m *mockEnrollmentRepo) Update(_ context.Context, _ *enrollment_model.SessionPlanEnrollment) error {
 	return nil
 }
+func (m *mockEnrollmentRepo) CountActiveBySlot(_ context.Context, _, _, _ uuid.UUID) (int64, error) {
+	return 0, nil
+}
+func (m *mockEnrollmentRepo) SetEnrollmentSlots(_ context.Context, _ uuid.UUID, _ []uuid.UUID) error {
+	return nil
+}
+func (m *mockEnrollmentRepo) GetSlotIDsByEnrollment(_ context.Context, _ uuid.UUID) ([]uuid.UUID, error) {
+	return nil, nil
+}
 
 // --- Mock Payment Repo ---
 

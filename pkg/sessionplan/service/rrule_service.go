@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/aseno/backend/pkg/sessionplan/model"
+	"github.com/google/uuid"
 	rrule "github.com/teambition/rrule-go"
 )
 
@@ -217,6 +218,86 @@ func CalculateOccurrencesWithDayTimes(rruleStr string, dtstart time.Time, dayTim
 	}
 
 	return result, nil
+}
+
+// SlotOccurrence is one rendered occurrence of a SessionPlanSlot.
+type SlotOccurrence struct {
+	SlotID    uuid.UUID
+	StartTime time.Time
+}
+
+// CalculateOccurrencesFromSlots emits one occurrence per active slot per
+// matching weekday in [rangeStart, rangeEnd]. Each slot uses its own
+// (weekday, start_time). Multiple slots on the same weekday produce multiple
+// occurrences for that day. Results are sorted chronologically.
+//
+// totalSessions caps the total returned occurrences (across all slots) when
+// the plan is finite (>0). For indeterminate plans (-1 or 0) no cap is applied.
+// dtstart is respected as the lower bound — no occurrences before it.
+func CalculateOccurrencesFromSlots(
+	slots []model.SessionPlanSlot,
+	dtstart, rangeStart, rangeEnd time.Time,
+	totalSessions, sessionsDone int,
+) ([]SlotOccurrence, error) {
+	if len(slots) == 0 {
+		return nil, nil
+	}
+
+	loc, err := time.LoadLocation("America/Sao_Paulo")
+	if err != nil {
+		loc = time.UTC
+	}
+	dtstartLocal := dtstart.In(loc)
+
+	// Use day-level boundaries so the lower-bound cut doesn't drop occurrences
+	// based on time-of-day comparisons.
+	dayRangeEnd := time.Date(rangeEnd.Year(), rangeEnd.Month(), rangeEnd.Day(), 23, 59, 59, 0, rangeEnd.Location())
+
+	var all []SlotOccurrence
+	for _, slot := range slots {
+		if !slot.IsActive {
+			continue
+		}
+		abbr, ok := weekdayAbbrMap[slot.Weekday]
+		if !ok {
+			continue
+		}
+		hour, min := 0, 0
+		fmt.Sscanf(slot.StartTime, "%d:%d", &hour, &min)
+		slotDtstart := time.Date(
+			dtstartLocal.Year(), dtstartLocal.Month(), dtstartLocal.Day(),
+			hour, min, 0, 0, loc,
+		)
+		// If the plan starts on a date earlier than the first matching weekday,
+		// the rrule library will compute the first valid occurrence on or after dtstart.
+		rruleStr := "FREQ=WEEKLY;BYDAY=" + abbr
+		dates, err := CalculateOccurrences(rruleStr, slotDtstart, slotDtstart, dayRangeEnd, -1, 0)
+		if err != nil {
+			continue
+		}
+		for _, d := range dates {
+			all = append(all, SlotOccurrence{SlotID: slot.ID, StartTime: d})
+		}
+	}
+
+	sort.Slice(all, func(i, j int) bool {
+		return all[i].StartTime.Before(all[j].StartTime)
+	})
+
+	if totalSessions > 0 && len(all) > totalSessions {
+		all = all[:totalSessions]
+	}
+
+	dayRangeStart := time.Date(rangeStart.Year(), rangeStart.Month(), rangeStart.Day(), 0, 0, 0, 0, rangeStart.Location())
+	dayFilterEnd := time.Date(rangeEnd.Year(), rangeEnd.Month(), rangeEnd.Day(), 23, 59, 59, 0, rangeEnd.Location())
+	out := make([]SlotOccurrence, 0, len(all))
+	for _, occ := range all {
+		if occ.StartTime.Before(dayRangeStart) || occ.StartTime.After(dayFilterEnd) {
+			continue
+		}
+		out = append(out, occ)
+	}
+	return out, nil
 }
 
 // extractBYDAY extracts the BYDAY value from an RRULE string.

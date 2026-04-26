@@ -41,6 +41,8 @@ const (
 	AuditEntityPatientWhatsAppConn   AuditEntityType = "PATIENT_WHATSAPP_CONNECTION"
 	AuditEntityFinancialTransaction  AuditEntityType = "FINANCIAL_TRANSACTION"
 	AuditEntityFinancialCategory     AuditEntityType = "FINANCIAL_CATEGORY"
+	AuditEntityPartnerNetwork        AuditEntityType = "PARTNER_NETWORK"
+	AuditEntityPartnerPlan           AuditEntityType = "PARTNER_PLAN"
 )
 
 // AuditLog represents an audit trail entry.

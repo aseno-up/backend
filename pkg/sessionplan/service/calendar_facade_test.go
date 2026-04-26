@@ -178,6 +178,15 @@ func (m *mockCalendarEnrollmentRepo) UpdateStatus(_ context.Context, _, _ uuid.U
 func (m *mockCalendarEnrollmentRepo) Update(_ context.Context, _ *enrollment_model.SessionPlanEnrollment) error {
 	return nil
 }
+func (m *mockCalendarEnrollmentRepo) CountActiveBySlot(_ context.Context, _, _, _ uuid.UUID) (int64, error) {
+	return 0, nil
+}
+func (m *mockCalendarEnrollmentRepo) SetEnrollmentSlots(_ context.Context, _ uuid.UUID, _ []uuid.UUID) error {
+	return nil
+}
+func (m *mockCalendarEnrollmentRepo) GetSlotIDsByEnrollment(_ context.Context, _ uuid.UUID) ([]uuid.UUID, error) {
+	return nil, nil
+}
 
 // --- Tests ---
 

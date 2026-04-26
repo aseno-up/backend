@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/aseno/backend/pkg/sessionplan/model"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -521,6 +522,85 @@ func TestCalculateOccurrencesWithDayTimes_RespectsSessionLimit(t *testing.T) {
 		)
 		require.NoError(t, err)
 		assert.True(t, len(dates) > 0, "indeterminate plan should generate sessions in any range")
+	})
+}
+
+func TestCalculateOccurrencesFromSlots(t *testing.T) {
+	loc, _ := time.LoadLocation("America/Sao_Paulo")
+	if loc == nil {
+		t.Skip("America/Sao_Paulo timezone not available")
+	}
+	// Plan starts on a Monday, 2026-01-05 09:00 BRT.
+	dtstartLocal := time.Date(2026, 1, 5, 9, 0, 0, 0, loc)
+	dtstart := dtstartLocal.UTC()
+
+	t.Run("multiple slots same weekday produce multiple occurrences", func(t *testing.T) {
+		planID := uuid.New()
+		slots := []model.SessionPlanSlot{
+			{ID: uuid.New(), SessionPlanID: planID, Weekday: 1, StartTime: "08:00", Capacity: 3, IsActive: true},
+			{ID: uuid.New(), SessionPlanID: planID, Weekday: 1, StartTime: "09:00", Capacity: 3, IsActive: true},
+			{ID: uuid.New(), SessionPlanID: planID, Weekday: 1, StartTime: "10:10", Capacity: 3, IsActive: true},
+		}
+		rangeStart := dtstart
+		rangeEnd := dtstart.AddDate(0, 0, 6)
+
+		occs, err := CalculateOccurrencesFromSlots(slots, dtstart, rangeStart, rangeEnd, -1, 0)
+		require.NoError(t, err)
+		require.Len(t, occs, 3)
+		// All on Monday
+		for _, o := range occs {
+			assert.Equal(t, time.Monday, o.StartTime.In(loc).Weekday())
+		}
+		// Sorted chronologically
+		hours := []int{occs[0].StartTime.In(loc).Hour(), occs[1].StartTime.In(loc).Hour(), occs[2].StartTime.In(loc).Hour()}
+		assert.Equal(t, []int{8, 9, 10}, hours)
+	})
+
+	t.Run("inactive slots are skipped", func(t *testing.T) {
+		planID := uuid.New()
+		slots := []model.SessionPlanSlot{
+			{ID: uuid.New(), SessionPlanID: planID, Weekday: 1, StartTime: "08:00", Capacity: 3, IsActive: true},
+			{ID: uuid.New(), SessionPlanID: planID, Weekday: 1, StartTime: "09:00", Capacity: 3, IsActive: false},
+		}
+		rangeStart := dtstart
+		rangeEnd := dtstart.AddDate(0, 0, 6)
+
+		occs, err := CalculateOccurrencesFromSlots(slots, dtstart, rangeStart, rangeEnd, -1, 0)
+		require.NoError(t, err)
+		require.Len(t, occs, 1)
+		assert.Equal(t, 8, occs[0].StartTime.In(loc).Hour())
+	})
+
+	t.Run("different weekdays render across the week", func(t *testing.T) {
+		planID := uuid.New()
+		slots := []model.SessionPlanSlot{
+			{ID: uuid.New(), SessionPlanID: planID, Weekday: 1, StartTime: "08:00", Capacity: 3, IsActive: true},
+			{ID: uuid.New(), SessionPlanID: planID, Weekday: 3, StartTime: "14:10", Capacity: 3, IsActive: true},
+			{ID: uuid.New(), SessionPlanID: planID, Weekday: 5, StartTime: "18:10", Capacity: 3, IsActive: true},
+		}
+		rangeStart := dtstart
+		rangeEnd := dtstart.AddDate(0, 0, 6)
+
+		occs, err := CalculateOccurrencesFromSlots(slots, dtstart, rangeStart, rangeEnd, -1, 0)
+		require.NoError(t, err)
+		require.Len(t, occs, 3)
+		assert.Equal(t, time.Monday, occs[0].StartTime.In(loc).Weekday())
+		assert.Equal(t, time.Wednesday, occs[1].StartTime.In(loc).Weekday())
+		assert.Equal(t, time.Friday, occs[2].StartTime.In(loc).Weekday())
+	})
+
+	t.Run("totalSessions caps total occurrences", func(t *testing.T) {
+		planID := uuid.New()
+		slots := []model.SessionPlanSlot{
+			{ID: uuid.New(), SessionPlanID: planID, Weekday: 1, StartTime: "08:00", Capacity: 3, IsActive: true},
+			{ID: uuid.New(), SessionPlanID: planID, Weekday: 3, StartTime: "08:00", Capacity: 3, IsActive: true},
+		}
+		rangeStart := dtstart
+		rangeEnd := dtstart.AddDate(0, 0, 28) // 4 weeks → 8 raw occs (4 Mon + 4 Wed)
+
+		occs, err := CalculateOccurrencesFromSlots(slots, dtstart, rangeStart, rangeEnd, 5, 0)
+		require.NoError(t, err)
+		assert.Len(t, occs, 5)
 	})
 }
 

@@ -35,8 +35,16 @@ type SessionPlanEnrollment struct {
 	Status        EnrollmentStatus `json:"status" gorm:"size:20;not null;default:'active'"`
 
 	// Which weekdays this patient attends (0=Sunday ... 6=Saturday).
-	// Must be a subset of the plan's available days.
+	// Must be a subset of the plan's available days. For slot-based enrollments
+	// this is derived from the chosen slots so legacy calendar/attendance code
+	// keeps working without changes.
 	WeekDays pq.Int64Array `json:"week_days" gorm:"type:integer[]"`
+
+	// PartnerPlanID identifies the partner network plan paying for this
+	// enrollment (e.g. Gympass Silver). Null for direct-pay enrollments.
+	// Frequency limits (max_sessions_per_week) are validated at the partner
+	// plan level when set.
+	PartnerPlanID *uuid.UUID `json:"partner_plan_id" gorm:"type:uuid;index"`
 
 	// Individual package within the group
 	TotalSessions *int `json:"total_sessions"` // null = indeterminate (follows plan)
@@ -57,7 +65,8 @@ type SessionPlanEnrollment struct {
 	DeletedAt gorm.DeletedAt `json:"-" gorm:"index"`
 
 	// Relations (for response)
-	PatientName string `json:"patient_name,omitempty" gorm:"-"`
+	PatientName string           `json:"patient_name,omitempty" gorm:"-"`
+	Slots       []EnrollmentSlot `json:"slots,omitempty" gorm:"foreignKey:EnrollmentID"`
 }
 
 // TableName returns the table name
@@ -82,10 +91,26 @@ func (e *SessionPlanEnrollment) Progress() float64 {
 type EnrollRequest struct {
 	PatientID     uuid.UUID   `json:"patient_id" binding:"required"`
 	WeekDays      []int       `json:"week_days"`
+	SlotIDs       []uuid.UUID `json:"slot_ids"` // optional — when provided, slot-based enrollment
+	PartnerPlanID *uuid.UUID  `json:"partner_plan_id"`
 	TotalSessions *int        `json:"total_sessions"`
 	PaymentMode   PaymentMode `json:"payment_mode"`
 	MonthlyAmount *float64    `json:"monthly_amount"`
 	BillingDay    *int        `json:"billing_day"`
+}
+
+// EnrollUpdateRequest is a partial update for an existing enrollment.
+// Patient cannot change. ClearPartnerPlan = true means "set partner_plan_id to null"
+// (since a nil pointer would mean "don't touch").
+type EnrollUpdateRequest struct {
+	WeekDays         *[]int       `json:"week_days"`
+	SlotIDs          *[]uuid.UUID `json:"slot_ids"`
+	PartnerPlanID    *uuid.UUID   `json:"partner_plan_id"`
+	ClearPartnerPlan bool         `json:"clear_partner_plan"`
+	TotalSessions    *int         `json:"total_sessions"`
+	PaymentMode      *PaymentMode `json:"payment_mode"`
+	MonthlyAmount    *float64     `json:"monthly_amount"`
+	BillingDay       *int         `json:"billing_day"`
 }
 
 // EnrollmentResponse represents the API response
@@ -95,6 +120,8 @@ type EnrollmentResponse struct {
 	PatientID     uuid.UUID        `json:"patient_id"`
 	Status        EnrollmentStatus `json:"status"`
 	WeekDays      []int            `json:"week_days"`
+	SlotIDs       []uuid.UUID      `json:"slot_ids,omitempty"`
+	PartnerPlanID *uuid.UUID       `json:"partner_plan_id,omitempty"`
 	TotalSessions *int             `json:"total_sessions"`
 	SessionsDone  int              `json:"sessions_done"`
 	Progress      float64          `json:"progress"`
@@ -112,12 +139,21 @@ func (e *SessionPlanEnrollment) ToResponse() *EnrollmentResponse {
 	for i, d := range e.WeekDays {
 		weekDays[i] = int(d)
 	}
+	var slotIDs []uuid.UUID
+	if len(e.Slots) > 0 {
+		slotIDs = make([]uuid.UUID, len(e.Slots))
+		for i, s := range e.Slots {
+			slotIDs[i] = s.SessionPlanSlotID
+		}
+	}
 	return &EnrollmentResponse{
 		ID:            e.ID,
 		SessionPlanID: e.SessionPlanID,
 		PatientID:     e.PatientID,
 		Status:        e.Status,
 		WeekDays:      weekDays,
+		SlotIDs:       slotIDs,
+		PartnerPlanID: e.PartnerPlanID,
 		TotalSessions: e.TotalSessions,
 		SessionsDone:  e.SessionsDone,
 		Progress:      e.Progress(),

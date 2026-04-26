@@ -13,9 +13,41 @@ import (
 	internal_errors "github.com/aseno/backend/internal/errors"
 	"github.com/aseno/backend/pkg/enrollment/model"
 	"github.com/aseno/backend/pkg/pagination"
+	pn_model "github.com/aseno/backend/pkg/partnernetwork/model"
 	sp_model "github.com/aseno/backend/pkg/sessionplan/model"
 	"time"
 )
+
+// --- Mock SlotProvider ---
+
+type mockSlotProvider struct {
+	slots map[uuid.UUID]*sp_model.SessionPlanSlot
+	err   error
+}
+
+func (m *mockSlotProvider) GetByIDScoped(_ context.Context, id, _ uuid.UUID) (*sp_model.SessionPlanSlot, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	if s, ok := m.slots[id]; ok {
+		return s, nil
+	}
+	return nil, internal_errors.ErrNotFoundInstance
+}
+
+// --- Mock PartnerPlanProvider ---
+
+type mockPartnerPlanProvider struct {
+	plan *pn_model.PartnerPlan
+	err  error
+}
+
+func (m *mockPartnerPlanProvider) GetByIDScoped(_, _ uuid.UUID) (*pn_model.PartnerPlan, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	return m.plan, nil
+}
 
 // --- Mock EnrollmentRepository ---
 
@@ -99,6 +131,53 @@ func (m *mockEnrollRepo) IncrementSessionsDone(_ context.Context, _, _ uuid.UUID
 func (m *mockEnrollRepo) Update(_ context.Context, e *model.SessionPlanEnrollment) error {
 	m.updated = e
 	return nil
+}
+func (m *mockEnrollRepo) CountActiveBySlot(_ context.Context, _, _, slotID uuid.UUID) (int64, error) {
+	var count int64
+	for _, e := range m.active {
+		if !e.IsActive() {
+			continue
+		}
+		for _, s := range e.Slots {
+			if s.SessionPlanSlotID == slotID {
+				count++
+				break
+			}
+		}
+	}
+	return count, nil
+}
+func (m *mockEnrollRepo) SetEnrollmentSlots(_ context.Context, enrollmentID uuid.UUID, slotIDs []uuid.UUID) error {
+	target := m.created
+	if target == nil || target.ID != enrollmentID {
+		if m.existing != nil && m.existing.ID == enrollmentID {
+			target = m.existing
+		}
+	}
+	if target == nil {
+		return nil
+	}
+	target.Slots = make([]model.EnrollmentSlot, len(slotIDs))
+	for i, sid := range slotIDs {
+		target.Slots[i] = model.EnrollmentSlot{EnrollmentID: enrollmentID, SessionPlanSlotID: sid}
+	}
+	return nil
+}
+func (m *mockEnrollRepo) GetSlotIDsByEnrollment(_ context.Context, enrollmentID uuid.UUID) ([]uuid.UUID, error) {
+	target := m.created
+	if target == nil || target.ID != enrollmentID {
+		if m.existing != nil && m.existing.ID == enrollmentID {
+			target = m.existing
+		}
+	}
+	if target == nil {
+		return nil, nil
+	}
+	ids := make([]uuid.UUID, len(target.Slots))
+	for i, s := range target.Slots {
+		ids[i] = s.SessionPlanSlotID
+	}
+	return ids, nil
 }
 
 // --- Mock SessionPlanRepository (minimal) ---
@@ -368,4 +447,202 @@ func TestEnroll_RejectsActiveDuplicate(t *testing.T) {
 
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, internal_errors.ErrValidationInstance) || err != nil)
+}
+
+// --- Slot-based + partner plan tests ---
+
+func newSlot(planID uuid.UUID, weekday int, capacity int) *sp_model.SessionPlanSlot {
+	return &sp_model.SessionPlanSlot{
+		ID:            uuid.New(),
+		SessionPlanID: planID,
+		Weekday:       weekday,
+		StartTime:     "08:00",
+		Capacity:      capacity,
+		IsActive:      true,
+	}
+}
+
+func TestEnroll_WithSlots_DerivesWeekDays(t *testing.T) {
+	plan := newGroupPlan(nil)
+	slotMon := newSlot(plan.ID, 1, 5)
+	slotWed := newSlot(plan.ID, 3, 5)
+	repo := &mockEnrollRepo{}
+	svc := NewEnrollmentService(repo, &mockSPRepo{plan: plan})
+	svc.SetSlotProvider(&mockSlotProvider{slots: map[uuid.UUID]*sp_model.SessionPlanSlot{
+		slotMon.ID: slotMon, slotWed.ID: slotWed,
+	}})
+
+	enrollment, err := svc.Enroll(context.Background(), plan.ClinicID, plan.ID, &model.EnrollRequest{
+		PatientID: uuid.New(),
+		SlotIDs:   []uuid.UUID{slotMon.ID, slotWed.ID},
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, enrollment)
+	assert.ElementsMatch(t, pq.Int64Array{1, 3}, enrollment.WeekDays)
+}
+
+func TestEnroll_WithSlots_RejectsSlotFromOtherPlan(t *testing.T) {
+	plan := newGroupPlan(nil)
+	otherPlanID := uuid.New()
+	foreignSlot := newSlot(otherPlanID, 1, 5)
+	repo := &mockEnrollRepo{}
+	svc := NewEnrollmentService(repo, &mockSPRepo{plan: plan})
+	svc.SetSlotProvider(&mockSlotProvider{slots: map[uuid.UUID]*sp_model.SessionPlanSlot{
+		foreignSlot.ID: foreignSlot,
+	}})
+
+	_, err := svc.Enroll(context.Background(), plan.ClinicID, plan.ID, &model.EnrollRequest{
+		PatientID: uuid.New(),
+		SlotIDs:   []uuid.UUID{foreignSlot.ID},
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "does not belong")
+}
+
+func TestEnroll_WithSlots_RejectsInactiveSlot(t *testing.T) {
+	plan := newGroupPlan(nil)
+	slot := newSlot(plan.ID, 1, 5)
+	slot.IsActive = false
+	repo := &mockEnrollRepo{}
+	svc := NewEnrollmentService(repo, &mockSPRepo{plan: plan})
+	svc.SetSlotProvider(&mockSlotProvider{slots: map[uuid.UUID]*sp_model.SessionPlanSlot{slot.ID: slot}})
+
+	_, err := svc.Enroll(context.Background(), plan.ClinicID, plan.ID, &model.EnrollRequest{
+		PatientID: uuid.New(),
+		SlotIDs:   []uuid.UUID{slot.ID},
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "inactive")
+}
+
+func TestEnroll_WithSlots_RespectsPerSlotCapacity(t *testing.T) {
+	plan := newGroupPlan(nil)
+	slot := newSlot(plan.ID, 1, 1) // capacity 1
+	// One active enrollment already on this slot.
+	existing := &model.SessionPlanEnrollment{
+		ID:     uuid.New(),
+		Status: model.EnrollmentStatusActive,
+		Slots: []model.EnrollmentSlot{
+			{EnrollmentID: uuid.New(), SessionPlanSlotID: slot.ID},
+		},
+	}
+	repo := &mockEnrollRepo{active: []*model.SessionPlanEnrollment{existing}}
+	svc := NewEnrollmentService(repo, &mockSPRepo{plan: plan})
+	svc.SetSlotProvider(&mockSlotProvider{slots: map[uuid.UUID]*sp_model.SessionPlanSlot{slot.ID: slot}})
+
+	_, err := svc.Enroll(context.Background(), plan.ClinicID, plan.ID, &model.EnrollRequest{
+		PatientID: uuid.New(),
+		SlotIDs:   []uuid.UUID{slot.ID},
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "capacity")
+}
+
+func TestEnroll_WithoutSlotProvider_RejectsSlotIDs(t *testing.T) {
+	plan := newGroupPlan(nil)
+	repo := &mockEnrollRepo{}
+	svc := NewEnrollmentService(repo, &mockSPRepo{plan: plan})
+	// Slot provider intentionally not set.
+
+	_, err := svc.Enroll(context.Background(), plan.ClinicID, plan.ID, &model.EnrollRequest{
+		PatientID: uuid.New(),
+		SlotIDs:   []uuid.UUID{uuid.New()},
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "slot-based enrollment is not supported")
+}
+
+func TestEnroll_PartnerPlan_ExceedsMaxSessionsPerWeek(t *testing.T) {
+	plan := newGroupPlan(nil)
+	max := 3
+	pp := &pn_model.PartnerPlan{
+		ID:                 uuid.New(),
+		Name:               "Silver",
+		MaxSessionsPerWeek: &max,
+		IsActive:           true,
+	}
+	repo := &mockEnrollRepo{}
+	svc := NewEnrollmentService(repo, &mockSPRepo{plan: plan})
+	svc.SetPartnerPlanProvider(&mockPartnerPlanProvider{plan: pp})
+
+	// Patient picks 4 weekdays — exceeds Silver's 3x/week cap.
+	_, err := svc.Enroll(context.Background(), plan.ClinicID, plan.ID, &model.EnrollRequest{
+		PatientID:     uuid.New(),
+		WeekDays:      []int{1, 2, 3, 4},
+		PartnerPlanID: &pp.ID,
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "max sessions per week")
+}
+
+func TestEnroll_PartnerPlan_AllowsWithinLimit(t *testing.T) {
+	plan := newGroupPlan(intPtr(10))
+	max := 3
+	pp := &pn_model.PartnerPlan{
+		ID:                 uuid.New(),
+		Name:               "Silver",
+		MaxSessionsPerWeek: &max,
+		IsActive:           true,
+	}
+	repo := &mockEnrollRepo{}
+	svc := NewEnrollmentService(repo, &mockSPRepo{plan: plan})
+	svc.SetPartnerPlanProvider(&mockPartnerPlanProvider{plan: pp})
+
+	enrollment, err := svc.Enroll(context.Background(), plan.ClinicID, plan.ID, &model.EnrollRequest{
+		PatientID:     uuid.New(),
+		WeekDays:      []int{1, 3, 5},
+		PartnerPlanID: &pp.ID,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, enrollment)
+	require.NotNil(t, enrollment.PartnerPlanID)
+	assert.Equal(t, pp.ID, *enrollment.PartnerPlanID)
+}
+
+func TestEnroll_PartnerPlan_RejectsInactivePlan(t *testing.T) {
+	plan := newGroupPlan(intPtr(5))
+	pp := &pn_model.PartnerPlan{
+		ID:       uuid.New(),
+		Name:     "Silver",
+		IsActive: false,
+	}
+	repo := &mockEnrollRepo{}
+	svc := NewEnrollmentService(repo, &mockSPRepo{plan: plan})
+	svc.SetPartnerPlanProvider(&mockPartnerPlanProvider{plan: pp})
+
+	_, err := svc.Enroll(context.Background(), plan.ClinicID, plan.ID, &model.EnrollRequest{
+		PatientID:     uuid.New(),
+		WeekDays:      []int{1},
+		PartnerPlanID: &pp.ID,
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "inactive")
+}
+
+func TestEnroll_PartnerPlan_NilProviderAcceptsButDoesNotValidate(t *testing.T) {
+	// When no provider is set, partner_plan_id is persisted as-is and frequency
+	// validation is skipped. This is the "incremental rollout" path.
+	plan := newGroupPlan(intPtr(5))
+	repo := &mockEnrollRepo{}
+	svc := NewEnrollmentService(repo, &mockSPRepo{plan: plan})
+	// no SetPartnerPlanProvider
+
+	planID := uuid.New()
+	enrollment, err := svc.Enroll(context.Background(), plan.ClinicID, plan.ID, &model.EnrollRequest{
+		PatientID:     uuid.New(),
+		WeekDays:      []int{1, 2, 3, 4, 5}, // would exceed any real Silver cap
+		PartnerPlanID: &planID,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, enrollment.PartnerPlanID)
+	assert.Equal(t, planID, *enrollment.PartnerPlanID)
 }
