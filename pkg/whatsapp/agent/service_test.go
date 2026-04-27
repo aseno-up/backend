@@ -12,6 +12,9 @@ import (
 	"github.com/stretchr/testify/require"
 
 	clinic_model "github.com/aseno/backend/pkg/clinic/model"
+	systemlog_model "github.com/aseno/backend/pkg/systemlog/model"
+	systemlog_service "github.com/aseno/backend/pkg/systemlog/service"
+	usagemetric_model "github.com/aseno/backend/pkg/usagemetric/model"
 	"github.com/aseno/backend/pkg/whatsapp/conversation"
 	"github.com/aseno/backend/pkg/whatsapp/model"
 	"github.com/aseno/backend/pkg/whatsapp/tools"
@@ -137,10 +140,14 @@ func TestBlockedIntentReply_NilClinicUsesDefault(t *testing.T) {
 
 type fakeAgent struct {
 	generateCalls int
+	response      *AgentResponse
 }
 
 func (f *fakeAgent) Generate(_ context.Context, _ *AgentRequest) (*AgentResponse, error) {
 	f.generateCalls++
+	if f.response != nil {
+		return f.response, nil
+	}
 	return &AgentResponse{Content: "should not be reached"}, nil
 }
 func (f *fakeAgent) Provider() string { return "fake" }
@@ -301,6 +308,385 @@ func TestProcessMessage_BlockedIntent_UsesClinicCustomReply(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "Aguarde, vamos te ligar.", resp.ResponseText)
 	assert.Equal(t, 0, fa.generateCalls)
+}
+
+// ---------------------------------------------------------------------------
+// Per-clinic AI token usage tracking
+// ---------------------------------------------------------------------------
+
+type usageRecorderCall struct {
+	clinicID uuid.UUID
+	metric   string
+	delta    float64
+}
+
+type fakeUsageRecorder struct {
+	mu    sync.Mutex
+	calls []usageRecorderCall
+}
+
+func (r *fakeUsageRecorder) Increment(_ context.Context, clinicID uuid.UUID, metric string, delta float64) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.calls = append(r.calls, usageRecorderCall{clinicID: clinicID, metric: metric, delta: delta})
+	return nil
+}
+
+func (r *fakeUsageRecorder) snapshot() []usageRecorderCall {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]usageRecorderCall, len(r.calls))
+	copy(out, r.calls)
+	return out
+}
+
+func TestProcessMessage_RecordsAITokenUsagePerClinic(t *testing.T) {
+	clinic := &clinic_model.Clinic{
+		ID:       uuid.New(),
+		Settings: clinic_model.ClinicSettings{AIAgentEnabled: true},
+	}
+	fa := &fakeAgent{response: &AgentResponse{
+		Content:    "Sua consulta esta confirmada para amanha as 10h.",
+		TokensUsed: 1234,
+	}}
+	fcm := newFakeConvManager()
+	rec := &fakeUsageRecorder{}
+	svc := buildSvcWithGate(clinic, allToolsGlobalOn(), fa, fcm)
+	svc.usageMetrics = rec
+
+	_, err := svc.ProcessMessage(context.Background(), &MessageRequest{
+		ClinicID:     clinic.ID,
+		PatientPhone: "+5511999990000",
+		PatientName:  "Ana",
+		MessageText:  "Tudo certo com a consulta?",
+		Intent:       model.MessageIntentConfirm,
+	})
+	require.NoError(t, err)
+
+	calls := rec.snapshot()
+	require.Len(t, calls, 1, "exactly one Increment call expected per generation")
+	assert.Equal(t, clinic.ID, calls[0].clinicID, "tokens must be billed to the request's clinic")
+	assert.Equal(t, usagemetric_model.MetricAITokensUsed, calls[0].metric)
+	assert.InDelta(t, 1234.0, calls[0].delta, 0.001)
+}
+
+func TestProcessMessage_DoesNotRecordWhenZeroTokens(t *testing.T) {
+	clinic := &clinic_model.Clinic{
+		ID:       uuid.New(),
+		Settings: clinic_model.ClinicSettings{AIAgentEnabled: true},
+	}
+	fa := &fakeAgent{response: &AgentResponse{Content: "ok", TokensUsed: 0}}
+	fcm := newFakeConvManager()
+	rec := &fakeUsageRecorder{}
+	svc := buildSvcWithGate(clinic, allToolsGlobalOn(), fa, fcm)
+	svc.usageMetrics = rec
+
+	_, err := svc.ProcessMessage(context.Background(), &MessageRequest{
+		ClinicID:     clinic.ID,
+		PatientPhone: "+5511999990000",
+		MessageText:  "?",
+		Intent:       model.MessageIntentQuestion,
+	})
+	require.NoError(t, err)
+
+	assert.Empty(t, rec.snapshot(), "zero-token responses should not produce a row in usage_metrics")
+}
+
+func TestProcessMessage_NilUsageRecorderIsSafe(t *testing.T) {
+	clinic := &clinic_model.Clinic{
+		ID:       uuid.New(),
+		Settings: clinic_model.ClinicSettings{AIAgentEnabled: true},
+	}
+	fa := &fakeAgent{response: &AgentResponse{Content: "ok", TokensUsed: 999}}
+	fcm := newFakeConvManager()
+	svc := buildSvcWithGate(clinic, allToolsGlobalOn(), fa, fcm)
+	// svc.usageMetrics intentionally left nil — older wiring must not panic.
+
+	_, err := svc.ProcessMessage(context.Background(), &MessageRequest{
+		ClinicID:     clinic.ID,
+		PatientPhone: "+5511999990000",
+		MessageText:  "?",
+		Intent:       model.MessageIntentQuestion,
+	})
+	assert.NoError(t, err)
+}
+
+func TestProcessMessage_BlockedIntentDoesNotRecordTokens(t *testing.T) {
+	// Canned reply path bypasses the LLM; no tokens are spent, nothing to charge.
+	clinic := &clinic_model.Clinic{
+		ID: uuid.New(),
+		Settings: clinic_model.ClinicSettings{
+			AIAgentEnabled:   true,
+			AIToolReschedule: boolPtr(false),
+		},
+	}
+	fa := &fakeAgent{}
+	fcm := newFakeConvManager()
+	rec := &fakeUsageRecorder{}
+	svc := buildSvcWithGate(clinic, allToolsGlobalOn(), fa, fcm)
+	svc.usageMetrics = rec
+
+	_, err := svc.ProcessMessage(context.Background(), &MessageRequest{
+		ClinicID:     clinic.ID,
+		PatientPhone: "+5511999990000",
+		MessageText:  "quero remarcar",
+		Intent:       model.MessageIntentReschedule,
+	})
+	require.NoError(t, err)
+	assert.Empty(t, rec.snapshot())
+}
+
+// ---------------------------------------------------------------------------
+// Granular per-call AI token usage (model + provider + in/out split)
+// ---------------------------------------------------------------------------
+
+type fakeAITokenRecorder struct {
+	mu     sync.Mutex
+	events []AITokenUsageEvent
+}
+
+func (r *fakeAITokenRecorder) Record(_ context.Context, evt AITokenUsageEvent) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.events = append(r.events, evt)
+	return nil
+}
+
+func (r *fakeAITokenRecorder) snapshot() []AITokenUsageEvent {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]AITokenUsageEvent, len(r.events))
+	copy(out, r.events)
+	return out
+}
+
+func TestProcessMessage_RecordsGranularTokenUsage(t *testing.T) {
+	clinic := &clinic_model.Clinic{
+		ID:       uuid.New(),
+		Settings: clinic_model.ClinicSettings{AIAgentEnabled: true},
+	}
+	fa := &fakeAgent{response: &AgentResponse{
+		Content:      "ok, anotado.",
+		TokensUsed:   1234,
+		InputTokens:  900,
+		OutputTokens: 334,
+		Model:        "openai/gpt-4o-mini",
+		Provider:     "openrouter",
+	}}
+	fcm := newFakeConvManager()
+	aggRec := &fakeUsageRecorder{}
+	granRec := &fakeAITokenRecorder{}
+	svc := buildSvcWithGate(clinic, allToolsGlobalOn(), fa, fcm)
+	svc.usageMetrics = aggRec
+	svc.aiTokenUsage = granRec
+
+	_, err := svc.ProcessMessage(context.Background(), &MessageRequest{
+		ClinicID:     clinic.ID,
+		PatientPhone: "+5511999990000",
+		PatientName:  "Ana",
+		MessageText:  "tudo certo?",
+		Intent:       model.MessageIntentConfirm,
+	})
+	require.NoError(t, err)
+
+	events := granRec.snapshot()
+	require.Len(t, events, 1, "exactly one granular event per generation")
+	evt := events[0]
+	assert.Equal(t, clinic.ID, evt.ClinicID, "must be billed to the request's clinic (multi-tenancy)")
+	assert.Equal(t, fcm.convID, evt.ConversationID, "must reference the active conversation")
+	assert.Equal(t, "openrouter", evt.Provider)
+	assert.Equal(t, "openai/gpt-4o-mini", evt.Model)
+	assert.Equal(t, 900, evt.InputTokens)
+	assert.Equal(t, 334, evt.OutputTokens)
+	assert.Equal(t, 1234, evt.TotalTokens)
+
+	// Regression: the daily aggregate (usage_metrics.ai_tokens_used) MUST keep
+	// receiving the increment — the granular table sits alongside, not instead.
+	aggCalls := aggRec.snapshot()
+	require.Len(t, aggCalls, 1, "aggregate increment must still happen")
+	assert.InDelta(t, 1234.0, aggCalls[0].delta, 0.001)
+}
+
+func TestProcessMessage_GranularRecorderNilIsSafe(t *testing.T) {
+	clinic := &clinic_model.Clinic{
+		ID:       uuid.New(),
+		Settings: clinic_model.ClinicSettings{AIAgentEnabled: true},
+	}
+	fa := &fakeAgent{response: &AgentResponse{
+		Content: "ok", TokensUsed: 100, InputTokens: 80, OutputTokens: 20,
+		Model: "x", Provider: "y",
+	}}
+	fcm := newFakeConvManager()
+	aggRec := &fakeUsageRecorder{}
+	svc := buildSvcWithGate(clinic, allToolsGlobalOn(), fa, fcm)
+	svc.usageMetrics = aggRec
+	// svc.aiTokenUsage left nil — must not panic, aggregate must still fire.
+
+	_, err := svc.ProcessMessage(context.Background(), &MessageRequest{
+		ClinicID:     clinic.ID,
+		PatientPhone: "+5511999990000",
+		MessageText:  "?",
+		Intent:       model.MessageIntentQuestion,
+	})
+	require.NoError(t, err)
+	assert.Len(t, aggRec.snapshot(), 1, "aggregate path must not depend on granular recorder being set")
+}
+
+func TestProcessMessage_NoGranularEventForZeroTokens(t *testing.T) {
+	clinic := &clinic_model.Clinic{
+		ID:       uuid.New(),
+		Settings: clinic_model.ClinicSettings{AIAgentEnabled: true},
+	}
+	fa := &fakeAgent{response: &AgentResponse{Content: "ok", TokensUsed: 0}}
+	fcm := newFakeConvManager()
+	granRec := &fakeAITokenRecorder{}
+	svc := buildSvcWithGate(clinic, allToolsGlobalOn(), fa, fcm)
+	svc.aiTokenUsage = granRec
+
+	_, err := svc.ProcessMessage(context.Background(), &MessageRequest{
+		ClinicID:     clinic.ID,
+		PatientPhone: "+5511999990000",
+		MessageText:  "?",
+		Intent:       model.MessageIntentQuestion,
+	})
+	require.NoError(t, err)
+	assert.Empty(t, granRec.snapshot(), "no granular row when nothing was consumed")
+}
+
+// ---------------------------------------------------------------------------
+// Primary model fallback emits a system_log warning so we can detect when
+// gpt-4o-mini (or whatever AI_AGENT_MODEL is) starts silently degrading.
+// ---------------------------------------------------------------------------
+
+type fakeSystemLogSvc struct {
+	mu      sync.Mutex
+	entries []systemlog_service.SystemLogEntry
+}
+
+func (f *fakeSystemLogSvc) Log(_ context.Context, entry systemlog_service.SystemLogEntry) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.entries = append(f.entries, entry)
+	return nil
+}
+
+func (f *fakeSystemLogSvc) List(_ context.Context, _ *systemlog_model.SystemLogFilter) (*systemlog_model.SystemLogResponse, error) {
+	return nil, nil
+}
+
+func (f *fakeSystemLogSvc) snapshot() []systemlog_service.SystemLogEntry {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]systemlog_service.SystemLogEntry, len(f.entries))
+	copy(out, f.entries)
+	return out
+}
+
+func (f *fakeSystemLogSvc) findEvent(event string) *systemlog_service.SystemLogEntry {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i := range f.entries {
+		if f.entries[i].Event == event {
+			return &f.entries[i]
+		}
+	}
+	return nil
+}
+
+func TestProcessMessage_LogsSystemLogOnPrimaryModelFallback(t *testing.T) {
+	clinic := &clinic_model.Clinic{
+		ID:       uuid.New(),
+		Settings: clinic_model.ClinicSettings{AIAgentEnabled: true},
+	}
+	fa := &fakeAgent{response: &AgentResponse{
+		Content:            "ok",
+		TokensUsed:         500,
+		Model:              "google/gemini-2.0-flash-001", // what actually served
+		Provider:           "openrouter",
+		PrimaryModelFailed: true,
+		PrimaryModel:       "openai/gpt-4o-mini",
+		PrimaryModelError:  "rate limit exceeded",
+	}}
+	fcm := newFakeConvManager()
+	logSvc := &fakeSystemLogSvc{}
+	svc := buildSvcWithGate(clinic, allToolsGlobalOn(), fa, fcm)
+	svc.systemLogSvc = logSvc
+
+	_, err := svc.ProcessMessage(context.Background(), &MessageRequest{
+		ClinicID:     clinic.ID,
+		PatientPhone: "+5511999990000",
+		MessageText:  "oi",
+		Intent:       model.MessageIntentQuestion,
+	})
+	require.NoError(t, err)
+
+	entry := logSvc.findEvent("ai_agent.primary_model_fallback")
+	require.NotNil(t, entry, "must emit ai_agent.primary_model_fallback when fallback is used")
+	require.NotNil(t, entry.ClinicID)
+	assert.Equal(t, clinic.ID, *entry.ClinicID, "must scope the alert to the clinic affected (multi-tenancy)")
+	assert.Equal(t, "ai_agent", entry.Service)
+	assert.Equal(t, systemlog_model.LogStatusWarning, entry.Status,
+		"primary failure with successful fallback is a warning, not a failure — service still worked")
+	assert.Equal(t, "rate limit exceeded", entry.Error)
+
+	payload, ok := entry.Payload.(map[string]interface{})
+	require.True(t, ok, "payload must be a map for queryable fields")
+	assert.Equal(t, "openai/gpt-4o-mini", payload["primary_model"])
+	assert.Equal(t, "google/gemini-2.0-flash-001", payload["fallback_model"])
+	assert.Equal(t, "openrouter", payload["provider"])
+}
+
+func TestProcessMessage_NoSystemLogWhenPrimaryModelSucceeds(t *testing.T) {
+	clinic := &clinic_model.Clinic{
+		ID:       uuid.New(),
+		Settings: clinic_model.ClinicSettings{AIAgentEnabled: true},
+	}
+	fa := &fakeAgent{response: &AgentResponse{
+		Content:            "ok",
+		TokensUsed:         500,
+		Model:              "openai/gpt-4o-mini",
+		Provider:           "openrouter",
+		PrimaryModelFailed: false,
+	}}
+	fcm := newFakeConvManager()
+	logSvc := &fakeSystemLogSvc{}
+	svc := buildSvcWithGate(clinic, allToolsGlobalOn(), fa, fcm)
+	svc.systemLogSvc = logSvc
+
+	_, err := svc.ProcessMessage(context.Background(), &MessageRequest{
+		ClinicID:     clinic.ID,
+		PatientPhone: "+5511999990000",
+		MessageText:  "oi",
+		Intent:       model.MessageIntentQuestion,
+	})
+	require.NoError(t, err)
+
+	assert.Nil(t, logSvc.findEvent("ai_agent.primary_model_fallback"),
+		"happy path must not emit fallback event")
+}
+
+func TestProcessMessage_BlockedIntentDoesNotRecordGranular(t *testing.T) {
+	clinic := &clinic_model.Clinic{
+		ID: uuid.New(),
+		Settings: clinic_model.ClinicSettings{
+			AIAgentEnabled:   true,
+			AIToolReschedule: boolPtr(false),
+		},
+	}
+	fa := &fakeAgent{}
+	fcm := newFakeConvManager()
+	granRec := &fakeAITokenRecorder{}
+	svc := buildSvcWithGate(clinic, allToolsGlobalOn(), fa, fcm)
+	svc.aiTokenUsage = granRec
+
+	_, err := svc.ProcessMessage(context.Background(), &MessageRequest{
+		ClinicID:     clinic.ID,
+		PatientPhone: "+5511999990000",
+		MessageText:  "quero remarcar",
+		Intent:       model.MessageIntentReschedule,
+	})
+	require.NoError(t, err)
+	assert.Empty(t, granRec.snapshot())
 }
 
 func TestProcessMessage_QuestionPassesGateEvenWithAllToolsOff(t *testing.T) {

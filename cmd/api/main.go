@@ -154,6 +154,10 @@ import (
 	systemlog_model "github.com/aseno/backend/pkg/systemlog/model"
 	systemlog_repository "github.com/aseno/backend/pkg/systemlog/repository"
 	systemlog_service "github.com/aseno/backend/pkg/systemlog/service"
+	aitokenusage_handler "github.com/aseno/backend/pkg/aitokenusage/handler"
+	aitokenusage_model "github.com/aseno/backend/pkg/aitokenusage/model"
+	aitokenusage_repository "github.com/aseno/backend/pkg/aitokenusage/repository"
+	aitokenusage_service "github.com/aseno/backend/pkg/aitokenusage/service"
 	usagemetric_handler "github.com/aseno/backend/pkg/usagemetric/handler"
 	usagemetric_model "github.com/aseno/backend/pkg/usagemetric/model"
 	usagemetric_repository "github.com/aseno/backend/pkg/usagemetric/repository"
@@ -249,6 +253,7 @@ func main() {
 	systemLogRepo := systemlog_repository.NewSystemLogRepository(db.GetDB())
 	featureFlagRepo := featureflag_repository.NewFeatureFlagRepository(db.GetDB())
 	usageMetricRepo := usagemetric_repository.NewUsageMetricRepository(db.GetDB())
+	aiTokenUsageRepo := aitokenusage_repository.NewRepository(db.GetDB())
 	leadRepo := lead_repository.NewLeadRepository(db.GetDB())
 	paymentMethodRepo := paymentmethod_repository.NewPaymentMethodRepository(db.GetDB())
 	appointmentPaymentRepo := appointment_repository.NewAppointmentPaymentRepository(db.GetDB())
@@ -277,6 +282,7 @@ func main() {
 	systemLogSvc := systemlog_service.NewSystemLogService(systemLogRepo)
 	featureFlagSvc := featureflag_service.NewFeatureFlagService(featureFlagRepo)
 	usageMetricSvc := usagemetric_service.NewUsageMetricService(usageMetricRepo)
+	aiTokenUsageSvc := aitokenusage_service.NewService(aiTokenUsageRepo)
 
 	// Initialize Notification service (needed early for booking and other services)
 	notificationSvc := notification_service.NewNotificationService(notificationRepo)
@@ -546,6 +552,8 @@ func main() {
 				clinicRepo,
 				professionalRepo,
 				systemLogSvc,
+				usageMetricSvc,
+				aiTokenUsageSvc,
 			)
 			if err != nil {
 				logger.Printf("Warning: Failed to initialize AI Agent: %v", err)
@@ -981,6 +989,7 @@ func main() {
 	systemLogHdlr := systemlog_handler.NewSystemLogHandler(systemLogSvc)
 	featureFlagHdlr := featureflag_handler.NewFeatureFlagHandler(featureFlagSvc)
 	usageMetricHdlr := usagemetric_handler.NewUsageMetricHandler(usageMetricSvc)
+	aiTokenUsageHdlr := aitokenusage_handler.NewHandler(aiTokenUsageSvc)
 
 	// Initialize Public handler (no auth required - landing page config)
 	publicHdlr := public_handler.NewPublicHandler(settingsSvc, planService, emailSvc)
@@ -1038,6 +1047,7 @@ func main() {
 		systemLogHdlr,
 		featureFlagHdlr,
 		usageMetricHdlr,
+		aiTokenUsageHdlr,
 		leadHdlr,
 		leadIscaHdlr,
 		paymentMethodHandler,
@@ -1144,6 +1154,7 @@ func setupRouter(
 	systemLogHandler systemlog_handler.SystemLogHandler,
 	featureFlagHandler featureflag_handler.FeatureFlagHandler,
 	usageMetricHandler usagemetric_handler.UsageMetricHandler,
+	aiTokenUsageHandler aitokenusage_handler.Handler,
 	leadHandler lead_handler.LeadHandler,
 	leadIscaHandler lead_handler.LeadIscaHandler,
 	paymentMethodHandler *paymentmethod_handler.PaymentMethodHandler,
@@ -1389,6 +1400,8 @@ func setupRouter(
 				systemLogHandler.RegisterRoutes(adminPanel)
 				featureFlagHandler.RegisterRoutes(adminPanel)
 				usageMetricHandler.RegisterRoutes(adminPanel)
+				aiTokenUsageHandler.RegisterRoutes(adminPanel)
+				clinicHandler.RegisterAdminLookupRoutes(adminPanel)
 				leadHandler.RegisterRoutes(adminPanel)
 			}
 		}
@@ -1533,6 +1546,7 @@ func runMigrations(db *database.Database) error {
 		&systemlog_model.SystemLog{},
 		&featureflag_model.FeatureFlag{},
 		&usagemetric_model.UsageMetric{},
+		&aitokenusage_model.AITokenUsage{},
 		// Multi-clinic membership
 		&clinicmember_model.ClinicMember{},
 		// CRM Leads
@@ -2314,6 +2328,26 @@ func (a *newAppointmentCreatorAdapter) CreateFromSchedulingIntent(ctx context.Co
 	}, nil
 }
 
+// aiTokenUsageAdapter bridges the agent package's AITokenUsageRecorder
+// interface to the aitokenusage service, translating the event payload and
+// computing a best-effort BRL cost from the model name.
+type aiTokenUsageAdapter struct {
+	svc aitokenusage_service.Service
+}
+
+func (a *aiTokenUsageAdapter) Record(ctx context.Context, evt agent.AITokenUsageEvent) error {
+	return a.svc.Record(ctx, aitokenusage_service.RecordInput{
+		ClinicID:       evt.ClinicID,
+		ConversationID: evt.ConversationID,
+		Provider:       evt.Provider,
+		Model:          evt.Model,
+		InputTokens:    evt.InputTokens,
+		OutputTokens:   evt.OutputTokens,
+		TotalTokens:    evt.TotalTokens,
+		CostBRL:        agent.EstimateTokenCost(evt.TotalTokens, evt.Model),
+	})
+}
+
 // initializeAIAgent initializes the AI agent stack for WhatsApp conversations
 func initializeAIAgent(
 	cfg *config.Config,
@@ -2331,6 +2365,8 @@ func initializeAIAgent(
 	clinicRepo clinic_repository.ClinicRepository,
 	professionalRepo professional_repository.ProfessionalRepository,
 	systemLogSvc systemlog_service.SystemLogService,
+	usageMetricSvc usagemetric_service.UsageMetricService,
+	aiTokenUsageSvc aitokenusage_service.Service,
 ) (agent.Service, conversation.Manager, *tools.ExecutionContext, error) {
 	// Check if AI agent is enabled
 	workerCfg := config.NewWorkerConfig()
@@ -2430,6 +2466,7 @@ func initializeAIAgent(
 	}
 
 	// 9. Create AI agent service
+	aiTokenRecorder := &aiTokenUsageAdapter{svc: aiTokenUsageSvc}
 	agentService := agent.NewService(
 		aiAgent,
 		conversationMgr,
@@ -2440,6 +2477,8 @@ func initializeAIAgent(
 		clinicRepo,
 		workerCfg.MinDelayBetweenMessagesSeconds,
 		systemLogSvc,
+		usageMetricSvc,
+		aiTokenRecorder,
 	)
 
 	logger.Printf("AI Agent initialized: provider=%s model=%s", workerCfg.AIAgentProvider, workerCfg.AIAgentModel)

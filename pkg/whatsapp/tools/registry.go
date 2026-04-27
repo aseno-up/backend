@@ -138,8 +138,12 @@ func convertGeminiSchemaToOpenRouter(schema *genai.Schema) map[string]interface{
 		result["required"] = schema.Required
 	}
 
-	// Convert properties recursively
-	if len(schema.Properties) > 0 {
+	// Convert properties recursively. OpenAI's strict tool-schema validation
+	// requires every "type": "object" to declare a "properties" key — even
+	// when empty. Gemini is lenient about this; OpenRouter forwards as-is and
+	// OpenAI rejects with "object schema missing properties", silently flipping
+	// all traffic to the fallback model.
+	if schema.Type == genai.TypeObject {
 		properties := make(map[string]interface{})
 		for key, propSchema := range schema.Properties {
 			properties[key] = convertGeminiSchemaToOpenRouter(propSchema)

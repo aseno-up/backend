@@ -287,9 +287,11 @@ func (a *geminiAgent) generateWithModel(ctx context.Context, req *AgentRequest, 
 	}
 
 	// Calculate tokens used (approximate)
-	tokensUsed := 0
+	tokensUsed, inputTokens, outputTokens := 0, 0, 0
 	if finalResponse.UsageMetadata != nil {
 		tokensUsed = int(finalResponse.UsageMetadata.TotalTokenCount)
+		inputTokens = int(finalResponse.UsageMetadata.PromptTokenCount)
+		outputTokens = int(finalResponse.UsageMetadata.CandidatesTokenCount)
 	}
 
 	// Build agent response
@@ -298,6 +300,8 @@ func (a *geminiAgent) generateWithModel(ctx context.Context, req *AgentRequest, 
 		ToolCalls:    allToolCalls,
 		FinishReason: string(finalResponse.Candidates[0].FinishReason),
 		TokensUsed:   tokensUsed,
+		InputTokens:  inputTokens,
+		OutputTokens: outputTokens,
 		Model:        modelName,
 		Provider:     "gemini",
 	}

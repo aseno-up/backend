@@ -13,10 +13,42 @@ import (
 	clinic_repository "github.com/aseno/backend/pkg/clinic/repository"
 	systemlog_model "github.com/aseno/backend/pkg/systemlog/model"
 	systemlog_service "github.com/aseno/backend/pkg/systemlog/service"
+	usagemetric_model "github.com/aseno/backend/pkg/usagemetric/model"
 	"github.com/aseno/backend/pkg/whatsapp/conversation"
 	"github.com/aseno/backend/pkg/whatsapp/model"
 	"github.com/aseno/backend/pkg/whatsapp/tools"
 )
+
+// TokenUsageRecorder persists per-clinic AI token consumption.
+// Satisfied by usagemetric.Service; defined here as a tiny interface to keep
+// this package's dependency surface minimal and to make the dependency mockable.
+type TokenUsageRecorder interface {
+	Increment(ctx context.Context, clinicID uuid.UUID, metric string, delta float64) error
+}
+
+// AITokenUsageEvent describes a single AI generation's resource consumption.
+// One event = one call to the LLM, with the model and provider that served it,
+// so cost can be attributed per-clinic per-model later.
+type AITokenUsageEvent struct {
+	ClinicID       uuid.UUID
+	ConversationID uuid.UUID
+	Provider       string // "openrouter", "gemini", ...
+	Model          string // e.g. "openai/gpt-4o-mini"
+	InputTokens    int    // prompt tokens (best-effort; 0 if provider does not report)
+	OutputTokens  int     // completion tokens (best-effort; 0 if provider does not report)
+	TotalTokens    int    // full billable token count
+}
+
+// AITokenUsageRecorder persists per-call AI token consumption with full
+// granularity (model, provider, in/out split) so we can answer
+// "how much did clinic X spend on model Y this month?".
+//
+// This sits ALONGSIDE TokenUsageRecorder — it does not replace the daily
+// aggregate. Implementations should be best-effort and non-blocking;
+// failures must not fail the user-facing reply.
+type AITokenUsageRecorder interface {
+	Record(ctx context.Context, evt AITokenUsageEvent) error
+}
 
 // Service handles AI-driven WhatsApp message processing
 type Service interface {
@@ -64,6 +96,8 @@ type aiAgentService struct {
 	featureFlags                   *FeatureFlags
 	clinicRepo                     clinic_repository.ClinicRepository
 	systemLogSvc                   systemlog_service.SystemLogService
+	usageMetrics                   TokenUsageRecorder
+	aiTokenUsage                   AITokenUsageRecorder
 	defaultMinDelayBetweenMessages int
 	// promptHistoryTurns is how many past turns go into the LLM prompt.
 	// 0 means "use package default" (DefaultPromptHistoryTurns).
@@ -87,7 +121,9 @@ type FeatureFlags struct {
 	RemindersEnabled  bool
 }
 
-// NewService creates a new AI agent service
+// NewService creates a new AI agent service.
+// Both usageMetrics and aiTokenUsage may be nil — accounting paths are
+// best-effort and the user-facing reply must not depend on them.
 func NewService(
 	agent Agent,
 	conversationMgr conversation.Manager,
@@ -98,6 +134,8 @@ func NewService(
 	clinicRepo clinic_repository.ClinicRepository,
 	defaultMinDelayBetweenMessages int,
 	systemLogSvc systemlog_service.SystemLogService,
+	usageMetrics TokenUsageRecorder,
+	aiTokenUsage AITokenUsageRecorder,
 ) Service {
 	return &aiAgentService{
 		agent:                          agent,
@@ -108,6 +146,8 @@ func NewService(
 		featureFlags:                   featureFlags,
 		clinicRepo:                     clinicRepo,
 		systemLogSvc:                   systemLogSvc,
+		usageMetrics:                   usageMetrics,
+		aiTokenUsage:                   aiTokenUsage,
 		defaultMinDelayBetweenMessages: defaultMinDelayBetweenMessages,
 	}
 }
@@ -360,6 +400,49 @@ func (s *aiAgentService) ProcessMessage(ctx context.Context, req *MessageRequest
 		TokensUsed:    agentResp.TokensUsed,
 		Latency:       time.Since(start),
 		UsedFallback:  false, // TODO: Track fallback usage
+	}
+
+	// Persist per-clinic AI token consumption. Both recorders are best-effort
+	// and must not fail the user-facing reply. The aggregate (usage_metrics)
+	// powers daily KPIs; the granular event (ai_token_usage) breaks consumption
+	// down by model/provider so we can attribute cost per clinic per model later.
+	if msgResp.TokensUsed > 0 {
+		if s.usageMetrics != nil {
+			_ = s.usageMetrics.Increment(ctx, req.ClinicID, usagemetric_model.MetricAITokensUsed, float64(msgResp.TokensUsed))
+		}
+		if s.aiTokenUsage != nil {
+			_ = s.aiTokenUsage.Record(ctx, AITokenUsageEvent{
+				ClinicID:       req.ClinicID,
+				ConversationID: conv.ID,
+				Provider:       agentResp.Provider,
+				Model:          agentResp.Model,
+				InputTokens:    agentResp.InputTokens,
+				OutputTokens:   agentResp.OutputTokens,
+				TotalTokens:    msgResp.TokensUsed,
+			})
+		}
+	}
+
+	// Surface primary-model fallbacks as a warning in system_logs so we can
+	// detect silent degradation (e.g. gpt-4o-mini failing and traffic quietly
+	// shifting to a Gemini fallback). Status=Warning because the user still
+	// got an answer — only the cost/quality profile changed.
+	if agentResp.PrimaryModelFailed && s.systemLogSvc != nil {
+		clinicID := req.ClinicID
+		_ = s.systemLogSvc.Log(ctx, systemlog_service.SystemLogEntry{
+			ClinicID: &clinicID,
+			Service:  "ai_agent",
+			Event:    "ai_agent.primary_model_fallback",
+			Status:   systemlog_model.LogStatusWarning,
+			Error:    agentResp.PrimaryModelError,
+			Payload: map[string]interface{}{
+				"primary_model":   agentResp.PrimaryModel,
+				"fallback_model":  agentResp.Model,
+				"provider":        agentResp.Provider,
+				"conversation_id": conv.ID.String(),
+				"tokens_used":     msgResp.TokensUsed,
+			},
+		})
 	}
 
 	logger.Printf("[AI Agent Service] Processed message in %v, %d tools called, %d tokens used",

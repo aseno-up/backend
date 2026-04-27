@@ -16,6 +16,7 @@ import (
 type ClinicService interface {
 	GetByID(ctx context.Context, id uuid.UUID) (*model.ClinicResponse, error)
 	Update(ctx context.Context, id uuid.UUID, req *model.UpdateClinicRequest) (*model.ClinicResponse, error)
+	ListLookup(ctx context.Context) ([]model.ClinicLookup, error)
 }
 
 // clinicService implements ClinicService
@@ -215,4 +216,19 @@ func (s *clinicService) Update(ctx context.Context, id uuid.UUID, req *model.Upd
 	resp := clinic.ToResponse()
 	resp.BookingURL = s.buildBookingURL(clinic.Slug)
 	return resp, nil
+}
+
+// ListLookup returns a minimal {id, name} list of all clinics, used by the
+// admin Usage Metrics page to render names instead of raw UUIDs. The endpoint
+// behind this is dev-clinic-only via middleware in cmd/api/main.go.
+func (s *clinicService) ListLookup(ctx context.Context) ([]model.ClinicLookup, error) {
+	clinics, _, err := s.repo.List(ctx, 10000, 0)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]model.ClinicLookup, 0, len(clinics))
+	for _, c := range clinics {
+		out = append(out, model.ClinicLookup{ID: c.ID, Name: c.Name})
+	}
+	return out, nil
 }

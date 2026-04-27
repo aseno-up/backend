@@ -49,7 +49,11 @@ func (m *mockClinicRepo) Update(_ context.Context, clinic *model.Clinic) error {
 func (m *mockClinicRepo) Delete(_ context.Context, _ uuid.UUID) error { return nil }
 
 func (m *mockClinicRepo) List(_ context.Context, _, _ int) ([]*model.Clinic, int64, error) {
-	return nil, 0, nil
+	out := make([]*model.Clinic, 0, len(m.clinics))
+	for _, c := range m.clinics {
+		out = append(out, c)
+	}
+	return out, int64(len(out)), nil
 }
 
 func (m *mockClinicRepo) ExistsBySlug(_ context.Context, _ string) (bool, error) {
@@ -292,4 +296,35 @@ func TestClinicSettings_GetPaymentReminderDaysBefore_Default(t *testing.T) {
 	good := 5
 	s.PaymentReminderDaysBefore = &good
 	assert.Equal(t, 5, s.GetPaymentReminderDaysBefore())
+}
+
+// --- ListLookup ---
+// The admin Usage Metrics page needs a tiny {id, name} lookup so it can
+// render clinic NAMES instead of raw UUIDs across all tabs. The endpoint
+// must NEVER expose Settings, Phone, Document, etc. — only the two fields.
+func TestListLookup_ReturnsOnlyIDAndNameForAllClinics(t *testing.T) {
+	repo := newMockClinicRepo()
+	c1 := createTestClinic(repo)
+	c2 := &model.Clinic{ID: uuid.New(), Name: "Clinica B", Slug: "b"}
+	repo.clinics[c2.ID] = c2
+
+	svc := NewClinicService(repo, "https://example.test")
+	out, err := svc.ListLookup(context.Background())
+	require.NoError(t, err)
+	require.Len(t, out, 2)
+
+	byID := map[uuid.UUID]model.ClinicLookup{}
+	for _, l := range out {
+		byID[l.ID] = l
+	}
+	assert.Equal(t, "Test Clinic", byID[c1.ID].Name)
+	assert.Equal(t, "Clinica B", byID[c2.ID].Name)
+}
+
+func TestListLookup_EmptyWhenNoClinics(t *testing.T) {
+	repo := newMockClinicRepo()
+	svc := NewClinicService(repo, "https://example.test")
+	out, err := svc.ListLookup(context.Background())
+	require.NoError(t, err)
+	assert.Empty(t, out)
 }

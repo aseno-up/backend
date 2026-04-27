@@ -40,6 +40,10 @@ func (m *MockClinicService) Update(ctx context.Context, id uuid.UUID, req *model
 	return nil, args.Error(1)
 }
 
+func (m *MockClinicService) ListLookup(_ context.Context) ([]model.ClinicLookup, error) {
+	return nil, nil
+}
+
 // MockAuditService tracks LogFromGin calls for assertions.
 type MockAuditService struct {
 	mock.Mock

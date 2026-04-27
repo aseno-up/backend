@@ -95,15 +95,20 @@ func (a *openRouterAgent) Generate(ctx context.Context, req *AgentRequest) (*Age
 	// Try with primary model first
 	resp, err := a.generateWithModel(ctx, req, a.model)
 	if err != nil {
-		logger.Printf("[OpenRouter Agent] Primary model (%s) failed: %v", a.model, err)
+		primaryErr := err
+		logger.Printf("[OpenRouter Agent] Primary model (%s) failed: %v", a.model, primaryErr)
 
 		// Try each fallback model in sequence
 		for i, fallbackModel := range a.fallbackModels {
 			logger.Printf("[OpenRouter Agent] Trying fallback model %d/%d: %s", i+1, len(a.fallbackModels), fallbackModel)
 			resp, err = a.generateWithModel(ctx, req, fallbackModel)
 			if err == nil {
-				// Success with fallback
+				// Success with fallback — mark the response so the agent service
+				// can emit a system_log warning for observability.
 				logger.Printf("[OpenRouter Agent] Success with fallback model: %s", fallbackModel)
+				resp.PrimaryModelFailed = true
+				resp.PrimaryModel = a.model
+				resp.PrimaryModelError = primaryErr.Error()
 				resp.Latency = time.Since(start)
 				return resp, nil
 			}
@@ -334,6 +339,8 @@ func (a *openRouterAgent) generateWithModel(ctx context.Context, req *AgentReque
 		ToolCalls:    allToolCalls,
 		FinishReason: finalResponse.Choices[0].FinishReason,
 		TokensUsed:   finalResponse.Usage.TotalTokens,
+		InputTokens:  finalResponse.Usage.PromptTokens,
+		OutputTokens: finalResponse.Usage.CompletionTokens,
 		Model:        modelName,
 		Provider:     "openrouter",
 	}

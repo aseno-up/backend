@@ -17,8 +17,10 @@ import (
 // ClinicHandler defines the interface for clinic handlers
 type ClinicHandler interface {
 	RegisterRoutes(router gin.IRouter)
+	RegisterAdminLookupRoutes(router gin.IRouter)
 	GetClinic(c *gin.Context)
 	UpdateClinic(c *gin.Context)
+	ListLookup(c *gin.Context)
 }
 
 // clinicHandler implements ClinicHandler
@@ -44,6 +46,23 @@ func (h *clinicHandler) RegisterRoutes(router gin.IRouter) {
 		clinic.GET("", h.GetClinic)
 		clinic.PUT("", h.UpdateClinic)
 	}
+}
+
+// RegisterAdminLookupRoutes exposes the {id, name} lookup used by admin
+// tooling (Usage Metrics page). Mount this on the admin (dev-only) group;
+// it returns ALL clinics, so it must NOT be reachable by tenant users.
+func (h *clinicHandler) RegisterAdminLookupRoutes(router gin.IRouter) {
+	router.GET("/clinics", h.ListLookup)
+}
+
+// ListLookup returns a flat {id, name} list of all clinics.
+func (h *clinicHandler) ListLookup(c *gin.Context) {
+	list, err := h.service.ListLookup(c.Request.Context())
+	if err != nil {
+		c.JSON(errors.GetStatusCode(err), errors.ToResponse(err))
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": list})
 }
 
 // GetClinic returns the current clinic information

@@ -27,9 +27,19 @@ type AgentResponse struct {
 	ToolCalls    []conversation.ToolCall // Tools called during this turn
 	FinishReason string                  // Why the generation stopped
 	TokensUsed   int                     // Total tokens consumed
+	InputTokens  int                     // Prompt tokens (0 if provider does not report)
+	OutputTokens int                     // Completion tokens (0 if provider does not report)
 	Latency      time.Duration           // Time taken to generate
-	Model        string                  // Model used
+	Model        string                  // Model that actually served this response (may be a fallback)
 	Provider     string                  // Provider (gemini, claude, openai)
+
+	// PrimaryModelFailed signals that the configured primary model failed and
+	// a fallback was used. Set to true when Model != PrimaryModel.
+	PrimaryModelFailed bool
+	// PrimaryModel is the configured primary model (the one we wanted to use).
+	PrimaryModel string
+	// PrimaryModelError is a sanitized reason the primary failed (provider error message).
+	PrimaryModelError string
 }
 
 // Agent defines the interface for AI agents

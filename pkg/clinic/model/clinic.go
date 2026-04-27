@@ -10,6 +10,14 @@ import (
 	account_model "github.com/aseno/backend/pkg/account/model"
 )
 
+// ClinicLookup is the minimal {id, name} projection used by admin tooling
+// (e.g. the Usage Metrics page) to translate clinic UUIDs into human names.
+// It must NEVER include settings, document, contact info, or any other field.
+type ClinicLookup struct {
+	ID   uuid.UUID `json:"id"`
+	Name string    `json:"name"`
+}
+
 // ClinicType represents the type of clinic account
 type ClinicType string
 
