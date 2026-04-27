@@ -217,6 +217,14 @@ func (s *aiAgentService) ProcessMessage(ctx context.Context, req *MessageRequest
 		return nil, fmt.Errorf("failed to get/create conversation: %w", err)
 	}
 
+	// Count AI-handled conversations once per session-start (empty history
+	// means GetOrCreate just created it). Both LLM and canned-reply paths
+	// count, since both represent a session the AI system handled. The metric
+	// powers the "AI conversations" KPI on the admin dashboard.
+	if len(conv.History) == 0 && s.usageMetrics != nil {
+		_ = s.usageMetrics.Increment(ctx, req.ClinicID, usagemetric_model.MetricAIConversations, 1)
+	}
+
 	// Intent-level gate: if the clinic (or global kill-switch) blocks this
 	// intent, reply with a canned message and skip the LLM + tool loop entirely.
 	// Question/Unknown always pass so FAQ keeps working for FAQ-only clinics.

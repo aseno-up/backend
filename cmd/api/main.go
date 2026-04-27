@@ -2344,7 +2344,7 @@ func (a *aiTokenUsageAdapter) Record(ctx context.Context, evt agent.AITokenUsage
 		InputTokens:    evt.InputTokens,
 		OutputTokens:   evt.OutputTokens,
 		TotalTokens:    evt.TotalTokens,
-		CostBRL:        agent.EstimateTokenCost(evt.TotalTokens, evt.Model),
+		CostBRL:        agent.EstimateTokenCostSplit(evt.InputTokens, evt.OutputTokens, evt.Model),
 	})
 }
 

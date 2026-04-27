@@ -159,6 +159,7 @@ type fakeConvManager struct {
 	assistantMsgs  []string
 	convID         uuid.UUID
 	updateStateErr error
+	preloadHistory []conversation.ConversationTurn
 }
 
 func newFakeConvManager() *fakeConvManager {
@@ -171,6 +172,7 @@ func (f *fakeConvManager) GetOrCreate(_ context.Context, clinicID uuid.UUID, pho
 		ClinicID:     clinicID,
 		PatientPhone: phone,
 		PatientName:  patientName,
+		History:      append(conversation.ConversationHistory(nil), f.preloadHistory...),
 	}, nil
 }
 func (f *fakeConvManager) Get(_ context.Context, id uuid.UUID) (*conversation.ConversationContext, error) {
@@ -340,6 +342,21 @@ func (r *fakeUsageRecorder) snapshot() []usageRecorderCall {
 	return out
 }
 
+// callsForMetric filters the recorded increments to a single metric so tests
+// targeting one specific counter (e.g. ai_tokens_used) are not coupled to
+// unrelated counters that ProcessMessage may also emit (e.g. ai_conversations).
+func (r *fakeUsageRecorder) callsForMetric(metric string) []usageRecorderCall {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var out []usageRecorderCall
+	for _, c := range r.calls {
+		if c.metric == metric {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
 func TestProcessMessage_RecordsAITokenUsagePerClinic(t *testing.T) {
 	clinic := &clinic_model.Clinic{
 		ID:       uuid.New(),
@@ -363,10 +380,9 @@ func TestProcessMessage_RecordsAITokenUsagePerClinic(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	calls := rec.snapshot()
-	require.Len(t, calls, 1, "exactly one Increment call expected per generation")
+	calls := rec.callsForMetric(usagemetric_model.MetricAITokensUsed)
+	require.Len(t, calls, 1, "exactly one ai_tokens_used Increment expected per generation")
 	assert.Equal(t, clinic.ID, calls[0].clinicID, "tokens must be billed to the request's clinic")
-	assert.Equal(t, usagemetric_model.MetricAITokensUsed, calls[0].metric)
 	assert.InDelta(t, 1234.0, calls[0].delta, 0.001)
 }
 
@@ -389,7 +405,8 @@ func TestProcessMessage_DoesNotRecordWhenZeroTokens(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	assert.Empty(t, rec.snapshot(), "zero-token responses should not produce a row in usage_metrics")
+	assert.Empty(t, rec.callsForMetric(usagemetric_model.MetricAITokensUsed),
+		"zero-token responses should not increment ai_tokens_used")
 }
 
 func TestProcessMessage_NilUsageRecorderIsSafe(t *testing.T) {
@@ -409,6 +426,109 @@ func TestProcessMessage_NilUsageRecorderIsSafe(t *testing.T) {
 		Intent:       model.MessageIntentQuestion,
 	})
 	assert.NoError(t, err)
+}
+
+// ---------------------------------------------------------------------------
+// MetricAIConversations: count NEW conversations (one per session-start),
+// not every message. Matches what the existing `ai_conversations` constant
+// in usagemetric/model implies and what an admin would expect when reading
+// the dashboard.
+// ---------------------------------------------------------------------------
+
+func TestProcessMessage_IncrementsAIConversations_OnNewConversation(t *testing.T) {
+	clinic := &clinic_model.Clinic{
+		ID:       uuid.New(),
+		Settings: clinic_model.ClinicSettings{AIAgentEnabled: true},
+	}
+	fa := &fakeAgent{response: &AgentResponse{Content: "ok", TokensUsed: 10}}
+	fcm := newFakeConvManager() // GetOrCreate returns a new convo with empty History
+	rec := &fakeUsageRecorder{}
+	svc := buildSvcWithGate(clinic, allToolsGlobalOn(), fa, fcm)
+	svc.usageMetrics = rec
+
+	_, err := svc.ProcessMessage(context.Background(), &MessageRequest{
+		ClinicID:     clinic.ID,
+		PatientPhone: "+5511999990000",
+		MessageText:  "oi",
+		Intent:       model.MessageIntentQuestion,
+	})
+	require.NoError(t, err)
+
+	calls := rec.snapshot()
+	var convCalls []usageRecorderCall
+	for _, c := range calls {
+		if c.metric == usagemetric_model.MetricAIConversations {
+			convCalls = append(convCalls, c)
+		}
+	}
+	require.Len(t, convCalls, 1, "must increment ai_conversations exactly once for a fresh conversation")
+	assert.Equal(t, clinic.ID, convCalls[0].clinicID, "metric must be scoped to the request's clinic (multi-tenancy)")
+	assert.InDelta(t, 1.0, convCalls[0].delta, 0.001, "increment by exactly 1 per new conversation")
+}
+
+func TestProcessMessage_DoesNotIncrementAIConversations_OnExistingConversation(t *testing.T) {
+	clinic := &clinic_model.Clinic{
+		ID:       uuid.New(),
+		Settings: clinic_model.ClinicSettings{AIAgentEnabled: true},
+	}
+	fa := &fakeAgent{response: &AgentResponse{Content: "ok", TokensUsed: 10}}
+	fcm := newFakeConvManager()
+	// Simulate an existing conversation by giving the fake a non-empty History.
+	fcm.preloadHistory = []conversation.ConversationTurn{
+		{Role: "user", Content: "previous message"},
+	}
+	rec := &fakeUsageRecorder{}
+	svc := buildSvcWithGate(clinic, allToolsGlobalOn(), fa, fcm)
+	svc.usageMetrics = rec
+
+	_, err := svc.ProcessMessage(context.Background(), &MessageRequest{
+		ClinicID:     clinic.ID,
+		PatientPhone: "+5511999990000",
+		MessageText:  "second message",
+		Intent:       model.MessageIntentQuestion,
+	})
+	require.NoError(t, err)
+
+	for _, c := range rec.snapshot() {
+		assert.NotEqual(t, usagemetric_model.MetricAIConversations, c.metric,
+			"existing conversations must NOT re-increment the conversations counter")
+	}
+}
+
+func TestProcessMessage_IncrementsAIConversations_EvenForBlockedIntent(t *testing.T) {
+	// Blocked-intent path returns a canned reply (no LLM call), but the
+	// conversation still exists and was handled by the AI service.
+	// Counting it keeps the metric a simple "how many sessions did the AI
+	// system handle?" instead of a fragile "did the LLM actually fire?".
+	clinic := &clinic_model.Clinic{
+		ID: uuid.New(),
+		Settings: clinic_model.ClinicSettings{
+			AIAgentEnabled:   true,
+			AIToolReschedule: boolPtr(false),
+		},
+	}
+	fa := &fakeAgent{}
+	fcm := newFakeConvManager()
+	rec := &fakeUsageRecorder{}
+	svc := buildSvcWithGate(clinic, allToolsGlobalOn(), fa, fcm)
+	svc.usageMetrics = rec
+
+	_, err := svc.ProcessMessage(context.Background(), &MessageRequest{
+		ClinicID:     clinic.ID,
+		PatientPhone: "+5511999990000",
+		MessageText:  "quero remarcar",
+		Intent:       model.MessageIntentReschedule,
+	})
+	require.NoError(t, err)
+
+	var found bool
+	for _, c := range rec.snapshot() {
+		if c.metric == usagemetric_model.MetricAIConversations {
+			found = true
+			break
+		}
+	}
+	assert.True(t, found, "blocked-intent canned reply still represents one new AI-handled conversation")
 }
 
 func TestProcessMessage_BlockedIntentDoesNotRecordTokens(t *testing.T) {
@@ -433,7 +553,8 @@ func TestProcessMessage_BlockedIntentDoesNotRecordTokens(t *testing.T) {
 		Intent:       model.MessageIntentReschedule,
 	})
 	require.NoError(t, err)
-	assert.Empty(t, rec.snapshot())
+	assert.Empty(t, rec.callsForMetric(usagemetric_model.MetricAITokensUsed),
+		"blocked-intent path bypasses the LLM, so ai_tokens_used must not be incremented")
 }
 
 // ---------------------------------------------------------------------------
@@ -502,7 +623,7 @@ func TestProcessMessage_RecordsGranularTokenUsage(t *testing.T) {
 
 	// Regression: the daily aggregate (usage_metrics.ai_tokens_used) MUST keep
 	// receiving the increment — the granular table sits alongside, not instead.
-	aggCalls := aggRec.snapshot()
+	aggCalls := aggRec.callsForMetric(usagemetric_model.MetricAITokensUsed)
 	require.Len(t, aggCalls, 1, "aggregate increment must still happen")
 	assert.InDelta(t, 1234.0, aggCalls[0].delta, 0.001)
 }
@@ -529,7 +650,8 @@ func TestProcessMessage_GranularRecorderNilIsSafe(t *testing.T) {
 		Intent:       model.MessageIntentQuestion,
 	})
 	require.NoError(t, err)
-	assert.Len(t, aggRec.snapshot(), 1, "aggregate path must not depend on granular recorder being set")
+	assert.Len(t, aggRec.callsForMetric(usagemetric_model.MetricAITokensUsed), 1,
+		"aggregate ai_tokens_used path must not depend on granular recorder being set")
 }
 
 func TestProcessMessage_NoGranularEventForZeroTokens(t *testing.T) {
