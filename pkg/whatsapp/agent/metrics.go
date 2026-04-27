@@ -1,9 +1,13 @@
 package agent
 
 import (
-	"github.com/aseno/backend/internal/logger"
+	"math"
+	"os"
+	"strconv"
 	"sync"
 	"time"
+
+	"github.com/aseno/backend/internal/logger"
 )
 
 // MetricsCollector collects and tracks AI agent metrics
@@ -238,10 +242,31 @@ type Metrics struct {
 	FallbackTriggers int64
 }
 
-// usdToBrl is a fixed conversion factor used for cost estimates. Pinning it
-// keeps reports deterministic and reproducible; the alternative (live FX)
-// would make historical numbers shift over time.
-const usdToBrl = 5.0
+// usdToBrl is the conversion factor used for cost estimates. It is read once
+// at package init from the USD_TO_BRL_RATE env var so FX drift can be
+// adjusted without rebuilding the binary; missing/invalid values fall back
+// to the documented default so a bad config string cannot silently zero out
+// the cost dashboard.
+var usdToBrl = parseUSDToBRL(os.Getenv("USD_TO_BRL_RATE"))
+
+const defaultUSDToBRL = 5.0
+
+// parseUSDToBRL turns the raw env-var string into a positive float. Anything
+// non-numeric, zero, or negative is treated as "not set" and the documented
+// default is used. Exposed (lowercase) so tests can drive it directly without
+// needing to reach into the OS env.
+func parseUSDToBRL(raw string) float64 {
+	if raw == "" {
+		return defaultUSDToBRL
+	}
+	f, err := strconv.ParseFloat(raw, 64)
+	// strconv.ParseFloat accepts "nan", "inf", "+inf" without error — those
+	// would silently break the cost dashboard, so reject explicitly.
+	if err != nil || math.IsNaN(f) || math.IsInf(f, 0) || f <= 0 {
+		return defaultUSDToBRL
+	}
+	return f
+}
 
 // modelPricing maps a model name to its USD-per-1M-tokens cost.
 // Sourced from OpenRouter's listing for each model. All models in the

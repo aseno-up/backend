@@ -80,3 +80,28 @@ func TestCostSplit_BackwardsCompatibleEstimateTokenCost(t *testing.T) {
 	expected := EstimateTokenCostSplit(800, 200, "openai/gpt-4o-mini")
 	assert.InDelta(t, expected, got, 0.0001, "legacy fn must match an 80/20 split through the new fn")
 }
+
+// USD→BRL is read from the USD_TO_BRL_RATE env var so we can adjust for FX
+// drift without rebuilding the binary. The default of 5.0 is preserved when
+// the env var is missing or malformed so prod cannot accidentally report
+// zero-cost values just because a config string was wrong.
+
+func TestParseUSDToBRL_DefaultsWhenEmpty(t *testing.T) {
+	assert.Equal(t, 5.0, parseUSDToBRL(""), "empty env must use the documented default")
+}
+
+func TestParseUSDToBRL_AcceptsValidRate(t *testing.T) {
+	assert.Equal(t, 6.5, parseUSDToBRL("6.5"))
+	assert.Equal(t, 4.85, parseUSDToBRL("4.85"))
+}
+
+func TestParseUSDToBRL_FallsBackOnInvalidString(t *testing.T) {
+	assert.Equal(t, 5.0, parseUSDToBRL("nan"), "garbage in must not zero out the cost report")
+	assert.Equal(t, 5.0, parseUSDToBRL("six"))
+	assert.Equal(t, 5.0, parseUSDToBRL("R$ 6,50"), "comma decimal would silently parse to 0; reject it")
+}
+
+func TestParseUSDToBRL_RejectsNonPositive(t *testing.T) {
+	assert.Equal(t, 5.0, parseUSDToBRL("0"), "zero would silently zero all costs in the dashboard")
+	assert.Equal(t, 5.0, parseUSDToBRL("-1"), "negative rates make no sense for FX")
+}
