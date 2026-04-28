@@ -146,7 +146,7 @@ func NewWorkerConfig() *WorkerConfig {
 		ConversationMaxTurns:           getEnvAsIntW("CONVERSATION_MAX_TURNS", 30),
 		ConversationRedisTTL:           getEnvAsDurationW("CONVERSATION_REDIS_TTL", 30*time.Minute),
 		ConversationPostgresTTL:        getEnvAsDurationW("CONVERSATION_POSTGRES_TTL", 90*24*time.Hour),
-		ConversationPromptHistoryTurns: getEnvAsIntW("CONVERSATION_PROMPT_HISTORY_TURNS", 10),
+		ConversationPromptHistoryTurns: getEnvAsIntW("CONVERSATION_PROMPT_HISTORY_TURNS", 15),
 
 		// AI Agent Feature Flags (all disabled by default for gradual rollout)
 		AIAgentSchedulingEnabled: getEnvAsBoolW("AI_AGENT_SCHEDULING_ENABLED", false),

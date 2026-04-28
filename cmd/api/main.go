@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -452,6 +453,10 @@ func main() {
 
 	// Initialize WhatsApp service (if client is configured)
 	var whatsappService whatsapp_service.WhatsAppService
+	// aiAgentForShutdown is captured below when the AI agent is enabled
+	// so the graceful shutdown path can drain pending LangFuse traces.
+	// Stays nil when the agent isn't initialized; shutdown handles that.
+	var aiAgentForShutdown agent.Service
 	if whatsappClient != nil {
 		whatsappService = whatsapp_service.NewWhatsAppService(whatsappClient, messageRepo, nil)
 
@@ -546,6 +551,24 @@ func main() {
 				connRepo:     pwcRepo,
 				whatsappRepo: whatsappConnRepo,
 			}
+			// Enrollment service is wired here (instead of further down) because
+			// the AI agent's enroll_patient_in_class tool needs it. The full
+			// enrollment handler stack is still constructed in the regular
+			// repo/service block below; this block only creates the same
+			// service/repo so the AI sees them. Both blocks point at the same
+			// underlying repository instance — there is no double-wiring of
+			// state, just an earlier declaration.
+			aiEnrollmentRepo := enrollment_repository.NewEnrollmentRepository(db.GetDB())
+			aiEnrollmentSvc := enrollment_service.NewEnrollmentService(aiEnrollmentRepo, sessionPlanRepo)
+			aiEnrollmentSvc.SetSlotProvider(sessionPlanSlotRepo)
+			aiEnrollmentSvc.SetPartnerPlanProvider(partnerPlanRepo)
+			// Group attendance repo is also created here so the
+			// confirm_class_attendance tool can write a "confirmed" pre-class
+			// row. Same reasoning as the enrollment block above — declared
+			// early purely so the AI block sees it; the post-class attendance
+			// flow further down still creates its own group_attendance_repo
+			// with the same backing table.
+			aiGroupAttendanceRepo := attendance_repository.NewGroupAttendanceRepository(db.GetDB())
 			aiAgentService, conversationMgr, _, err := initializeAIAgent(
 				cfg,
 				db,
@@ -566,10 +589,17 @@ func main() {
 				usageMetricSvc,
 				aiTokenUsageSvc,
 				takeoverAdapter,
+				sessionPlanRepo,
+				sessionPlanSlotRepo,
+				aiEnrollmentRepo,
+				aiEnrollmentSvc,
+				partnerNetworkRepo,
+				aiGroupAttendanceRepo,
 			)
 			if err != nil {
 				logger.Printf("Warning: Failed to initialize AI Agent: %v", err)
 			} else if aiAgentService != nil {
+				aiAgentForShutdown = aiAgentService
 				aiAgentService.SetPromptHistoryTurns(workerCfg.ConversationPromptHistoryTurns)
 				aiAgentService.SetTemperatures(workerCfg.AIAgentTemperature, workerCfg.AIAgentHandoffTemperature)
 				whatsappService.SetAIAgentService(aiAgentService)
@@ -711,6 +741,35 @@ func main() {
 			reminderWorker.SetSubscriptionChecker(&clinicSubscriptionCheckerAdapter{clinicRepo: clinicRepo})
 			reminderWorker.SetSystemLogService(systemLogSvc)
 			go reminderWorker.Start()
+
+			// Group class reminders run on a parallel worker because group
+			// plans never materialize as appointments — the appointment
+			// reminder worker (above) can't pick them up. Same ticker, same
+			// thresholds, dedicated dedup table. Repos are local to this
+			// block (the main enrollment/attendance instances are created
+			// further down) — both point at the same DB and share no state,
+			// so an extra wrapper here is harmless.
+			classReminderEnrollmentRepo := enrollment_repository.NewEnrollmentRepository(db.GetDB())
+			classReminderGroupAttendanceRepo := attendance_repository.NewGroupAttendanceRepository(db.GetDB())
+			groupClassReminderLogRepo := sessionplan_repository.NewGroupClassReminderLogRepository(db.GetDB())
+			groupClassReminderSource := sessionplan_service.NewGroupClassReminderSource(
+				clinicRepo,
+				sessionPlanRepo,
+				sessionPlanSlotRepo,
+				classReminderEnrollmentRepo,
+				patientRepo,
+				whatsappConnRepo,
+			)
+			groupClassReminderWorker := worker.NewGroupClassReminderWorker(
+				workerCfg,
+				groupClassReminderSource,
+				groupClassReminderLogRepo,
+				&groupClassAttendanceCheckerAdapter{repo: classReminderGroupAttendanceRepo},
+				messageQueue,
+			)
+			groupClassReminderWorker.SetSubscriptionChecker(&clinicSubscriptionCheckerAdapter{clinicRepo: clinicRepo})
+			groupClassReminderWorker.SetSystemLogService(systemLogSvc)
+			go groupClassReminderWorker.Start()
 
 			subscriptionChecker := &clinicSubscriptionCheckerAdapter{clinicRepo: clinicRepo}
 
@@ -1118,6 +1177,16 @@ func main() {
 	}
 	if messageQueue != nil {
 		messageQueue.Close()
+	}
+
+	// Drain LangFuse / observability traces. The concrete agent service
+	// exposes Flush() as an unexported capability — type-asserted here
+	// so we don't widen the public Service interface (which would break
+	// every test stub that implements Service).
+	if aiAgentForShutdown != nil {
+		if flusher, ok := aiAgentForShutdown.(interface{ Flush() }); ok {
+			flusher.Flush()
+		}
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -1581,6 +1650,10 @@ func runMigrations(db *database.Database) error {
 		// Finance (contas a pagar/receber + fluxo de caixa)
 		&finance_model.FinancialCategory{},
 		&finance_model.FinancialTransaction{},
+		// Group class reminder dedup log — written by the class reminder
+		// worker so the same (clinic, plan, patient, date, threshold) tuple
+		// is never enqueued twice.
+		&sessionplan_model.GroupClassReminderLog{},
 	}
 
 	if err := db.AutoMigrate(models...); err != nil {
@@ -2377,6 +2450,12 @@ func initializeAIAgent(
 	usageMetricSvc usagemetric_service.UsageMetricService,
 	aiTokenUsageSvc aitokenusage_service.Service,
 	humanTakeoverMarker tools.HumanTakeoverMarker,
+	sessionPlanRepo sessionplan_repository.SessionPlanRepository,
+	sessionPlanSlotRepo sessionplan_repository.SessionPlanSlotRepository,
+	enrollmentRepo enrollment_repository.EnrollmentRepository,
+	enrollmentService enrollment_service.EnrollmentService,
+	partnerNetworkRepo partnernetwork_repository.PartnerNetworkRepository,
+	groupAttendanceRepo attendance_repository.GroupAttendanceRepository,
 ) (agent.Service, conversation.Manager, *tools.ExecutionContext, error) {
 	// Check if AI agent is enabled
 	workerCfg := config.NewWorkerConfig()
@@ -2424,6 +2503,25 @@ func initializeAIAgent(
 		PatientFinderCreator:     &aiAgentPatientFinderCreatorAdapter{patientService: patientService, patientRepo: patientRepo},
 		PatientNameUpdater:       &aiAgentPatientNameUpdaterAdapter{patientService: patientService},
 		HumanTakeoverMarker:      humanTakeoverMarker,
+		GroupSlotLister: &aiAgentGroupSlotListerAdapter{
+			sessionPlanRepo:  sessionPlanRepo,
+			slotRepo:         sessionPlanSlotRepo,
+			enrollmentRepo:   enrollmentRepo,
+			professionalRepo: professionalRepo,
+		},
+		PartnerPlanLister: &aiAgentPartnerPlanListerAdapter{networkRepo: partnerNetworkRepo},
+		ClassEnroller:     &aiAgentClassEnrollerAdapter{enrollmentService: enrollmentService, sessionPlanRepo: sessionPlanRepo, partnerNetworkRepo: partnerNetworkRepo},
+		ClassConfirmer: &aiAgentClassConfirmerAdapter{
+			sessionPlanRepo:     sessionPlanRepo,
+			slotRepo:            sessionPlanSlotRepo,
+			enrollmentRepo:      enrollmentRepo,
+			groupAttendanceRepo: groupAttendanceRepo,
+		},
+		EnrollmentSummaryPresenter: &aiAgentEnrollmentSummaryPresenterAdapter{
+			sessionPlanRepo:    sessionPlanRepo,
+			slotRepo:           sessionPlanSlotRepo,
+			partnerNetworkRepo: partnerNetworkRepo,
+		},
 	}
 
 	// 5. Create tool executor
@@ -3081,4 +3179,575 @@ func (a *aiAgentPatientNameUpdaterAdapter) UpdateName(ctx context.Context, clini
 		Name: newName,
 	})
 	return err
+}
+
+// ---------------------------------------------------------------------------
+// Group session plan adapters — Pilates / aulas em grupo
+// ---------------------------------------------------------------------------
+
+// weekdayPT maps Sunday..Saturday (0..6) to the Portuguese label the AI
+// already uses elsewhere when describing slots to patients.
+var weekdayPTLabels = [7]string{"Domingo", "Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado"}
+
+type aiAgentGroupSlotListerAdapter struct {
+	sessionPlanRepo  sessionplan_repository.SessionPlanRepository
+	slotRepo         sessionplan_repository.SessionPlanSlotRepository
+	enrollmentRepo   enrollment_repository.EnrollmentRepository
+	professionalRepo professional_repository.ProfessionalRepository
+}
+
+func (a *aiAgentGroupSlotListerAdapter) ListGroupSlots(
+	ctx context.Context,
+	clinicID uuid.UUID,
+	filter tools.GroupSlotFilter,
+) ([]*tools.GroupPlanInfo, error) {
+	plans, err := a.sessionPlanRepo.GetAllActive(ctx, clinicID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list active group plans: %w", err)
+	}
+
+	// Cache professional names so the same instructor cited on N slots costs
+	// at most one DB lookup. Maps nil/empty to nil so the AI sees null when
+	// the slot has no fixed instructor (rotating schedule).
+	profNames := map[uuid.UUID]string{}
+
+	out := make([]*tools.GroupPlanInfo, 0, len(plans))
+	for _, plan := range plans {
+		if plan.Type != sessionplan_model.PlanTypeGroup {
+			continue
+		}
+		if filter.ProcedureID != nil {
+			if plan.ProcedureID == nil || *plan.ProcedureID != *filter.ProcedureID {
+				continue
+			}
+		}
+
+		slots, err := a.slotRepo.ListActiveByPlan(ctx, plan.ID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to list active slots for plan %s: %w", plan.ID, err)
+		}
+		if len(slots) == 0 {
+			continue
+		}
+
+		// Active enrollments are loaded once per plan; capacity = slot.capacity
+		// minus enrollments that include the slot's weekday. Mirrors the
+		// calendar facade's logic so the AI shows the same "available" count
+		// the dashboard does.
+		enrollments, err := a.enrollmentRepo.GetActiveByPlan(ctx, clinicID, plan.ID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to count enrollments for plan %s: %w", plan.ID, err)
+		}
+
+		slotInfos := make([]tools.GroupSlotInfo, 0, len(slots))
+		for _, s := range slots {
+			if filter.Weekday != nil && s.Weekday != *filter.Weekday {
+				continue
+			}
+			if filter.TimeFilter != "" && s.StartTime != filter.TimeFilter {
+				continue
+			}
+
+			enrolled := 0
+			for _, e := range enrollments {
+				if e.HasWeekDay(s.Weekday) {
+					enrolled++
+				}
+			}
+			available := s.Capacity - enrolled
+			if available < 0 {
+				available = 0
+			}
+
+			var profName *string
+			if s.ProfessionalID != nil {
+				name, ok := profNames[*s.ProfessionalID]
+				if !ok {
+					prof, err := a.professionalRepo.GetByID(ctx, *s.ProfessionalID, clinicID)
+					if err == nil && prof != nil {
+						name = prof.Name
+					}
+					profNames[*s.ProfessionalID] = name
+				}
+				if name != "" {
+					profName = &name
+				}
+			}
+
+			weekday := s.Weekday
+			weekdayLabel := ""
+			if weekday >= 0 && weekday < 7 {
+				weekdayLabel = weekdayPTLabels[weekday]
+			}
+
+			slotInfos = append(slotInfos, tools.GroupSlotInfo{
+				SlotID:           s.ID,
+				Weekday:          weekday,
+				WeekdayPT:        weekdayLabel,
+				StartTime:        s.StartTime,
+				Capacity:         s.Capacity,
+				Enrolled:         enrolled,
+				Available:        available,
+				ProfessionalName: profName,
+			})
+		}
+
+		if len(slotInfos) == 0 {
+			continue
+		}
+
+		out = append(out, &tools.GroupPlanInfo{
+			PlanID:    plan.ID,
+			PlanTitle: plan.Title,
+			Slots:     slotInfos,
+		})
+	}
+
+	return out, nil
+}
+
+type aiAgentPartnerPlanListerAdapter struct {
+	networkRepo partnernetwork_repository.PartnerNetworkRepository
+}
+
+func (a *aiAgentPartnerPlanListerAdapter) ListPartnerPlans(_ context.Context, clinicID uuid.UUID) ([]*tools.PartnerPlanInfo, error) {
+	networks, err := a.networkRepo.ListActiveByClinic(clinicID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list active partner networks: %w", err)
+	}
+	out := make([]*tools.PartnerPlanInfo, 0)
+	for _, n := range networks {
+		for _, p := range n.Plans {
+			if !p.IsActive {
+				continue
+			}
+			info := &tools.PartnerPlanInfo{
+				ID:          p.ID,
+				NetworkName: n.Name,
+				Name:        p.Name,
+			}
+			if p.MaxSessionsPerWeek != nil {
+				v := *p.MaxSessionsPerWeek
+				info.MaxSessionsPerWeek = &v
+			}
+			out = append(out, info)
+		}
+	}
+	return out, nil
+}
+
+type aiAgentClassEnrollerAdapter struct {
+	enrollmentService  enrollment_service.EnrollmentService
+	sessionPlanRepo    sessionplan_repository.SessionPlanRepository
+	partnerNetworkRepo partnernetwork_repository.PartnerNetworkRepository
+}
+
+func (a *aiAgentClassEnrollerAdapter) Enroll(
+	ctx context.Context,
+	clinicID, patientID, planID uuid.UUID,
+	slotIDs []uuid.UUID,
+	partnerPlanID *uuid.UUID,
+	monthlyAmount *float64,
+	billingDay *int,
+) (*tools.ClassEnrollmentInfo, error) {
+	// PaymentMode follows the rule the existing form enforces: if there is a
+	// partner plan, it is "per_session" (the partner is billed per
+	// attendance); if monthly_amount is set, it is "monthly"; otherwise
+	// per_session. billing_day is only required for monthly.
+	paymentMode := enrollment_model.PaymentModePerSession
+	if partnerPlanID == nil && monthlyAmount != nil {
+		paymentMode = enrollment_model.PaymentModeMonthly
+	}
+
+	req := &enrollment_model.EnrollRequest{
+		PatientID:     patientID,
+		SlotIDs:       slotIDs,
+		PartnerPlanID: partnerPlanID,
+		PaymentMode:   paymentMode,
+		MonthlyAmount: monthlyAmount,
+		BillingDay:    billingDay,
+	}
+	enrollment, err := a.enrollmentService.Enroll(ctx, clinicID, planID, req)
+	if err != nil {
+		return nil, err
+	}
+
+	// Resolve plan title for the LLM's confirmation message. Best-effort —
+	// missing title still returns the rest of the enrollment data.
+	planTitle := ""
+	if plan, err := a.sessionPlanRepo.GetByID(ctx, clinicID, planID); err == nil && plan != nil {
+		planTitle = plan.Title
+	}
+
+	// Resolve partner plan label "Network — Plan" so the AI can confirm it
+	// verbatim without looking it up again.
+	partnerLabel := ""
+	if partnerPlanID != nil && a.partnerNetworkRepo != nil {
+		networks, err := a.partnerNetworkRepo.ListActiveByClinic(clinicID)
+		if err == nil {
+			for _, n := range networks {
+				for _, p := range n.Plans {
+					if p.ID == *partnerPlanID {
+						partnerLabel = fmt.Sprintf("%s — %s", n.Name, p.Name)
+						break
+					}
+				}
+				if partnerLabel != "" {
+					break
+				}
+			}
+		}
+	}
+
+	weekdays := make([]int, len(enrollment.WeekDays))
+	for i, d := range enrollment.WeekDays {
+		weekdays[i] = int(d)
+	}
+
+	return &tools.ClassEnrollmentInfo{
+		EnrollmentID:  enrollment.ID,
+		PlanTitle:     planTitle,
+		Weekdays:      weekdays,
+		MonthlyAmount: enrollment.MonthlyAmount,
+		PartnerPlan:   partnerLabel,
+		Status:        string(enrollment.Status),
+	}, nil
+}
+
+// aiAgentClassConfirmerAdapter resolves the patient's next upcoming group
+// class (across active enrollments and their slots) and idempotently writes
+// a GroupSessionAttendance row with status="confirmed". It does NOT
+// increment sessions_done — that only happens when the operator (or a
+// future check-in flow) flips the status to "present" on class day.
+type aiAgentClassConfirmerAdapter struct {
+	sessionPlanRepo     sessionplan_repository.SessionPlanRepository
+	slotRepo            sessionplan_repository.SessionPlanSlotRepository
+	enrollmentRepo      enrollment_repository.EnrollmentRepository
+	groupAttendanceRepo attendance_repository.GroupAttendanceRepository
+}
+
+func (a *aiAgentClassConfirmerAdapter) Confirm(
+	ctx context.Context,
+	clinicID, patientID uuid.UUID,
+) (*tools.ClassConfirmationInfo, error) {
+	plans, err := a.sessionPlanRepo.GetAllActive(ctx, clinicID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list active group plans: %w", err)
+	}
+
+	type candidate struct {
+		plan         *sessionplan_model.SessionPlan
+		enrollmentID uuid.UUID
+		startTime    string
+		dt           time.Time
+	}
+	now := time.Now()
+	var best *candidate
+
+	for _, plan := range plans {
+		if plan.Type != sessionplan_model.PlanTypeGroup {
+			continue
+		}
+		enrollment, err := a.enrollmentRepo.GetByPatientAndPlan(ctx, clinicID, patientID, plan.ID)
+		if err != nil || enrollment == nil {
+			continue
+		}
+		if !enrollment.IsActive() {
+			continue
+		}
+
+		// Slot-based path (modern). Each EnrollmentSlot points at a
+		// SessionPlanSlot — load it for weekday + start_time.
+		if len(enrollment.Slots) > 0 {
+			for _, junction := range enrollment.Slots {
+				slot, err := a.slotRepo.GetByID(ctx, junction.SessionPlanSlotID)
+				if err != nil || slot == nil || !slot.IsActive {
+					continue
+				}
+				dt := nextOccurrence(now, slot.Weekday, slot.StartTime)
+				if dt.IsZero() {
+					continue
+				}
+				if best == nil || dt.Before(best.dt) {
+					best = &candidate{plan: plan, enrollmentID: enrollment.ID, startTime: slot.StartTime, dt: dt}
+				}
+			}
+			continue
+		}
+
+		// Legacy path: enrollment.WeekDays + plan.PreferredTime (or first
+		// DayTimes entry). New enrollments populate Slots, but old data
+		// may still flow through here.
+		if len(enrollment.WeekDays) == 0 {
+			continue
+		}
+		fallbackTime := plan.PreferredTime
+		if fallbackTime == "" {
+			for _, t := range plan.DayTimes {
+				fallbackTime = t
+				break
+			}
+		}
+		if fallbackTime == "" {
+			fallbackTime = "08:00"
+		}
+		for _, wd := range enrollment.WeekDays {
+			dt := nextOccurrence(now, int(wd), fallbackTime)
+			if dt.IsZero() {
+				continue
+			}
+			if best == nil || dt.Before(best.dt) {
+				best = &candidate{plan: plan, enrollmentID: enrollment.ID, startTime: fallbackTime, dt: dt}
+			}
+		}
+	}
+
+	if best == nil {
+		return nil, fmt.Errorf("no upcoming class found — patient has no active group enrollment")
+	}
+
+	dateStr := best.dt.Format("2006-01-02")
+
+	// Idempotent upsert: if a row already exists for (plan, patient, date),
+	// reuse it. Don't downgrade Present/Absent back to Confirmed (the class
+	// already happened from the operator's POV); just return the current
+	// state so the AI can tell the patient.
+	existing, err := a.groupAttendanceRepo.GetByPlanDateAndPatient(ctx, clinicID, best.plan.ID, patientID, dateStr)
+	if err != nil {
+		return nil, fmt.Errorf("failed to look up existing attendance: %w", err)
+	}
+	if existing != nil {
+		// First run already created Confirmed; or operator marked something.
+		// Return as-is — never override operator state.
+		return &tools.ClassConfirmationInfo{
+			AttendanceID: existing.ID,
+			PlanTitle:    best.plan.Title,
+			SessionDate:  dateStr,
+			StartTime:    best.startTime,
+			Status:       string(existing.Status),
+		}, nil
+	}
+
+	enrollmentID := best.enrollmentID
+	record := &attendance_model.GroupSessionAttendance{
+		ClinicID:      clinicID,
+		SessionPlanID: best.plan.ID,
+		SessionDate:   dateStr,
+		PatientID:     patientID,
+		EnrollmentID:  &enrollmentID,
+		Status:        attendance_model.AttendanceStatusConfirmed,
+	}
+	if err := a.groupAttendanceRepo.Create(ctx, record); err != nil {
+		return nil, fmt.Errorf("failed to create confirmation record: %w", err)
+	}
+	return &tools.ClassConfirmationInfo{
+		AttendanceID: record.ID,
+		PlanTitle:    best.plan.Title,
+		SessionDate:  dateStr,
+		StartTime:    best.startTime,
+		Status:       string(record.Status),
+	}, nil
+}
+
+// groupClassAttendanceCheckerAdapter wraps the existing GroupAttendanceRepository
+// so the class reminder worker can check whether the patient already engaged
+// with the upcoming class (any status — confirmed, present, absent,
+// substituted). When a row exists we skip the reminder to avoid re-prompting.
+type groupClassAttendanceCheckerAdapter struct {
+	repo attendance_repository.GroupAttendanceRepository
+}
+
+func (a *groupClassAttendanceCheckerAdapter) HasAttendanceRow(
+	ctx context.Context,
+	clinicID, planID, patientID uuid.UUID,
+	sessionDate string,
+) (bool, error) {
+	row, err := a.repo.GetByPlanDateAndPatient(ctx, clinicID, planID, patientID, sessionDate)
+	if err != nil {
+		return false, err
+	}
+	return row != nil, nil
+}
+
+// nextOccurrence returns the next datetime (>= now) for the given weekday
+// (0=Sun..6=Sat) and HH:MM start time. Today counts only if start_time is
+// still in the future. Returns zero time if start_time is unparseable.
+func nextOccurrence(now time.Time, weekday int, startTime string) time.Time {
+	if len(startTime) != 5 || startTime[2] != ':' {
+		return time.Time{}
+	}
+	var h, m int
+	if _, err := fmt.Sscanf(startTime, "%d:%d", &h, &m); err != nil {
+		return time.Time{}
+	}
+	if h < 0 || h > 23 || m < 0 || m > 59 {
+		return time.Time{}
+	}
+	loc := now.Location()
+	candidate := time.Date(now.Year(), now.Month(), now.Day(), h, m, 0, 0, loc)
+	dayDiff := (weekday - int(now.Weekday()) + 7) % 7
+	if dayDiff == 0 && !candidate.After(now) {
+		dayDiff = 7
+	}
+	return candidate.AddDate(0, 0, dayDiff)
+}
+
+// aiAgentEnrollmentSummaryPresenterAdapter validates the slot picks against
+// the database and builds the patient-facing matrícula confirmation message
+// server-side. Closes the hallucination vector where the LLM would compose
+// the resumé as free-text and invent slot picks — every slot_id passed
+// here is checked for existence + plan match + active state, partner_plan
+// is resolved to its labels (Network — Plan), and the markdown is built
+// deterministically. The LLM's job is to echo the returned summary_text
+// verbatim (no rewording).
+type aiAgentEnrollmentSummaryPresenterAdapter struct {
+	sessionPlanRepo    sessionplan_repository.SessionPlanRepository
+	slotRepo           sessionplan_repository.SessionPlanSlotRepository
+	partnerNetworkRepo partnernetwork_repository.PartnerNetworkRepository
+}
+
+func (a *aiAgentEnrollmentSummaryPresenterAdapter) PresentSummary(
+	ctx context.Context,
+	clinicID, planID uuid.UUID,
+	slotIDs []uuid.UUID,
+	partnerPlanID *uuid.UUID,
+	monthlyAmount *float64,
+	billingDay *int,
+) (*tools.EnrollmentSummaryInfo, error) {
+	plan, err := a.sessionPlanRepo.GetByID(ctx, clinicID, planID)
+	if err != nil || plan == nil {
+		return nil, fmt.Errorf("plan not found in this clinic — did you call get_group_class_slots first?")
+	}
+
+	type validatedSlot struct {
+		id        uuid.UUID
+		weekday   int
+		startTime string
+	}
+
+	dedup := make(map[uuid.UUID]bool, len(slotIDs))
+	validated := make([]validatedSlot, 0, len(slotIDs))
+	for _, sid := range slotIDs {
+		if dedup[sid] {
+			continue
+		}
+		dedup[sid] = true
+		slot, err := a.slotRepo.GetByIDScoped(ctx, sid, clinicID)
+		if err != nil || slot == nil {
+			return nil, fmt.Errorf("slot %s not found in this clinic — you may have invented this slot_id; go back and ask the patient which days/times again", sid)
+		}
+		if slot.SessionPlanID != planID {
+			return nil, fmt.Errorf("slot %s does not belong to plan %s", sid, planID)
+		}
+		if !slot.IsActive {
+			return nil, fmt.Errorf("slot %s is inactive — pick another", sid)
+		}
+		validated = append(validated, validatedSlot{
+			id:        slot.ID,
+			weekday:   slot.Weekday,
+			startTime: slot.StartTime,
+		})
+	}
+
+	// Sort by weekday then start_time so the summary is readable regardless
+	// of the order the LLM passed slot_ids in.
+	sort.Slice(validated, func(i, j int) bool {
+		if validated[i].weekday != validated[j].weekday {
+			return validated[i].weekday < validated[j].weekday
+		}
+		return validated[i].startTime < validated[j].startTime
+	})
+
+	// Format slots line: "Segunda 09:00, Quarta 09:00, Sexta 09:00"
+	parts := make([]string, len(validated))
+	for i, v := range validated {
+		label := ""
+		if v.weekday >= 0 && v.weekday < 7 {
+			label = weekdayPTLabels[v.weekday]
+		}
+		parts[i] = fmt.Sprintf("%s %s", label, v.startTime)
+	}
+	horariosLine := strings.Join(parts, ", ")
+
+	// Convênio label: "Gympass — Silver" or "Particular".
+	convenioLabel := "Particular"
+	if partnerPlanID != nil {
+		networks, err := a.partnerNetworkRepo.ListActiveByClinic(clinicID)
+		if err == nil {
+			outer:
+			for _, n := range networks {
+				for _, p := range n.Plans {
+					if p.ID == *partnerPlanID {
+						convenioLabel = fmt.Sprintf("%s — %s", n.Name, p.Name)
+						break outer
+					}
+				}
+			}
+		}
+		if convenioLabel == "Particular" {
+			// partner_plan_id was given but didn't match — refuse to build
+			// a summary with stale/wrong convênio; force the LLM to recheck.
+			return nil, fmt.Errorf("partner_plan_id %s not found in this clinic — confirm the convênio name with the patient", *partnerPlanID)
+		}
+	}
+
+	// Mensalidade label: convênio cobre, ou valor formatado em R$.
+	mensalidadeLabel := ""
+	if partnerPlanID != nil {
+		mensalidadeLabel = fmt.Sprintf("Coberta pelo convênio (%s)", convenioLabel)
+	} else if monthlyAmount != nil && *monthlyAmount > 0 {
+		mensalidadeLabel = fmt.Sprintf("R$ %s", formatBRL(*monthlyAmount))
+	} else {
+		mensalidadeLabel = "A confirmar com a clínica"
+	}
+
+	frequencia := fmt.Sprintf("%dx/semana", len(validated))
+
+	summaryText := fmt.Sprintf(
+		"Antes de finalizar, confirma a matrícula?\n\n"+
+			"*Modalidade:* %s\n"+
+			"*Frequência:* %s\n"+
+			"*Horários:* %s\n"+
+			"*Convênio:* %s\n"+
+			"*Mensalidade:* %s\n\n"+
+			"Posso confirmar?",
+		plan.Title, frequencia, horariosLine, convenioLabel, mensalidadeLabel,
+	)
+
+	out := &tools.EnrollmentSummaryInfo{
+		SummaryText: summaryText,
+		PlanID:      planID,
+		PlanTitle:   plan.Title,
+		SlotIDs:     make([]uuid.UUID, 0, len(validated)),
+	}
+	for _, v := range validated {
+		out.SlotIDs = append(out.SlotIDs, v.id)
+	}
+	// billingDay is intentionally omitted from the summary text — operators
+	// store it on the enrollment record, but the patient doesn't need to
+	// see it on the WhatsApp message. Keeping it noise-free.
+	_ = billingDay
+	return out, nil
+}
+
+// formatBRL formats a float as Brazilian-style "1.234,56" (thousand
+// separator dot, decimal comma). Hand-rolled because the formatter we'd
+// reach for (golang.org/x/text/message) is overkill for a single locale.
+func formatBRL(v float64) string {
+	cents := int64(v*100 + 0.5)
+	whole := cents / 100
+	frac := cents % 100
+	wholeStr := fmt.Sprintf("%d", whole)
+	// Insert dots as thousand separators.
+	if len(wholeStr) > 3 {
+		var b strings.Builder
+		for i, c := range wholeStr {
+			if i > 0 && (len(wholeStr)-i)%3 == 0 {
+				b.WriteByte('.')
+			}
+			b.WriteRune(c)
+		}
+		wholeStr = b.String()
+	}
+	return fmt.Sprintf("%s,%02d", wholeStr, frac)
 }

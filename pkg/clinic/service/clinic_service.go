@@ -184,6 +184,12 @@ func (s *clinicService) Update(ctx context.Context, id uuid.UUID, req *model.Upd
 		if req.Settings.AIToolReschedule != nil {
 			clinic.Settings.AIToolReschedule = req.Settings.AIToolReschedule
 		}
+		if req.Settings.AIToolEnrollClass != nil {
+			clinic.Settings.AIToolEnrollClass = req.Settings.AIToolEnrollClass
+		}
+		if req.Settings.AIToolConfirmClass != nil {
+			clinic.Settings.AIToolConfirmClass = req.Settings.AIToolConfirmClass
+		}
 		if req.Settings.AIBlockedIntentReply != nil {
 			clinic.Settings.AIBlockedIntentReply = *req.Settings.AIBlockedIntentReply
 		}
@@ -205,6 +211,14 @@ func (s *clinicService) Update(ctx context.Context, id uuid.UUID, req *model.Upd
 		}
 		if req.Settings.PaymentReminderEmailEnabled != nil {
 			clinic.Settings.PaymentReminderEmailEnabled = req.Settings.PaymentReminderEmailEnabled
+		}
+
+		// Group class reminder windows
+		if req.Settings.GroupClassReminder24hEnabled != nil {
+			clinic.Settings.GroupClassReminder24hEnabled = req.Settings.GroupClassReminder24hEnabled
+		}
+		if req.Settings.GroupClassReminder2hEnabled != nil {
+			clinic.Settings.GroupClassReminder2hEnabled = req.Settings.GroupClassReminder2hEnabled
 		}
 	}
 

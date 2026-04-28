@@ -360,6 +360,89 @@ func TestClinicSettings_IsAITool_EnabledByDefault(t *testing.T) {
 	assert.True(t, s.IsAIToolConfirmEnabled())
 	assert.True(t, s.IsAIToolCancelEnabled())
 	assert.True(t, s.IsAIToolRescheduleEnabled())
+	assert.True(t, s.IsAIToolEnrollClassEnabled(), "enroll_class default must be true so existing clinics keep group-class enrollment available without explicit opt-in")
+}
+
+func TestClinicSettings_IsAIToolEnrollClass_RespectsExplicitValues(t *testing.T) {
+	tests := []struct {
+		name   string
+		ptr    *bool
+		wantOn bool
+	}{
+		{"nil defaults to true", nil, true},
+		{"true stays true", boolPtr(true), true},
+		{"false stays false", boolPtr(false), false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := ClinicSettings{AIToolEnrollClass: tt.ptr}
+			assert.Equal(t, tt.wantOn, s.IsAIToolEnrollClassEnabled())
+		})
+	}
+}
+
+func TestClinicSettings_IsAIToolEnrollClass_NilSettings(t *testing.T) {
+	var s *ClinicSettings
+	assert.True(t, s.IsAIToolEnrollClassEnabled(), "nil receiver must default to true (consistent with the other AITool* helpers)")
+}
+
+func TestClinicSettings_IsAIToolConfirmClass_RespectsExplicitValues(t *testing.T) {
+	tests := []struct {
+		name   string
+		ptr    *bool
+		wantOn bool
+	}{
+		{"nil defaults to true", nil, true},
+		{"true stays true", boolPtr(true), true},
+		{"false stays false", boolPtr(false), false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := ClinicSettings{AIToolConfirmClass: tt.ptr}
+			assert.Equal(t, tt.wantOn, s.IsAIToolConfirmClassEnabled())
+		})
+	}
+}
+
+func TestClinicSettings_IsAIToolConfirmClass_NilSettings(t *testing.T) {
+	var s *ClinicSettings
+	assert.True(t, s.IsAIToolConfirmClassEnabled(), "nil receiver must default to true")
+}
+
+func TestClinicSettings_IsAIToolConfirmClass_IndependentFromConfirm(t *testing.T) {
+	// AIToolConfirm gates 1-on-1 confirm_appointment; AIToolConfirmClass gates
+	// the group confirm_class_attendance. Disabling one must not flip the other.
+	s := ClinicSettings{AIToolConfirm: boolPtr(false)}
+	assert.False(t, s.IsAIToolConfirmEnabled())
+	assert.True(t, s.IsAIToolConfirmClassEnabled(), "class confirm must stay on when only the appointment confirm flag is off")
+}
+
+func TestClinicSettings_IsGroupClassReminder_DefaultTrueWhenNil(t *testing.T) {
+	s := ClinicSettings{}
+	assert.True(t, s.IsGroupClassReminderEnabled("reminder_24h"), "nil pointer defaults to true (existing clinics keep reminders)")
+	assert.True(t, s.IsGroupClassReminderEnabled("reminder_2h"))
+}
+
+func TestClinicSettings_IsGroupClassReminder_RespectsFlag(t *testing.T) {
+	s := ClinicSettings{
+		GroupClassReminder24hEnabled: boolPtr(false),
+		GroupClassReminder2hEnabled:  boolPtr(true),
+	}
+	assert.False(t, s.IsGroupClassReminderEnabled("reminder_24h"))
+	assert.True(t, s.IsGroupClassReminderEnabled("reminder_2h"))
+}
+
+func TestClinicSettings_IsGroupClassReminder_UnknownThresholdReturnsFalse(t *testing.T) {
+	// Defensive: a typo'd threshold must not silently bypass the gate. The
+	// existing IsAppointmentReminderEnabled uses the same fail-closed rule.
+	s := ClinicSettings{}
+	assert.False(t, s.IsGroupClassReminderEnabled("reminder_999h"))
+	assert.False(t, s.IsGroupClassReminderEnabled(""))
+}
+
+func TestClinicSettings_IsGroupClassReminder_NilReceiver(t *testing.T) {
+	var s *ClinicSettings
+	assert.True(t, s.IsGroupClassReminderEnabled("reminder_24h"))
 }
 
 func TestClinicSettings_IsAITool_RespectsExplicitValues(t *testing.T) {

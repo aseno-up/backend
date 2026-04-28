@@ -62,6 +62,11 @@ type ExecutionContext struct {
 	PatientNameUpdater       PatientNameUpdater
 	HumanTakeoverMarker      HumanTakeoverMarker
 	ConversationMetadata     ConversationMetadataWriter
+	GroupSlotLister             GroupSlotLister
+	PartnerPlanLister           PartnerPlanLister
+	ClassEnroller               ClassEnroller
+	ClassConfirmer              ClassConfirmer
+	EnrollmentSummaryPresenter  EnrollmentSummaryPresenter
 
 	// BlockedIntentReply is the resolved per-clinic canned reply, set per
 	// request when running in handoff mode. complete_handoff_to_human reads
@@ -250,6 +255,145 @@ type PatientNameUpdater interface {
 	UpdateName(ctx context.Context, clinicID, patientID uuid.UUID, newName string) error
 }
 
+// GroupSlotLister returns slot-based availability for group session plans
+// (Pilates, etc.). Distinct from SlotFinder, which handles 1-on-1 slots
+// derived from professional working_hours minus existing appointments.
+// Group classes have fixed (weekday, start_time, capacity) tuples and the
+// AI must show those, not granular times computed from working_hours.
+type GroupSlotLister interface {
+	ListGroupSlots(ctx context.Context, clinicID uuid.UUID, filter GroupSlotFilter) ([]*GroupPlanInfo, error)
+}
+
+// GroupSlotFilter narrows the result set. All fields are optional. ProcedureID
+// is the most useful filter (after the AI calls list_procedures and finds
+// e.g. "Pilates 1h"). Weekday + TimeFilter let the AI surgically check a
+// specific (day, time) the patient asked about.
+type GroupSlotFilter struct {
+	ProcedureID *uuid.UUID
+	Weekday     *int   // 0..6 (Sun..Sat)
+	TimeFilter  string // HH:MM
+}
+
+// GroupPlanInfo represents one active group session plan plus its slots.
+type GroupPlanInfo struct {
+	PlanID    uuid.UUID       `json:"plan_id"`
+	PlanTitle string          `json:"plan_title"`
+	Slots     []GroupSlotInfo `json:"slots"`
+}
+
+// GroupSlotInfo is one occurrence within a group plan's weekly schedule.
+// ProfessionalName is intentionally a pointer: a slot can have no professional
+// defined (slot.ProfessionalID is NULL when the schedule rotates between
+// instructors), and the AI must not pretend a name exists.
+type GroupSlotInfo struct {
+	SlotID           uuid.UUID `json:"slot_id"`
+	Weekday          int       `json:"weekday"`
+	WeekdayPT        string    `json:"weekday_pt"`
+	StartTime        string    `json:"start_time"`
+	Capacity         int       `json:"capacity"`
+	Enrolled         int       `json:"enrolled"`
+	Available        int       `json:"available"`
+	ProfessionalName *string   `json:"professional_name,omitempty"`
+}
+
+// PartnerPlanLister returns the active partner plans (Gympass Silver, Total
+// Pass Tp2, etc.) for the clinic, so the AI can resolve a patient-spoken
+// "tenho Gympass Silver" into the partner_plan_id required by enrollment.
+type PartnerPlanLister interface {
+	ListPartnerPlans(ctx context.Context, clinicID uuid.UUID) ([]*PartnerPlanInfo, error)
+}
+
+// PartnerPlanInfo couples the plan name with its parent network so the AI
+// can disambiguate plans with the same name across networks (e.g. "Silver").
+type PartnerPlanInfo struct {
+	ID                 uuid.UUID `json:"id"`
+	NetworkName        string    `json:"network_name"`
+	Name               string    `json:"name"`
+	MaxSessionsPerWeek *int      `json:"max_sessions_per_week,omitempty"`
+}
+
+// ClassEnroller wraps the existing EnrollmentService.Enroll for the AI tool.
+// PatientID is taken from ExecutionContext (never accepted as a parameter)
+// to prevent the LLM from enrolling the wrong patient. Service-layer
+// validation (capacity, partner-plan frequency, slot-belongs-to-plan,
+// already-enrolled, etc.) runs untouched.
+type ClassEnroller interface {
+	Enroll(
+		ctx context.Context,
+		clinicID, patientID, planID uuid.UUID,
+		slotIDs []uuid.UUID,
+		partnerPlanID *uuid.UUID,
+		monthlyAmount *float64,
+		billingDay *int,
+	) (*ClassEnrollmentInfo, error)
+}
+
+// ClassEnrollmentInfo summarizes the enrollment for the LLM to compose the
+// patient-facing confirmation message.
+type ClassEnrollmentInfo struct {
+	EnrollmentID  uuid.UUID `json:"enrollment_id"`
+	PlanTitle     string    `json:"plan_title"`
+	Weekdays      []int     `json:"weekdays"`
+	MonthlyAmount *float64  `json:"monthly_amount,omitempty"`
+	PartnerPlan   string    `json:"partner_plan,omitempty"`
+	Status        string    `json:"status"`
+}
+
+// EnrollmentSummaryPresenter validates the slot picks against the database
+// and builds the patient-facing confirmation message server-side. Closes
+// the hallucination vector where the LLM would compose the resumé as
+// free-text and invent slot picks. Implementations:
+// - Confirm each slot_id exists, belongs to plan_id, and is_active=true.
+// - Confirm partner_plan_id (if set) exists and is in this clinic.
+// - Format the markdown summary deterministically and return it.
+// The LLM's job after this call is to send SummaryText verbatim to the
+// patient — no rewording allowed (enforced via prompt instruction).
+type EnrollmentSummaryPresenter interface {
+	PresentSummary(
+		ctx context.Context,
+		clinicID, planID uuid.UUID,
+		slotIDs []uuid.UUID,
+		partnerPlanID *uuid.UUID,
+		monthlyAmount *float64,
+		billingDay *int,
+	) (*EnrollmentSummaryInfo, error)
+}
+
+// EnrollmentSummaryInfo is the response to send to the patient. SummaryText
+// is the formatted markdown the LLM must echo verbatim. PlanID and SlotIDs
+// are echoed so the LLM can pass them straight to enroll_patient_in_class
+// after confirmation, avoiding a second round of validation.
+type EnrollmentSummaryInfo struct {
+	SummaryText string      `json:"summary_text"`
+	PlanID      uuid.UUID   `json:"plan_id"`
+	PlanTitle   string      `json:"plan_title"`
+	SlotIDs     []uuid.UUID `json:"slot_ids"`
+}
+
+// ClassConfirmer records the patient's pre-class attendance confirmation
+// for their next upcoming group session. PatientID is taken from the
+// ExecutionContext (never the LLM) so the wrong patient cannot be confirmed.
+// Implementations must be idempotent: calling twice for the same upcoming
+// class returns the same record without creating duplicates or incrementing
+// sessions_done — actual presence (sessions_done) is tracked when the
+// operator records attendance on class day.
+type ClassConfirmer interface {
+	Confirm(ctx context.Context, clinicID, patientID uuid.UUID) (*ClassConfirmationInfo, error)
+}
+
+// ClassConfirmationInfo summarizes the confirmed upcoming class so the LLM
+// can echo the date/time/plan in the patient-facing reply ("Confirmado: sua
+// aula de Pilates Quarta 30/04 às 18:10"). SessionDate is YYYY-MM-DD; the
+// LLM is responsible for formatting it for the patient (DD/MM + dia da
+// semana already covered by the existing date-formatting guidance).
+type ClassConfirmationInfo struct {
+	AttendanceID uuid.UUID `json:"attendance_id"`
+	PlanTitle    string    `json:"plan_title"`
+	SessionDate  string    `json:"session_date"` // YYYY-MM-DD
+	StartTime    string    `json:"start_time"`   // HH:MM
+	Status       string    `json:"status"`       // "confirmed"
+}
+
 // Executor executes tool calls using the provided context
 type Executor struct {
 	registry *Registry
@@ -305,6 +449,16 @@ func (e *Executor) Execute(execCtx *ExecutionContext, toolName string, params ma
 		return e.updatePatientName(execCtx, params)
 	case "complete_handoff_to_human":
 		return e.completeHandoffToHuman(execCtx, params)
+	case "get_group_class_slots":
+		return e.getGroupClassSlots(execCtx, params)
+	case "list_partner_plans":
+		return e.listPartnerPlans(execCtx, params)
+	case "enroll_patient_in_class":
+		return e.enrollPatientInClass(execCtx, params)
+	case "confirm_class_attendance":
+		return e.confirmClassAttendance(execCtx, params)
+	case "present_enrollment_summary":
+		return e.presentEnrollmentSummary(execCtx, params)
 	default:
 		// Fallback to generic handler if exists
 		if tool.Handler != nil {
@@ -1736,4 +1890,239 @@ func sampleSlotsAcrossDay(slots []*AvailableSlot, maxPerDay int) []*AvailableSlo
 		out = append(out, slots[idx])
 	}
 	return out
+}
+
+// ---------------------------------------------------------------------------
+// Group session plan tools — Pilates / aulas em grupo
+// ---------------------------------------------------------------------------
+
+// getGroupClassSlots returns slot-based availability for active group plans.
+// Distinct from getAvailableSlots, which derives 1-on-1 slots from a
+// professional's working_hours minus existing appointments. Group classes are
+// modeled as fixed (weekday, start_time, capacity) tuples in
+// session_plan_slots, and the AI must show those tuples — never times
+// computed from working_hours, which would invent slots that don't exist.
+func (e *Executor) getGroupClassSlots(execCtx *ExecutionContext, params map[string]interface{}) (interface{}, error) {
+	if execCtx.GroupSlotLister == nil {
+		return nil, fmt.Errorf("GroupSlotLister not configured")
+	}
+
+	filter := GroupSlotFilter{}
+
+	if procIDStr, ok := params["procedure_id"].(string); ok && procIDStr != "" {
+		parsed, err := uuid.Parse(procIDStr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid procedure_id %q: %w", procIDStr, err)
+		}
+		filter.ProcedureID = &parsed
+	}
+
+	// weekday is required: returning the full weekly grid (50+ slots for
+	// typical group plans) overwhelms the patient on mobile and tempts the
+	// LLM to pick slots without asking. Force the model to scope by day,
+	// either with a specific time_filter (validate one slot) or without
+	// (list alternatives for that day).
+	wd, ok := params["weekday"].(float64)
+	if !ok {
+		return nil, fmt.Errorf("weekday is required: pass an integer 0..6 (0=Sunday). Ask the patient which day(s) they want before calling this tool")
+	}
+	wdInt := int(wd)
+	if wdInt < 0 || wdInt > 6 {
+		return nil, fmt.Errorf("weekday must be between 0 and 6 (0=Sunday, 6=Saturday)")
+	}
+	filter.Weekday = &wdInt
+
+	if tf, ok := params["time_filter"].(string); ok && tf != "" {
+		filter.TimeFilter = tf
+	}
+
+	plans, err := execCtx.GroupSlotLister.ListGroupSlots(execCtx.Context, execCtx.ClinicID, filter)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list group class slots: %w", err)
+	}
+	return plans, nil
+}
+
+// listPartnerPlans returns active partner plans (Gympass Silver, Total Pass
+// Tp2, ...) so the LLM can resolve a patient's "tenho Gympass Silver" into
+// a partner_plan_id required by enroll_patient_in_class.
+func (e *Executor) listPartnerPlans(execCtx *ExecutionContext, _ map[string]interface{}) (interface{}, error) {
+	if execCtx.PartnerPlanLister == nil {
+		return nil, fmt.Errorf("PartnerPlanLister not configured")
+	}
+	plans, err := execCtx.PartnerPlanLister.ListPartnerPlans(execCtx.Context, execCtx.ClinicID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list partner plans: %w", err)
+	}
+	return plans, nil
+}
+
+// enrollPatientInClass adds the current patient to a group session plan on
+// the chosen slots. PatientID always comes from ExecutionContext (never the
+// LLM) so the AI cannot enroll the wrong person. All deeper validation
+// (capacity, partner-plan frequency, slot-belongs-to-plan, already-enrolled,
+// monthly billing_day) happens in EnrollmentService.Enroll, untouched.
+func (e *Executor) enrollPatientInClass(execCtx *ExecutionContext, params map[string]interface{}) (interface{}, error) {
+	if execCtx.PatientID == nil {
+		return nil, fmt.Errorf("patient not identified yet — cannot enroll")
+	}
+	if execCtx.ClassEnroller == nil {
+		return nil, fmt.Errorf("ClassEnroller not configured")
+	}
+
+	planIDStr, _ := params["plan_id"].(string)
+	if planIDStr == "" {
+		return nil, fmt.Errorf("plan_id is required")
+	}
+	planID, err := uuid.Parse(planIDStr)
+	if err != nil {
+		return nil, fmt.Errorf("invalid plan_id %q: %w", planIDStr, err)
+	}
+
+	rawSlots, ok := params["slot_ids"].([]interface{})
+	if !ok || len(rawSlots) == 0 {
+		return nil, fmt.Errorf("slot_ids is required and must contain at least one slot UUID")
+	}
+	slotIDs := make([]uuid.UUID, 0, len(rawSlots))
+	for _, raw := range rawSlots {
+		s, ok := raw.(string)
+		if !ok || s == "" {
+			return nil, fmt.Errorf("slot_ids entries must be UUID strings")
+		}
+		parsed, err := uuid.Parse(s)
+		if err != nil {
+			return nil, fmt.Errorf("invalid slot_id %q: %w", s, err)
+		}
+		slotIDs = append(slotIDs, parsed)
+	}
+
+	var partnerPlanID *uuid.UUID
+	if ppStr, ok := params["partner_plan_id"].(string); ok && ppStr != "" {
+		parsed, err := uuid.Parse(ppStr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid partner_plan_id %q: %w", ppStr, err)
+		}
+		partnerPlanID = &parsed
+	}
+
+	var monthlyAmount *float64
+	if amt, ok := params["monthly_amount"].(float64); ok {
+		v := amt
+		monthlyAmount = &v
+	}
+
+	var billingDay *int
+	if bd, ok := params["billing_day"].(float64); ok {
+		v := int(bd)
+		billingDay = &v
+	}
+
+	info, err := execCtx.ClassEnroller.Enroll(
+		execCtx.Context,
+		execCtx.ClinicID,
+		*execCtx.PatientID,
+		planID,
+		slotIDs,
+		partnerPlanID,
+		monthlyAmount,
+		billingDay,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to enroll patient: %w", err)
+	}
+	return info, nil
+}
+
+// confirmClassAttendance records the patient's pre-class confirmation for
+// their next upcoming group session. The ClassConfirmer adapter resolves
+// "next class" from the patient's active enrollments (across plans/slots);
+// the tool itself stays parameter-less so the LLM cannot accidentally
+// confirm the wrong session.
+func (e *Executor) confirmClassAttendance(execCtx *ExecutionContext, _ map[string]interface{}) (interface{}, error) {
+	if execCtx.PatientID == nil {
+		return nil, fmt.Errorf("patient not identified yet — cannot confirm class attendance")
+	}
+	if execCtx.ClassConfirmer == nil {
+		return nil, fmt.Errorf("ClassConfirmer not configured")
+	}
+	info, err := execCtx.ClassConfirmer.Confirm(execCtx.Context, execCtx.ClinicID, *execCtx.PatientID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to confirm class attendance: %w", err)
+	}
+	return info, nil
+}
+
+// presentEnrollmentSummary builds the matrícula confirmation message
+// server-side after validating the slot picks. Same parameters as
+// enroll_patient_in_class so the LLM can pass them through after the
+// patient confirms — but this tool DOES NOT enroll. It only presents.
+//
+// The presenter validates each slot_id against the DB (must exist, belong
+// to plan, be active) — if the LLM hallucinated a slot_id, this errors
+// out, the LLM reads the error and goes back to ask the patient.
+func (e *Executor) presentEnrollmentSummary(execCtx *ExecutionContext, params map[string]interface{}) (interface{}, error) {
+	if execCtx.EnrollmentSummaryPresenter == nil {
+		return nil, fmt.Errorf("EnrollmentSummaryPresenter not configured")
+	}
+
+	planIDStr, _ := params["plan_id"].(string)
+	if planIDStr == "" {
+		return nil, fmt.Errorf("plan_id is required")
+	}
+	planID, err := uuid.Parse(planIDStr)
+	if err != nil {
+		return nil, fmt.Errorf("invalid plan_id %q: %w", planIDStr, err)
+	}
+
+	rawSlots, ok := params["slot_ids"].([]interface{})
+	if !ok || len(rawSlots) == 0 {
+		return nil, fmt.Errorf("slot_ids is required and must contain at least one slot UUID validated previously by get_group_class_slots")
+	}
+	slotIDs := make([]uuid.UUID, 0, len(rawSlots))
+	for _, raw := range rawSlots {
+		s, ok := raw.(string)
+		if !ok || s == "" {
+			return nil, fmt.Errorf("slot_ids entries must be UUID strings")
+		}
+		parsed, err := uuid.Parse(s)
+		if err != nil {
+			return nil, fmt.Errorf("invalid slot_id %q: %w", s, err)
+		}
+		slotIDs = append(slotIDs, parsed)
+	}
+
+	var partnerPlanID *uuid.UUID
+	if ppStr, ok := params["partner_plan_id"].(string); ok && ppStr != "" {
+		parsed, err := uuid.Parse(ppStr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid partner_plan_id %q: %w", ppStr, err)
+		}
+		partnerPlanID = &parsed
+	}
+
+	var monthlyAmount *float64
+	if amt, ok := params["monthly_amount"].(float64); ok {
+		v := amt
+		monthlyAmount = &v
+	}
+
+	var billingDay *int
+	if bd, ok := params["billing_day"].(float64); ok {
+		v := int(bd)
+		billingDay = &v
+	}
+
+	info, err := execCtx.EnrollmentSummaryPresenter.PresentSummary(
+		execCtx.Context,
+		execCtx.ClinicID,
+		planID,
+		slotIDs,
+		partnerPlanID,
+		monthlyAmount,
+		billingDay,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build enrollment summary: %w", err)
+	}
+	return info, nil
 }

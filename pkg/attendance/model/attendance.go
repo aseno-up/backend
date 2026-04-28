@@ -13,6 +13,12 @@ const (
 	AttendanceStatusPresent     AttendanceStatus = "present"
 	AttendanceStatusAbsent      AttendanceStatus = "absent"
 	AttendanceStatusSubstituted AttendanceStatus = "substituted"
+	// AttendanceStatusConfirmed is set BEFORE the class happens, when the
+	// patient pre-confirms participation (e.g. via WhatsApp). It is not the
+	// same as Present — sessions_done is not incremented for "confirmed";
+	// the operator (or the AI's later check-in flow) flips the status to
+	// "present" on class day, which is what triggers the increment.
+	AttendanceStatusConfirmed AttendanceStatus = "confirmed"
 )
 
 // AppointmentAttendance tracks whether a patient was present at a session

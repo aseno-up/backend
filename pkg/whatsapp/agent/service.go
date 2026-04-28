@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/aseno/backend/internal/logger"
+	"regexp"
 	"strings"
 	"time"
 
@@ -128,6 +129,16 @@ const (
 // SetPromptHistoryTurns configures the history window used when building
 // the LLM prompt. Wired from the worker config env var
 // CONVERSATION_PROMPT_HISTORY_TURNS in main.go.
+// Flush drains any pending observability traces in the underlying agent
+// (e.g. LangFuse goroutines). Best-effort — no-op when the agent doesn't
+// implement Flusher. Call at graceful shutdown so the dashboard isn't
+// missing the last few events when SIGTERM hits.
+func (s *aiAgentService) Flush() {
+	if f, ok := s.agent.(Flusher); ok {
+		f.Flush()
+	}
+}
+
 func (s *aiAgentService) SetPromptHistoryTurns(n int) {
 	s.promptHistoryTurns = n
 }
@@ -249,6 +260,12 @@ func disabledToolsForClinic(clinic *clinic_model.Clinic) []string {
 	}
 	if !clinic.Settings.IsAIToolRescheduleEnabled() {
 		disabled = append(disabled, "reschedule_appointment", "quick_reschedule")
+	}
+	if !clinic.Settings.IsAIToolEnrollClassEnabled() {
+		disabled = append(disabled, "enroll_patient_in_class")
+	}
+	if !clinic.Settings.IsAIToolConfirmClassEnabled() {
+		disabled = append(disabled, "confirm_class_attendance")
 	}
 	return disabled
 }
@@ -412,6 +429,15 @@ func (s *aiAgentService) ProcessMessage(ctx context.Context, req *MessageRequest
 	if err := s.conversationMgr.AddAssistantMessage(ctx, conv.ID, agentResp.Content, agentResp.ToolCalls); err != nil {
 		logger.Printf("[AI Agent Service] Warning: failed to add assistant message to history: %v", err)
 	}
+
+	// Hallucination warning: when the assistant message includes
+	// matrícula-style fields (Horários: / Mensalidade: / *Modalidade:*)
+	// without having called present_enrollment_summary in this turn, the
+	// LLM is composing the resumé as free-text and probably inventing
+	// data. Surface as a warning to system_logs so an admin sees the
+	// alert without having to read transcripts. Detection-only — does
+	// NOT block the message; production safety is on the tool layer.
+	s.maybeLogResumeHallucinationWarning(ctx, req.ClinicID, conv.ID, agentResp.Content, agentResp.ToolCalls)
 
 	// Log tool calls for monitoring
 	for _, toolCall := range agentResp.ToolCalls {
@@ -737,4 +763,52 @@ func (s *aiAgentService) calculateDelayByLength(messageLength int, clinic *clini
 		return maxDelay
 	}
 	return totalDelay
+}
+
+// resumeFieldPattern matches the matrícula-style bold field labels the AI
+// is supposed to emit ONLY via present_enrollment_summary. If we see the
+// pattern in free-text content without a corresponding tool call this turn,
+// it's a hallucination signal worth surfacing on the dashboard.
+var resumeFieldPattern = regexp.MustCompile(`(?i)\*?(Modalidade|Frequência|Horários|Mensalidade)\*?:`)
+
+// maybeLogResumeHallucinationWarning checks whether the assistant just
+// produced a matrícula resumé without going through present_enrollment_summary.
+// Best-effort detection — never blocks the message, just emits a warning.
+func (s *aiAgentService) maybeLogResumeHallucinationWarning(
+	ctx context.Context,
+	clinicID, conversationID uuid.UUID,
+	content string,
+	toolCalls []conversation.ToolCall,
+) {
+	if s.systemLogSvc == nil || content == "" {
+		return
+	}
+	if !resumeFieldPattern.MatchString(content) {
+		return
+	}
+	// If the same turn called present_enrollment_summary, the resumé is
+	// legit (LLM is echoing the server-built summary_text). No warning.
+	for _, tc := range toolCalls {
+		if tc.Name == "present_enrollment_summary" {
+			return
+		}
+	}
+	cid := clinicID
+	_ = s.systemLogSvc.Log(ctx, systemlog_service.SystemLogEntry{
+		ClinicID: &cid,
+		Service:  "ai_agent_service",
+		Event:    "resume_hallucination_suspected",
+		Status:   systemlog_model.LogStatusWarning,
+		Payload: map[string]any{
+			"conversation_id": conversationID.String(),
+			"snippet":         truncateForLog(content, 240),
+		},
+	})
+}
+
+func truncateForLog(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "…"
 }

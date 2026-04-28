@@ -32,6 +32,7 @@ func NewRegistry() *Registry {
 	r.registerInformationTools()
 	r.registerCatalogTools()
 	r.registerHandoffTools()
+	r.registerGroupClassTools()
 
 	return r
 }
@@ -505,6 +506,119 @@ func (r *Registry) registerHandoffTools() {
 		Parameters: &genai.Schema{
 			Type:       genai.TypeObject,
 			Properties: map[string]*genai.Schema{},
+		},
+	})
+}
+
+// registerGroupClassTools registers the tools used to enroll patients in
+// recurring group session plans (Pilates, etc.) — distinct from the 1-on-1
+// appointment flow. The slot tool is read-only and always available; the
+// enroll tool is gated by AIToolEnrollClass via DisallowedTools, so a clinic
+// that wants the human team to confirm matrículas keeps the AI on the
+// handoff path while still letting it gather context.
+func (r *Registry) registerGroupClassTools() {
+	r.register(&Tool{
+		Name:        "get_group_class_slots",
+		Description: "Valida disponibilidade de UM dia (e opcionalmente horário) de turma em grupo. 🚨 weekday é OBRIGATÓRIO — listar a grade inteira sem filtro vira spam pra qualquer turma. Use APÓS o paciente dizer qual dia/horário quer: passe weekday + time_filter pra checar aquele slot, OU só weekday (sem time_filter) pra listar alternativas daquele dia quando o pedido original tá ocupado. Slots retornados refletem vaga real (capacity − matrículas ativas). NUNCA use get_available_slots pra turma em grupo — aquela calcula horários virtuais por profissional e inventa slots que não existem. professional_name pode vir null — NÃO invente nome.",
+		Parameters: &genai.Schema{
+			Type:     genai.TypeObject,
+			Required: []string{"weekday"},
+			Properties: map[string]*genai.Schema{
+				"procedure_id": {
+					Type:        genai.TypeString,
+					Description: "UUID do procedimento (do campo 'id' de list_procedures). RECOMENDADO sempre que o paciente já escolheu o procedimento, pra não misturar turmas de modalidades diferentes.",
+				},
+				"weekday": {
+					Type:        genai.TypeInteger,
+					Description: "Dia da semana (0=domingo, 1=segunda, ..., 6=sábado). REQUIRED. Converta o que o paciente disse ('segunda', 'amanhã', etc) pra esse número antes de chamar.",
+				},
+				"time_filter": {
+					Type:        genai.TypeString,
+					Description: "Horário específico HH:MM que o paciente pediu. Quando passado, retorna SOMENTE esse horário se livre, ou vazio. Omita pra ver TODOS os horários daquele weekday e oferecer alternativas.",
+				},
+			},
+		},
+	})
+
+	r.register(&Tool{
+		Name:        "list_partner_plans",
+		Description: "Lista convênios/passes ativos da clínica (ex: Gympass Silver, Total Pass Tp2, Namu Pass, Gogood Básico III). Retorna id, network_name, name e max_sessions_per_week. Use quando o paciente disser que tem um convênio para resolver o nome em partner_plan_id antes de chamar enroll_patient_in_class. Se o convênio do paciente não aparecer aqui, a clínica não aceita esse passe — diga isso em vez de inventar.",
+		Parameters: &genai.Schema{
+			Type:       genai.TypeObject,
+			Properties: map[string]*genai.Schema{},
+		},
+	})
+
+	r.register(&Tool{
+		Name:        "confirm_class_attendance",
+		Description: "Confirma a participação do paciente atual na PRÓXIMA aula da turma em grupo onde ele está matriculado (Pilates etc.). Sem parâmetros — o sistema resolve qual é a próxima aula a partir das matrículas ativas do paciente. Use SOMENTE quando o paciente confirmar explicitamente (ex: 'sim', 'vou', 'confirmo') que vai à próxima aula. NUNCA chame de forma especulativa. A tool retorna data/horário/turma — repasse esses valores na sua resposta. Se a tool não estiver no seu toolset (clínica desativou) ou retornar erro (sem matrícula ativa, sem aula futura), use complete_handoff_to_human ou explique ao paciente que precisa falar com a recepção.",
+		Parameters: &genai.Schema{
+			Type:       genai.TypeObject,
+			Properties: map[string]*genai.Schema{},
+		},
+	})
+
+	r.register(&Tool{
+		Name:        "present_enrollment_summary",
+		Description: "Monta a mensagem de confirmação de matrícula em turma (Pilates etc). VOCÊ DEVE usar esta tool em vez de escrever o resumo como texto livre — o sistema valida que cada slot_id realmente existe na turma E está ativo, formata o markdown server-side, e devolve em summary_text. Sua única tarefa após esta tool: enviar o summary_text VERBATIM ao paciente, sem reescrever, sem adicionar nada antes ou depois (exceto se faltar 'Posso confirmar?' na ponta — nesse caso adicione). Se a tool retornar erro 'slot X não encontrado', você inventou o slot — volte ao passo (3) e re-pergunte ao paciente quais dias/horários ele quer.",
+		Parameters: &genai.Schema{
+			Type:     genai.TypeObject,
+			Required: []string{"plan_id", "slot_ids"},
+			Properties: map[string]*genai.Schema{
+				"plan_id": {
+					Type:        genai.TypeString,
+					Description: "UUID da turma (campo 'plan_id' de get_group_class_slots). REQUIRED.",
+				},
+				"slot_ids": {
+					Type:        genai.TypeArray,
+					Items:       &genai.Schema{Type: genai.TypeString},
+					Description: "Array com os UUIDs dos slots escolhidos (campo 'slot_id' das chamadas anteriores de get_group_class_slots). REQUIRED. Cada slot é (dia + horário) que o paciente confirmou querer. NÃO invente UUIDs — devem ter vindo de validações reais.",
+				},
+				"partner_plan_id": {
+					Type:        genai.TypeString,
+					Description: "UUID do convênio do paciente (campo 'id' de list_partner_plans). Opcional — passe quando o paciente disse que tem convênio. Sem isso, a matrícula é particular.",
+				},
+				"monthly_amount": {
+					Type:        genai.TypeNumber,
+					Description: "Valor mensal em reais (do FAQ, conforme frequência escolhida). Use SOMENTE pra particular. Convênio: omita.",
+				},
+				"billing_day": {
+					Type:        genai.TypeInteger,
+					Description: "Dia do mês 1-31 pra cobrança da mensalidade. Necessário pra particular mensal. Convênio: omita.",
+				},
+			},
+		},
+	})
+
+	r.register(&Tool{
+		Name:        "enroll_patient_in_class",
+		Description: "Matricula o paciente atual numa turma em grupo (Pilates, etc.) nos slots escolhidos. Chame SOMENTE depois de ter (1) confirmado a modalidade com o paciente, (2) escolhido os slots reais via get_group_class_slots, e (3) recebido confirmação explícita do paciente sobre os horários e o valor mensal. patient_id NÃO é parâmetro — é resolvido automaticamente pelo paciente da conversa. Se a tool não estiver no seu toolset (clínica desativou), use complete_handoff_to_human depois de enviar o resumo bold.",
+		Parameters: &genai.Schema{
+			Type:     genai.TypeObject,
+			Required: []string{"plan_id", "slot_ids"},
+			Properties: map[string]*genai.Schema{
+				"plan_id": {
+					Type:        genai.TypeString,
+					Description: "UUID da turma (campo 'plan_id' de get_group_class_slots). REQUIRED.",
+				},
+				"slot_ids": {
+					Type:        genai.TypeArray,
+					Items:       &genai.Schema{Type: genai.TypeString},
+					Description: "Array com os UUIDs dos slots escolhidos (campo 'slot_id' de get_group_class_slots). REQUIRED. Cada slot é (dia da semana + horário). Mínimo 1.",
+				},
+				"partner_plan_id": {
+					Type:        genai.TypeString,
+					Description: "UUID do convênio do paciente (campo 'id' de list_partner_plans). Opcional — passe quando o paciente disse que tem Gympass/Total Pass/etc. Sem esse campo, a matrícula é particular (paga direto).",
+				},
+				"monthly_amount": {
+					Type:        genai.TypeNumber,
+					Description: "Valor mensal em reais (ex: 195 para 3x/sem na tabela do FAQ). Use quando a matrícula for particular (sem partner_plan_id). Para matrículas via convênio, omita.",
+				},
+				"billing_day": {
+					Type:        genai.TypeInteger,
+					Description: "Dia do mês (1-31) em que a mensalidade é cobrada. Necessário quando a matrícula é mensal direto (sem convênio). Pergunte ao paciente qual dia prefere ou use o dia da matrícula.",
+				},
+			},
 		},
 	})
 }

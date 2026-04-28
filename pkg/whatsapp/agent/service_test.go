@@ -469,6 +469,85 @@ func TestProcessMessage_DisabledTools_AllFlagsRespected(t *testing.T) {
 	}
 }
 
+func TestProcessMessage_DisablingEnrollClass_AddsToDisallowedTools(t *testing.T) {
+	// When the clinic disables AI-driven group-class enrollment via the UI,
+	// enroll_patient_in_class must be physically removed from the toolset
+	// so the LLM cannot call it. The Pilates flow then falls back to
+	// complete_handoff_to_human after gathering the matrícula context.
+	clinic := &clinic_model.Clinic{
+		ID: uuid.New(),
+		Settings: clinic_model.ClinicSettings{
+			AIAgentEnabled:    true,
+			AIToolEnrollClass: boolPtr(false),
+		},
+	}
+	fa := &fakeAgent{response: &AgentResponse{Content: "ok"}}
+	fcm := newFakeConvManager()
+	svc := buildSvcWithGate(clinic, allToolsGlobalOn(), fa, fcm)
+
+	_, err := svc.ProcessMessage(context.Background(), &MessageRequest{
+		ClinicID:     clinic.ID,
+		PatientPhone: "+5511999990000",
+		MessageText:  "queria me matricular no pilates",
+		Intent:       model.MessageIntentUnknown,
+	})
+	require.NoError(t, err)
+	assert.Contains(t, fa.lastRequest.DisallowedTools, "enroll_patient_in_class",
+		"disabling AIToolEnrollClass must add enroll_patient_in_class to DisallowedTools so the LLM never calls it directly")
+}
+
+func TestProcessMessage_DisablingConfirmClass_AddsToDisallowedTools(t *testing.T) {
+	// AIToolConfirmClass gates confirm_class_attendance specifically (the
+	// group-class confirmation tool). AIToolConfirm continues to gate
+	// confirm_appointment (1-on-1). They must be independent toggles.
+	clinic := &clinic_model.Clinic{
+		ID: uuid.New(),
+		Settings: clinic_model.ClinicSettings{
+			AIAgentEnabled:     true,
+			AIToolConfirmClass: boolPtr(false),
+		},
+	}
+	fa := &fakeAgent{response: &AgentResponse{Content: "ok"}}
+	fcm := newFakeConvManager()
+	svc := buildSvcWithGate(clinic, allToolsGlobalOn(), fa, fcm)
+
+	_, err := svc.ProcessMessage(context.Background(), &MessageRequest{
+		ClinicID:     clinic.ID,
+		PatientPhone: "+5511999990000",
+		MessageText:  "vou confirmar minha próxima aula",
+		Intent:       model.MessageIntentUnknown,
+	})
+	require.NoError(t, err)
+	assert.Contains(t, fa.lastRequest.DisallowedTools, "confirm_class_attendance",
+		"disabling AIToolConfirmClass must blacklist confirm_class_attendance specifically")
+	assert.NotContains(t, fa.lastRequest.DisallowedTools, "confirm_appointment",
+		"AIToolConfirmClass must NOT touch confirm_appointment — that one is gated by AIToolConfirm")
+}
+
+func TestProcessMessage_EnrollClass_DefaultEnabled_NotInDisallowedTools(t *testing.T) {
+	// Clinics that never touched the flag (nil) must keep enroll available —
+	// flipping the default would silently break the Renascer flow.
+	clinic := &clinic_model.Clinic{
+		ID: uuid.New(),
+		Settings: clinic_model.ClinicSettings{
+			AIAgentEnabled: true,
+		},
+	}
+	fa := &fakeAgent{response: &AgentResponse{Content: "ok"}}
+	fcm := newFakeConvManager()
+	svc := buildSvcWithGate(clinic, allToolsGlobalOn(), fa, fcm)
+
+	_, err := svc.ProcessMessage(context.Background(), &MessageRequest{
+		ClinicID:     clinic.ID,
+		PatientPhone: "+5511999990000",
+		MessageText:  "ok",
+		Intent:       model.MessageIntentUnknown,
+	})
+	require.NoError(t, err)
+	assert.NotContains(t, fa.lastRequest.DisallowedTools, "enroll_patient_in_class",
+		"nil/default AIToolEnrollClass must keep enroll_patient_in_class available so existing clinics aren't silently affected")
+}
+
 func TestProcessMessage_AllToolsEnabled_NoBlacklist(t *testing.T) {
 	// Clinic with everything enabled: no blacklist, AI has full toolset.
 	clinic := &clinic_model.Clinic{

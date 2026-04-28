@@ -93,6 +93,15 @@ type ClinicSettings struct {
 	WhatsAppReminder24hEnabled *bool `json:"whatsapp_reminder_24h_enabled,omitempty"`
 	WhatsAppReminder48hEnabled *bool `json:"whatsapp_reminder_48h_enabled,omitempty"`
 
+	// Per-window group class reminder toggles. Group classes (Pilates etc.)
+	// never materialize as appointments, so the appointment reminder worker
+	// can't fire for them — these flags gate a separate worker that walks
+	// session_plan_slots × active enrollments. Nil defaults to true. 48h is
+	// not offered: classes are weekly-recurring, so a 48h heads-up on top of
+	// 24h would mostly be noise.
+	GroupClassReminder24hEnabled *bool `json:"group_class_reminder_24h_enabled,omitempty"`
+	GroupClassReminder2hEnabled  *bool `json:"group_class_reminder_2h_enabled,omitempty"`
+
 	// Payment settings
 	RequirePaymentBeforeBooking bool `json:"require_payment_before_booking"`
 
@@ -107,10 +116,12 @@ type ClinicSettings struct {
 
 	// Per-clinic AI tool toggles. nil means "use default (enabled)" so that
 	// existing clinics keep the original behavior after the field was introduced.
-	AIToolSchedule   *bool `json:"ai_tool_schedule,omitempty"`
-	AIToolConfirm    *bool `json:"ai_tool_confirm,omitempty"`
-	AIToolCancel     *bool `json:"ai_tool_cancel,omitempty"`
-	AIToolReschedule *bool `json:"ai_tool_reschedule,omitempty"`
+	AIToolSchedule     *bool `json:"ai_tool_schedule,omitempty"`
+	AIToolConfirm      *bool `json:"ai_tool_confirm,omitempty"`
+	AIToolCancel       *bool `json:"ai_tool_cancel,omitempty"`
+	AIToolReschedule   *bool `json:"ai_tool_reschedule,omitempty"`
+	AIToolEnrollClass  *bool `json:"ai_tool_enroll_class,omitempty"`
+	AIToolConfirmClass *bool `json:"ai_tool_confirm_class,omitempty"`
 
 	// Canned reply sent when the AI detects an intent the clinic disabled.
 	// Empty falls back to a built-in default at the agent layer.
@@ -216,6 +227,54 @@ func (s *ClinicSettings) IsAIToolRescheduleEnabled() bool {
 		return true
 	}
 	return *s.AIToolReschedule
+}
+
+// IsAIToolEnrollClassEnabled returns whether AI is allowed to enroll patients
+// in group session plans (Pilates etc.). When false, enroll_patient_in_class
+// is removed from the toolset and the AI falls back to complete_handoff_to_human
+// after gathering matrícula context.
+func (s *ClinicSettings) IsAIToolEnrollClassEnabled() bool {
+	if s == nil || s.AIToolEnrollClass == nil {
+		return true
+	}
+	return *s.AIToolEnrollClass
+}
+
+// IsAIToolConfirmClassEnabled returns whether AI is allowed to confirm a
+// patient's participation in their next group class. Independent from
+// AIToolConfirm (which gates 1-on-1 confirm_appointment) so a clinic can
+// keep confirmations of group classes flowing while still requiring human
+// confirmation for individual appointments, or vice-versa.
+func (s *ClinicSettings) IsAIToolConfirmClassEnabled() bool {
+	if s == nil || s.AIToolConfirmClass == nil {
+		return true
+	}
+	return *s.AIToolConfirmClass
+}
+
+// IsGroupClassReminderEnabled returns whether the given group-class reminder
+// window ("reminder_24h" or "reminder_2h") should fire for this clinic. The
+// master WhatsAppRemindersEnabled is still checked elsewhere; this answers
+// only the per-window opt-out. Unknown reminder types return false to fail
+// closed — a typo'd threshold must not silently bypass the gate.
+func (s *ClinicSettings) IsGroupClassReminderEnabled(reminderType string) bool {
+	var flag *bool
+	switch reminderType {
+	case "reminder_24h":
+		if s != nil {
+			flag = s.GroupClassReminder24hEnabled
+		}
+	case "reminder_2h":
+		if s != nil {
+			flag = s.GroupClassReminder2hEnabled
+		}
+	default:
+		return false
+	}
+	if flag == nil {
+		return true
+	}
+	return *flag
 }
 
 // IsAppointmentReminderEnabled returns whether the given appointment-reminder
@@ -365,6 +424,8 @@ type UpdateClinicSettingsRequest struct {
 	AIToolConfirm             *bool   `json:"ai_tool_confirm,omitempty"`
 	AIToolCancel              *bool   `json:"ai_tool_cancel,omitempty"`
 	AIToolReschedule          *bool   `json:"ai_tool_reschedule,omitempty"`
+	AIToolEnrollClass         *bool   `json:"ai_tool_enroll_class,omitempty"`
+	AIToolConfirmClass        *bool   `json:"ai_tool_confirm_class,omitempty"`
 	AIBlockedIntentReply      *string `json:"ai_blocked_intent_reply,omitempty"`
 	AIHumanTakeoverPauseHours *int    `json:"ai_human_takeover_pause_hours,omitempty"`
 
@@ -372,6 +433,12 @@ type UpdateClinicSettingsRequest struct {
 	PaymentReminderWhatsAppEnabled *bool `json:"payment_reminder_whatsapp_enabled,omitempty"`
 	PaymentReminderEmailEnabled    *bool `json:"payment_reminder_email_enabled,omitempty"`
 	PaymentReminderDaysBefore      *int  `json:"payment_reminder_days_before,omitempty"`
+
+	// Group class reminder windows (Pilates etc). Independent from
+	// the appointment reminder windows above — group plans never
+	// materialize as appointments, so they get a separate worker.
+	GroupClassReminder24hEnabled *bool `json:"group_class_reminder_24h_enabled,omitempty"`
+	GroupClassReminder2hEnabled  *bool `json:"group_class_reminder_2h_enabled,omitempty"`
 }
 
 // UpdateClinicRequest represents the request to update a clinic

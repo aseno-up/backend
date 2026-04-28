@@ -26,6 +26,7 @@ type openRouterAgent struct {
 	toolRegistry   *tools.Registry
 	toolExecutor   *tools.Executor
 	execContext    *tools.ExecutionContext
+	tracer         *LangfuseTracer // optional — no-op when env keys absent
 }
 
 // NewOpenRouterAgent creates a new OpenRouter-based agent
@@ -73,6 +74,7 @@ func NewOpenRouterAgent(cfg Config, toolRegistry *tools.Registry, toolExecutor *
 		toolRegistry:   toolRegistry,
 		toolExecutor:   toolExecutor,
 		execContext:    execContext,
+		tracer:         NewLangfuseTracer(),
 	}, nil
 }
 
@@ -82,6 +84,15 @@ func (a *openRouterAgent) Provider() string {
 
 func (a *openRouterAgent) Model() string {
 	return a.model
+}
+
+// Flush implements agent.Flusher: drains pending LangFuse traces so
+// graceful shutdown doesn't drop the last few events. No-op when the
+// tracer is in disabled mode (env keys absent).
+func (a *openRouterAgent) Flush() {
+	if a.tracer != nil {
+		a.tracer.Flush()
+	}
 }
 
 // Generate generates a response for the given request
@@ -246,7 +257,14 @@ func (a *openRouterAgent) generateWithModel(ctx context.Context, req *AgentReque
 		}
 
 		// Call OpenRouter API
+		callStart := time.Now()
 		resp, err := a.callAPI(ctx, apiReq)
+		callEnd := time.Now()
+
+		// Fire-and-forget LangFuse trace for this LLM call (no-op when
+		// keys absent). Goroutine inside Trace, so this never blocks.
+		a.traceLLMCall(ctx, req, apiReq, resp, err, callStart, callEnd, i)
+
 		if err != nil {
 			return nil, fmt.Errorf("openrouter API call failed: %w", err)
 		}
@@ -430,6 +448,64 @@ func (a *openRouterAgent) callAPI(ctx context.Context, req openRouterRequest) (*
 }
 
 // executeFunctionCall executes a single function call
+// traceLLMCall pushes one LangFuse generation event per OpenRouter API
+// call. No-op when env keys absent. Goroutine-dispatched inside Trace —
+// the agent never waits on telemetry.
+func (a *openRouterAgent) traceLLMCall(
+	ctx context.Context,
+	req *AgentRequest,
+	apiReq openRouterRequest,
+	resp *openRouterResponse,
+	apiErr error,
+	startTime, endTime time.Time,
+	iteration int,
+) {
+	if a.tracer == nil || !a.tracer.enabled {
+		return
+	}
+
+	sessionID := ""
+	clinicID := ""
+	if req != nil && req.ConversationContext != nil {
+		sessionID = req.ConversationContext.ID.String()
+		clinicID = req.ConversationContext.ClinicID.String()
+	}
+
+	output := ""
+	inputTokens, outputTokens := 0, 0
+	errMsg := ""
+	if apiErr != nil {
+		errMsg = apiErr.Error()
+	} else if resp != nil {
+		if resp.Error != nil {
+			errMsg = resp.Error.Message
+		}
+		if len(resp.Choices) > 0 {
+			output = resp.Choices[0].Message.Content
+		}
+		inputTokens = resp.Usage.PromptTokens
+		outputTokens = resp.Usage.CompletionTokens
+	}
+
+	a.tracer.Trace(ctx, LangfuseGenerationEvent{
+		SessionID:    sessionID,
+		ClinicID:     clinicID,
+		Model:        apiReq.Model,
+		InputTokens:  inputTokens,
+		OutputTokens: outputTokens,
+		Prompt:       apiReq.Messages,
+		Output:       output,
+		StartTime:    startTime,
+		EndTime:      endTime,
+		Metadata: map[string]any{
+			"iteration":   iteration,
+			"temperature": apiReq.Temperature,
+			"max_tokens":  apiReq.MaxTokens,
+		},
+		Err: errMsg,
+	})
+}
+
 func (a *openRouterAgent) executeFunctionCall(ctx context.Context, name string, args map[string]interface{}) (interface{}, error) {
 	logger.Printf("[OpenRouter Agent] Executing tool: %s with args: %v", name, args)
 

@@ -17,7 +17,7 @@ type AgentRequest struct {
 	MaxTokens           int
 	Temperature         float32
 	// HistoryTurns limits how many past turns are injected into the prompt.
-	// 0 uses the package default (DefaultPromptHistoryTurns = 10).
+	// 0 uses the package default (DefaultPromptHistoryTurns = 15).
 	HistoryTurns int
 
 	// AllowedTools restricts which tools are exposed to the LLM for this
@@ -69,6 +69,14 @@ type Agent interface {
 
 	// Model returns the model being used
 	Model() string
+}
+
+// Flusher is an optional capability some agents implement to drain
+// in-flight observability traces (LangFuse, etc.) before process exit.
+// Agents that don't trace (or don't need flushing) just don't implement
+// this — main.go uses a type assertion.
+type Flusher interface {
+	Flush()
 }
 
 // Config holds agent configuration
