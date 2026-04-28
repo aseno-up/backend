@@ -10,12 +10,12 @@ import (
 )
 
 var (
-	ErrOfferInvalid       = errors.New("offer is invalid or expired")
-	ErrOfferNotFound      = errors.New("offer not found")
-	ErrOfferPlanMismatch  = errors.New("offer is not valid for this plan")
-	ErrPlanNotFound       = errors.New("plan not found")
-	ErrSoloNotAvailable   = errors.New("plan does not offer a solo variant for this cycle")
-	ErrCycleNotSupported  = errors.New("plan does not support the requested billing cycle")
+	ErrOfferInvalid      = errors.New("offer is invalid or expired")
+	ErrOfferNotFound     = errors.New("offer not found")
+	ErrOfferPlanMismatch = errors.New("offer is not valid for this plan")
+	ErrPlanNotFound      = errors.New("plan not found")
+	ErrSoloNotAvailable  = errors.New("plan does not offer a solo variant for this cycle")
+	ErrCycleNotSupported = errors.New("plan does not support the requested billing cycle")
 )
 
 type PlanService interface {

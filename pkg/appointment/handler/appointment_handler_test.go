@@ -74,10 +74,10 @@ func (m *mockAppointmentService) CreateFromWaitlist(ctx context.Context, clinicI
 func (m *mockAppointmentService) Reschedule(ctx context.Context, appointmentID, clinicID, professionalID uuid.UUID, startTime time.Time, durationMinutes int) error {
 	return nil
 }
-func (m *mockAppointmentService) SetWaitlistProcessor(_ service.WaitlistService)             {}
-func (m *mockAppointmentService) SetPatientRiskCalculator(_ service.PatientRiskCalculator)   {}
-func (m *mockAppointmentService) SetCommissionCalculator(_ service.CommissionCalculator)     {}
-func (m *mockAppointmentService) SetCalendarService(_ calendar_service.CalendarService)      {}
+func (m *mockAppointmentService) SetWaitlistProcessor(_ service.WaitlistService)               {}
+func (m *mockAppointmentService) SetPatientRiskCalculator(_ service.PatientRiskCalculator)     {}
+func (m *mockAppointmentService) SetCommissionCalculator(_ service.CommissionCalculator)       {}
+func (m *mockAppointmentService) SetCalendarService(_ calendar_service.CalendarService)        {}
 func (m *mockAppointmentService) SetSessionPlanHandler(_ service.SessionPlanCompletionHandler) {}
 func (m *mockAppointmentService) SetPaymentLister(_ service.PaymentLister)                     {}
 func (m *mockAppointmentService) SetFinanceUpserter(_ service.FinanceUpserter)                 {}

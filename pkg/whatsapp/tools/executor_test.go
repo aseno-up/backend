@@ -16,12 +16,14 @@ type stubProfessionalLister struct {
 	result []*ProfessionalInfo
 	err    error
 	called struct {
-		specialty string
+		specialty   string
+		procedureID *uuid.UUID
 	}
 }
 
-func (s *stubProfessionalLister) ListAvailable(_ context.Context, _ uuid.UUID, specialty string) ([]*ProfessionalInfo, error) {
+func (s *stubProfessionalLister) ListAvailable(_ context.Context, _ uuid.UUID, specialty string, procedureID *uuid.UUID) ([]*ProfessionalInfo, error) {
 	s.called.specialty = specialty
+	s.called.procedureID = procedureID
 	return s.result, s.err
 }
 
@@ -406,6 +408,223 @@ func TestSampleSlotsAcrossDay_EmptyInput(t *testing.T) {
 	assert.Empty(t, out)
 }
 
+// Real-world bug: AI listed 14 slots in one message, overwhelming the
+// patient. The cap is enforced server-side (executor) — prompt rules alone
+// were unreliable. Per-professional path caps at 4 distributed picks.
+
+func TestGetAvailableSlots_PerProfessional_CapsAtFour(t *testing.T) {
+	profID := uuid.New()
+
+	// 15 slots in one day — the kind of agenda that triggered the bug.
+	manySlots := []*AvailableSlot{
+		slotAt(profID, 2026, 4, 28, 8),
+		slotAt(profID, 2026, 4, 28, 9),
+		slotAt(profID, 2026, 4, 28, 10),
+		slotAt(profID, 2026, 4, 28, 11),
+		slotAt(profID, 2026, 4, 28, 12),
+		slotAt(profID, 2026, 4, 28, 13),
+		slotAt(profID, 2026, 4, 28, 14),
+		slotAt(profID, 2026, 4, 28, 15),
+		slotAt(profID, 2026, 4, 28, 16),
+		slotAt(profID, 2026, 4, 28, 17),
+		slotAt(profID, 2026, 4, 29, 9),
+		slotAt(profID, 2026, 4, 29, 11),
+		slotAt(profID, 2026, 4, 29, 14),
+		slotAt(profID, 2026, 4, 29, 16),
+		slotAt(profID, 2026, 4, 30, 10),
+	}
+
+	execCtx := &ExecutionContext{
+		Context:            context.Background(),
+		ClinicID:           uuid.New(),
+		ProfessionalLister: &stubProfessionalLister{result: []*ProfessionalInfo{{ID: profID, Name: "Hamilton"}}},
+		SlotFinder:         &stubSlotFinder{slots: map[uuid.UUID][]*AvailableSlot{profID: manySlots}},
+	}
+
+	out, err := NewExecutor(NewRegistry()).Execute(execCtx, "get_available_slots", map[string]interface{}{
+		"professional_id": profID.String(),
+	})
+	require.NoError(t, err)
+	slots := out.([]*AvailableSlot)
+	assert.LessOrEqual(t, len(slots), 4, "tool MUST cap output at 4 slots regardless of how many the agenda has — prompt rules alone are unreliable")
+}
+
+// time_filter — surgical check for a specific HH:MM the patient asked
+// about. Solves the "11h não aparece na amostra de 4" bug.
+
+func TestGetAvailableSlots_TimeFilter_FindsExactMatch(t *testing.T) {
+	profID := uuid.New()
+	// Hamilton tem slots de 30min: 10:00, 11:00, 12:00, 15:00, 16:00 livres.
+	// Sample distribuído pegou 10:00, 13:00*, 17:00 (mas 13:00 não existe).
+	// Patient asks "tem 11h?" — tool must surface the actual 11:00 slot,
+	// even though it was cut from the sample.
+	slots := []*AvailableSlot{
+		slotInBRT(profID, 2026, 4, 28, 10, 0),
+		slotInBRT(profID, 2026, 4, 28, 11, 0),
+		slotInBRT(profID, 2026, 4, 28, 12, 0),
+		slotInBRT(profID, 2026, 4, 28, 15, 0),
+		slotInBRT(profID, 2026, 4, 28, 16, 0),
+	}
+
+	execCtx := &ExecutionContext{
+		Context:            context.Background(),
+		ClinicID:           uuid.New(),
+		ProfessionalLister: &stubProfessionalLister{result: []*ProfessionalInfo{{ID: profID, Name: "Hamilton"}}},
+		SlotFinder:         &stubSlotFinder{slots: map[uuid.UUID][]*AvailableSlot{profID: slots}},
+	}
+
+	out, err := NewExecutor(NewRegistry()).Execute(execCtx, "get_available_slots", map[string]interface{}{
+		"professional_id": profID.String(),
+		"date":            "2026-04-28",
+		"time_filter":     "11:00",
+	})
+	require.NoError(t, err)
+	got := out.([]*AvailableSlot)
+	require.Len(t, got, 1, "time_filter must return the exact slot when free, ignoring the distributed-sample cap")
+	assert.Equal(t, 11, got[0].StartTime.In(brtLoc()).Hour())
+}
+
+func TestGetAvailableSlots_TimeFilter_EmptyWhenOccupied(t *testing.T) {
+	// 11:00 was occupied → no slot in backend → tool returns empty.
+	profID := uuid.New()
+	slots := []*AvailableSlot{
+		slotInBRT(profID, 2026, 4, 28, 10, 0),
+		slotInBRT(profID, 2026, 4, 28, 12, 0), // 11:00 missing = ocupado
+		slotInBRT(profID, 2026, 4, 28, 15, 0),
+	}
+	execCtx := &ExecutionContext{
+		Context:            context.Background(),
+		ClinicID:           uuid.New(),
+		ProfessionalLister: &stubProfessionalLister{result: []*ProfessionalInfo{{ID: profID, Name: "Hamilton"}}},
+		SlotFinder:         &stubSlotFinder{slots: map[uuid.UUID][]*AvailableSlot{profID: slots}},
+	}
+	out, _ := NewExecutor(NewRegistry()).Execute(execCtx, "get_available_slots", map[string]interface{}{
+		"professional_id": profID.String(),
+		"date":            "2026-04-28",
+		"time_filter":     "11:00",
+	})
+	got := out.([]*AvailableSlot)
+	assert.Empty(t, got, "time_filter must return empty when the requested HH:MM is not in the backend's free slots")
+}
+
+func TestGetAvailableSlots_TimeFilter_InvalidFormatErrors(t *testing.T) {
+	execCtx := &ExecutionContext{
+		Context:            context.Background(),
+		ClinicID:           uuid.New(),
+		ProfessionalLister: &stubProfessionalLister{result: []*ProfessionalInfo{{ID: uuid.New(), Name: "x"}}},
+		SlotFinder:         &stubSlotFinder{},
+	}
+	_, err := NewExecutor(NewRegistry()).Execute(execCtx, "get_available_slots", map[string]interface{}{
+		"professional_id": uuid.New().String(),
+		"time_filter":     "abc",
+	})
+	assert.Error(t, err, "invalid time_filter must surface as error so the LLM corrects it")
+}
+
+func brtLoc() *time.Location {
+	loc, err := time.LoadLocation("America/Sao_Paulo")
+	if err != nil {
+		return time.Local
+	}
+	return loc
+}
+
+func slotInBRT(profID uuid.UUID, y, m, d, h, min int) *AvailableSlot {
+	loc := brtLoc()
+	start := time.Date(y, time.Month(m), d, h, min, 0, 0, loc)
+	return &AvailableSlot{
+		ProfessionalID:   profID,
+		ProfessionalName: "Test",
+		StartTime:        start,
+		EndTime:          start.Add(30 * time.Minute),
+	}
+}
+
+// procedure_id filter on get_available_slots — prevents the AI from
+// surfacing slots of professionals who don't perform the procedure.
+// Real-world bug: AI listed Mariana for "RPG — Avaliação" but only Hamilton
+// has that association in professional_procedures.
+
+func TestGetAvailableSlots_ProcedureFilter_ExcludesUnqualifiedProfessional(t *testing.T) {
+	hamilton := uuid.New()  // qualified
+	mariana := uuid.New()   // NOT qualified
+	procID := uuid.New()    // RPG — Avaliação
+
+	// ProfessionalLister returns ONLY hamilton when filtering by procedure_id.
+	lister := &stubProfessionalLister{
+		result: []*ProfessionalInfo{
+			{ID: hamilton, Name: "Hamilton"},
+		},
+	}
+
+	// SlotFinder returns slots for both professionals (without filter).
+	hamiltonSlot := slotInBRT(hamilton, 2026, 4, 28, 11, 0)
+	marianaSlot := slotInBRT(mariana, 2026, 4, 28, 11, 0)
+
+	execCtx := &ExecutionContext{
+		Context:            context.Background(),
+		ClinicID:           uuid.New(),
+		ProfessionalLister: lister,
+		SlotFinder: &stubSlotFinder{
+			slots: map[uuid.UUID][]*AvailableSlot{
+				hamilton: {hamiltonSlot},
+				mariana:  {marianaSlot},
+			},
+		},
+	}
+
+	// Patient asks for 11h amanhã, AI passes procedure_id of RPG — Avaliação.
+	out, err := NewExecutor(NewRegistry()).Execute(execCtx, "get_available_slots", map[string]interface{}{
+		"professional_id": hamilton.String(),
+		"date":            "2026-04-28",
+		"time_filter":     "11:00",
+		"procedure_id":    procID.String(),
+	})
+	require.NoError(t, err)
+	got := out.([]*AvailableSlot)
+	require.Len(t, got, 1, "must return only the qualified professional's slot")
+	assert.Equal(t, hamilton, got[0].ProfessionalID)
+}
+
+func TestGetAvailableSlots_ProcedureFilter_UnqualifiedProfessionalReturnsEmpty(t *testing.T) {
+	mariana := uuid.New()
+	procID := uuid.New()
+	// ProfessionalLister returns NOBODY for this procedure (because Mariana
+	// isn't on the list of qualified professionals for the procedure).
+	lister := &stubProfessionalLister{result: []*ProfessionalInfo{}}
+
+	execCtx := &ExecutionContext{
+		Context:            context.Background(),
+		ClinicID:           uuid.New(),
+		ProfessionalLister: lister,
+		SlotFinder: &stubSlotFinder{
+			slots: map[uuid.UUID][]*AvailableSlot{
+				mariana: {slotInBRT(mariana, 2026, 4, 28, 11, 0)},
+			},
+		},
+	}
+
+	out, _ := NewExecutor(NewRegistry()).Execute(execCtx, "get_available_slots", map[string]interface{}{
+		"professional_id": mariana.String(),
+		"procedure_id":    procID.String(),
+	})
+	got := out.([]*AvailableSlot)
+	assert.Empty(t, got, "unqualified professional must produce empty result regardless of slots")
+}
+
+func TestGetAvailableSlots_ProcedureFilter_InvalidUUIDErrors(t *testing.T) {
+	execCtx := &ExecutionContext{
+		Context:            context.Background(),
+		ClinicID:           uuid.New(),
+		ProfessionalLister: &stubProfessionalLister{},
+		SlotFinder:         &stubSlotFinder{},
+	}
+	_, err := NewExecutor(NewRegistry()).Execute(execCtx, "get_available_slots", map[string]interface{}{
+		"procedure_id": "not-a-uuid",
+	})
+	assert.Error(t, err, "invalid procedure_id must surface as error so the LLM corrects")
+}
+
 // ---------------------------------------------------------------------------
 // quick_schedule tests
 // ---------------------------------------------------------------------------
@@ -565,4 +784,445 @@ func TestQuickSchedule_SlotTaken_ReturnsAlternatives(t *testing.T) {
 	assert.False(t, creator.called)
 	alt := m["available_same_day"].([]map[string]string)
 	assert.Len(t, alt, 2, "must surface same-day alternatives so LLM can offer them")
+}
+
+// ---------------------------------------------------------------------------
+// complete_handoff_to_human — sole tool exposed in handoff mode. Marks the
+// existing per-patient human takeover so the takeover gate at the WhatsApp
+// service layer silences subsequent patient messages without further LLM
+// calls. Returns the clinic-configured canned reply as the patient-facing
+// message.
+// ---------------------------------------------------------------------------
+
+type stubHumanTakeoverMarker struct {
+	calls    int
+	clinicID uuid.UUID
+	phone    string
+	at       time.Time
+	err      error
+}
+
+func (s *stubHumanTakeoverMarker) Mark(_ context.Context, clinicID uuid.UUID, phone string, at time.Time) error {
+	s.calls++
+	s.clinicID = clinicID
+	s.phone = phone
+	s.at = at
+	return s.err
+}
+
+func TestCompleteHandoff_Registered(t *testing.T) {
+	registry := NewRegistry()
+	tool, exists := registry.GetTool("complete_handoff_to_human")
+	require.True(t, exists, "complete_handoff_to_human must be registered so the LLM can see it in handoff mode")
+	assert.NotEmpty(t, tool.Description)
+}
+
+func TestCompleteHandoff_MarksTakeoverWithExecutionContextValues(t *testing.T) {
+	marker := &stubHumanTakeoverMarker{}
+	clinicID := uuid.New()
+	phone := "5551999990001"
+
+	execCtx := &ExecutionContext{
+		Context:             context.Background(),
+		ClinicID:            clinicID,
+		PatientPhone:        phone,
+		HumanTakeoverMarker: marker,
+		BlockedIntentReply:  "Pode aguardar um minutinho? Alguém do nosso time vai te atender em breve.",
+	}
+
+	_, err := NewExecutor(NewRegistry()).Execute(execCtx, "complete_handoff_to_human", map[string]interface{}{})
+	require.NoError(t, err)
+
+	assert.Equal(t, 1, marker.calls, "must call Mark exactly once per invocation")
+	assert.Equal(t, clinicID, marker.clinicID, "Mark must receive the clinic ID from ExecutionContext (multi-tenant)")
+	assert.Equal(t, phone, marker.phone, "Mark must receive the patient phone from ExecutionContext")
+	assert.WithinDuration(t, time.Now(), marker.at, 2*time.Second, "Mark must receive a timestamp around now()")
+}
+
+func TestCompleteHandoff_ReturnsCannedReplyAsResult(t *testing.T) {
+	canned := "Pode aguardar um minutinho? Alguém do nosso time vai te atender em breve."
+	execCtx := &ExecutionContext{
+		Context:             context.Background(),
+		ClinicID:            uuid.New(),
+		PatientPhone:        "5551999990001",
+		HumanTakeoverMarker: &stubHumanTakeoverMarker{},
+		BlockedIntentReply:  canned,
+	}
+
+	result, err := NewExecutor(NewRegistry()).Execute(execCtx, "complete_handoff_to_human", map[string]interface{}{})
+	require.NoError(t, err)
+
+	m, ok := result.(map[string]interface{})
+	require.True(t, ok, "result must be a structured map so the LLM can act on it deterministically")
+	assert.Equal(t, canned, m["message"], "tool result message must be the clinic-resolved canned reply (not a hardcoded default)")
+}
+
+func TestCompleteHandoff_ReturnsClinicConfiguredCannedReply(t *testing.T) {
+	custom := "Te transfiro pro time agora, só um minuto."
+	execCtx := &ExecutionContext{
+		Context:             context.Background(),
+		ClinicID:            uuid.New(),
+		PatientPhone:        "5551999990001",
+		HumanTakeoverMarker: &stubHumanTakeoverMarker{},
+		BlockedIntentReply:  custom,
+	}
+
+	result, _ := NewExecutor(NewRegistry()).Execute(execCtx, "complete_handoff_to_human", map[string]interface{}{})
+	m, _ := result.(map[string]interface{})
+	assert.Equal(t, custom, m["message"], "tool must propagate clinic-configured canned reply, not a hardcoded one")
+}
+
+func TestCompleteHandoff_FailsLoudlyWhenMarkerNotConfigured(t *testing.T) {
+	// Defensive: if main.go forgets to wire the marker, the tool must not
+	// silently succeed (which would leave the team blind to subsequent
+	// patient messages because the takeover gate would never fire).
+	execCtx := &ExecutionContext{
+		Context:             context.Background(),
+		ClinicID:            uuid.New(),
+		PatientPhone:        "5551999990001",
+		HumanTakeoverMarker: nil,
+		BlockedIntentReply:  "aguarde",
+	}
+
+	_, err := NewExecutor(NewRegistry()).Execute(execCtx, "complete_handoff_to_human", map[string]interface{}{})
+	assert.Error(t, err, "missing marker must surface as an error so wiring bugs are caught early")
+}
+
+// list_procedures with name_contains filter — robust path for "vocês têm X?"
+// questions where X could be a procedure name in any specialty. Solves the
+// real-world bug where the LLM filtered by specialty="RPG" and missed
+// "RPG — Avaliação" because that procedure was tagged under Fisioterapia.
+
+func TestListProcedures_NameContainsFilter_CaseInsensitiveSubstring(t *testing.T) {
+	clinicID := uuid.New()
+	rpgID := uuid.New()
+	rpgAvalID := uuid.New()
+	pilatesID := uuid.New()
+
+	lister := &stubProcedureLister{
+		result: []*ProcedureInfo{
+			{ID: rpgID, Name: "RPG", Price: 200, DurationMinutes: 60, SpecialtyName: "RPG"},
+			{ID: rpgAvalID, Name: "RPG — Avaliação", Price: 80, DurationMinutes: 40, SpecialtyName: "Fisioterapia"},
+			{ID: pilatesID, Name: "Pilates Solo", Price: 130, DurationMinutes: 50, SpecialtyName: "Pilates"},
+		},
+	}
+	execCtx := &ExecutionContext{
+		Context:         context.Background(),
+		ClinicID:        clinicID,
+		ProcedureLister: lister,
+	}
+
+	result, err := NewExecutor(NewRegistry()).Execute(execCtx, "list_procedures", map[string]interface{}{
+		"name_contains": "rpg",
+	})
+	require.NoError(t, err)
+
+	procs, ok := result.([]*ProcedureInfo)
+	require.True(t, ok)
+	assert.Len(t, procs, 2, "must return BOTH RPG procedures regardless of their specialty (RPG specialty AND Fisioterapia specialty)")
+
+	names := []string{procs[0].Name, procs[1].Name}
+	assert.Contains(t, names, "RPG")
+	assert.Contains(t, names, "RPG — Avaliação", "RPG — Avaliação must be included even though its specialty is Fisioterapia, not RPG")
+}
+
+func TestListProcedures_NameContainsFilter_MatchesAvaliacaoAcrossSpecialties(t *testing.T) {
+	lister := &stubProcedureLister{
+		result: []*ProcedureInfo{
+			{ID: uuid.New(), Name: "Avaliação Fisioterapia", Price: 180, DurationMinutes: 60, SpecialtyName: "Fisioterapia"},
+			{ID: uuid.New(), Name: "Avaliação Pélvica", Price: 100, DurationMinutes: 50, SpecialtyName: "Fisioterapia"},
+			{ID: uuid.New(), Name: "Avaliação Pilates", Price: 40, DurationMinutes: 30, SpecialtyName: "Pilates"},
+			{ID: uuid.New(), Name: "RPG — Avaliação", Price: 80, DurationMinutes: 40, SpecialtyName: "Fisioterapia"},
+			{ID: uuid.New(), Name: "RPG", Price: 200, DurationMinutes: 60, SpecialtyName: "RPG"},
+		},
+	}
+	execCtx := &ExecutionContext{
+		Context:         context.Background(),
+		ClinicID:        uuid.New(),
+		ProcedureLister: lister,
+	}
+
+	result, _ := NewExecutor(NewRegistry()).Execute(execCtx, "list_procedures", map[string]interface{}{
+		"name_contains": "Avaliação",
+	})
+	procs := result.([]*ProcedureInfo)
+	assert.Len(t, procs, 4, "must return all 4 procedures whose name contains 'Avaliação' — including RPG — Avaliação which is in the Fisioterapia specialty")
+}
+
+func TestListProcedures_NameContainsFilter_AccentInsensitive(t *testing.T) {
+	// Patient writes the term without accent (very common on phone keyboards).
+	// Procedure name has accents in DB. Without normalization the filter
+	// silently misses everything — bug latent waiting to happen.
+	lister := &stubProcedureLister{
+		result: []*ProcedureInfo{
+			{ID: uuid.New(), Name: "Avaliação Fisioterapia", Price: 180, DurationMinutes: 60},
+			{ID: uuid.New(), Name: "Reeducação Postural Global", Price: 200, DurationMinutes: 60},
+			{ID: uuid.New(), Name: "Pilates", Price: 130, DurationMinutes: 50},
+		},
+	}
+	execCtx := &ExecutionContext{
+		Context:         context.Background(),
+		ClinicID:        uuid.New(),
+		ProcedureLister: lister,
+	}
+
+	// Patient typed "avaliacao" without ç/cedilla
+	result, _ := NewExecutor(NewRegistry()).Execute(execCtx, "list_procedures", map[string]interface{}{
+		"name_contains": "avaliacao",
+	})
+	procs := result.([]*ProcedureInfo)
+	require.Len(t, procs, 1, "must match 'Avaliação Fisioterapia' even without diacritic on the input term")
+	assert.Equal(t, "Avaliação Fisioterapia", procs[0].Name)
+
+	// Patient typed "REEDUCACAO" all caps no accent
+	result, _ = NewExecutor(NewRegistry()).Execute(execCtx, "list_procedures", map[string]interface{}{
+		"name_contains": "REEDUCACAO",
+	})
+	procs = result.([]*ProcedureInfo)
+	require.Len(t, procs, 1)
+	assert.Equal(t, "Reeducação Postural Global", procs[0].Name)
+}
+
+func TestListProcedures_NameContainsFilter_AcceptsArrayOfTerms(t *testing.T) {
+	// LLM passes both abbreviation and full name to cover patient phrasing
+	// in one call: ["RPG", "Reeducação Postural Global"]. Each procedure
+	// matches if ANY term is contained (OR semantics).
+	lister := &stubProcedureLister{
+		result: []*ProcedureInfo{
+			{ID: uuid.New(), Name: "RPG", Price: 200, DurationMinutes: 60},
+			{ID: uuid.New(), Name: "RPG — Avaliação", Price: 30, DurationMinutes: 30},
+			{ID: uuid.New(), Name: "Reeducação Postural Global Infantil", Price: 220, DurationMinutes: 60},
+			{ID: uuid.New(), Name: "Pilates", Price: 130, DurationMinutes: 50},
+		},
+	}
+	execCtx := &ExecutionContext{
+		Context:         context.Background(),
+		ClinicID:        uuid.New(),
+		ProcedureLister: lister,
+	}
+
+	result, err := NewExecutor(NewRegistry()).Execute(execCtx, "list_procedures", map[string]interface{}{
+		"name_contains": []interface{}{"RPG", "Reeducação Postural Global"},
+	})
+	require.NoError(t, err)
+	procs := result.([]*ProcedureInfo)
+
+	// 3 matches: 2 by "RPG" substring + 1 by "Reeducação Postural Global" substring
+	require.Len(t, procs, 3, "OR semantics: a procedure matches if any term in the array is contained in its name")
+
+	names := []string{procs[0].Name, procs[1].Name, procs[2].Name}
+	assert.Contains(t, names, "RPG")
+	assert.Contains(t, names, "RPG — Avaliação")
+	assert.Contains(t, names, "Reeducação Postural Global Infantil")
+}
+
+func TestListProcedures_NameContainsFilter_AcceptsSingleStringForBackwardsCompat(t *testing.T) {
+	// LLM might pass a string instead of array. Both are accepted.
+	lister := &stubProcedureLister{
+		result: []*ProcedureInfo{
+			{ID: uuid.New(), Name: "RPG"},
+			{ID: uuid.New(), Name: "Pilates"},
+		},
+	}
+	execCtx := &ExecutionContext{
+		Context:         context.Background(),
+		ClinicID:        uuid.New(),
+		ProcedureLister: lister,
+	}
+	result, _ := NewExecutor(NewRegistry()).Execute(execCtx, "list_procedures", map[string]interface{}{
+		"name_contains": "rpg", // string, not array
+	})
+	procs := result.([]*ProcedureInfo)
+	require.Len(t, procs, 1)
+	assert.Equal(t, "RPG", procs[0].Name)
+}
+
+func TestListProcedures_NameContainsFilter_EmptyTermsIgnored(t *testing.T) {
+	// LLM hallucinating ["", "RPG"] or [""] should not collapse the filter
+	// to "no filter" — empty/whitespace terms are dropped, not treated as
+	// "match anything".
+	lister := &stubProcedureLister{
+		result: []*ProcedureInfo{
+			{ID: uuid.New(), Name: "RPG"},
+			{ID: uuid.New(), Name: "Pilates"},
+		},
+	}
+	execCtx := &ExecutionContext{
+		Context:         context.Background(),
+		ClinicID:        uuid.New(),
+		ProcedureLister: lister,
+	}
+	result, _ := NewExecutor(NewRegistry()).Execute(execCtx, "list_procedures", map[string]interface{}{
+		"name_contains": []interface{}{"", "  ", "RPG"},
+	})
+	procs := result.([]*ProcedureInfo)
+	require.Len(t, procs, 1, "empty/whitespace terms must be dropped, not treated as match-everything")
+	assert.Equal(t, "RPG", procs[0].Name)
+}
+
+// Real-world bug: AI listed Hamilton + Thaiane as professionals for
+// "RPG — Avaliação", but neither has an active association with that
+// procedure. Without a procedure_id filter the tool returns all clinic
+// professionals and the LLM invents qualifications.
+
+func TestGetAvailableProfessionals_PassesProcedureIDToLister(t *testing.T) {
+	procID := uuid.New()
+	lister := &stubProfessionalLister{
+		result: []*ProfessionalInfo{
+			{ID: uuid.New(), Name: "Dr. Carlos"},
+		},
+	}
+	execCtx := &ExecutionContext{
+		Context:            context.Background(),
+		ClinicID:           uuid.New(),
+		ProfessionalLister: lister,
+	}
+
+	_, err := NewExecutor(NewRegistry()).Execute(execCtx, "get_available_professionals", map[string]interface{}{
+		"procedure_id": procID.String(),
+	})
+	require.NoError(t, err)
+	require.NotNil(t, lister.called.procedureID, "procedure_id from params must reach the lister so it can apply the join")
+	assert.Equal(t, procID, *lister.called.procedureID)
+}
+
+func TestGetAvailableProfessionals_NoProcedureIDPassesNil(t *testing.T) {
+	lister := &stubProfessionalLister{result: []*ProfessionalInfo{}}
+	execCtx := &ExecutionContext{
+		Context:            context.Background(),
+		ClinicID:           uuid.New(),
+		ProfessionalLister: lister,
+	}
+
+	_, err := NewExecutor(NewRegistry()).Execute(execCtx, "get_available_professionals", map[string]interface{}{})
+	require.NoError(t, err)
+	assert.Nil(t, lister.called.procedureID, "no param = no filter (full clinic professional list)")
+}
+
+func TestGetAvailableProfessionals_InvalidProcedureID_ReturnsError(t *testing.T) {
+	// Hallucinated procedure_id ("abc") must surface as an error so the LLM
+	// retries with the correct UUID instead of silently getting the full
+	// clinic list and listing unqualified professionals.
+	lister := &stubProfessionalLister{}
+	execCtx := &ExecutionContext{
+		Context:            context.Background(),
+		ClinicID:           uuid.New(),
+		ProfessionalLister: lister,
+	}
+
+	_, err := NewExecutor(NewRegistry()).Execute(execCtx, "get_available_professionals", map[string]interface{}{
+		"procedure_id": "not-a-uuid",
+	})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid procedure_id")
+}
+
+type stubMetadataWriter struct {
+	calls []struct {
+		convID uuid.UUID
+		key    string
+		value  interface{}
+	}
+}
+
+func (s *stubMetadataWriter) SetMetadata(_ context.Context, conversationID uuid.UUID, key string, value interface{}) error {
+	s.calls = append(s.calls, struct {
+		convID uuid.UUID
+		key    string
+		value  interface{}
+	}{conversationID, key, value})
+	return nil
+}
+
+func TestListProcedures_PersistsFilterSnapshotToConversationMetadata(t *testing.T) {
+	// After list_procedures runs with a filter, the next turn's prompt must
+	// be able to recall the active topic. This test pins down the contract:
+	// metadata is written under LastProcedureFilterMetadataKey with both the
+	// filter terms and the matched procedure names.
+	convID := uuid.New()
+	writer := &stubMetadataWriter{}
+	lister := &stubProcedureLister{
+		result: []*ProcedureInfo{
+			{ID: uuid.New(), Name: "RPG"},
+			{ID: uuid.New(), Name: "RPG — Avaliação"},
+			{ID: uuid.New(), Name: "Pilates"},
+		},
+	}
+
+	execCtx := &ExecutionContext{
+		Context:              context.Background(),
+		ClinicID:             uuid.New(),
+		ConversationID:       convID,
+		ProcedureLister:      lister,
+		ConversationMetadata: writer,
+	}
+
+	_, err := NewExecutor(NewRegistry()).Execute(execCtx, "list_procedures", map[string]interface{}{
+		"name_contains": []interface{}{"RPG"},
+	})
+	require.NoError(t, err)
+
+	require.Len(t, writer.calls, 1, "exactly one metadata write per filtered list_procedures call")
+	call := writer.calls[0]
+	assert.Equal(t, convID, call.convID, "metadata must be scoped to the current conversation")
+	assert.Equal(t, LastProcedureFilterMetadataKey, call.key)
+
+	snapshot, ok := call.value.(LastProcedureFilterSnapshot)
+	require.True(t, ok, "snapshot must use the typed shape so the prompt builder can decode it reliably")
+	assert.Equal(t, []string{"RPG"}, snapshot.Filter)
+	assert.ElementsMatch(t, []string{"RPG", "RPG — Avaliação"}, snapshot.Names)
+}
+
+func TestListProcedures_NoFilter_DoesNotPersistMetadata(t *testing.T) {
+	// list_procedures without a filter is "show me everything" — not a
+	// focused topic worth carrying forward. Persisting it would mislead the
+	// next turn's hint into thinking the patient is interested in 100
+	// random procedures.
+	writer := &stubMetadataWriter{}
+	lister := &stubProcedureLister{
+		result: []*ProcedureInfo{{ID: uuid.New(), Name: "RPG"}},
+	}
+	execCtx := &ExecutionContext{
+		Context:              context.Background(),
+		ClinicID:             uuid.New(),
+		ConversationID:       uuid.New(),
+		ProcedureLister:      lister,
+		ConversationMetadata: writer,
+	}
+
+	_, _ = NewExecutor(NewRegistry()).Execute(execCtx, "list_procedures", map[string]interface{}{})
+
+	assert.Empty(t, writer.calls, "no filter = no topic snapshot")
+}
+
+func TestListProcedures_NoFilter_ReturnsAll(t *testing.T) {
+	// Regression: empty params still returns full catalog.
+	lister := &stubProcedureLister{
+		result: []*ProcedureInfo{
+			{ID: uuid.New(), Name: "RPG"},
+			{ID: uuid.New(), Name: "Pilates"},
+		},
+	}
+	execCtx := &ExecutionContext{
+		Context:         context.Background(),
+		ClinicID:        uuid.New(),
+		ProcedureLister: lister,
+	}
+
+	result, _ := NewExecutor(NewRegistry()).Execute(execCtx, "list_procedures", map[string]interface{}{})
+	assert.Len(t, result.([]*ProcedureInfo), 2)
+}
+
+func TestCompleteHandoff_PropagatesMarkerError(t *testing.T) {
+	marker := &stubHumanTakeoverMarker{err: assert.AnError}
+	execCtx := &ExecutionContext{
+		Context:             context.Background(),
+		ClinicID:            uuid.New(),
+		PatientPhone:        "5551999990001",
+		HumanTakeoverMarker: marker,
+		BlockedIntentReply:  "aguarde",
+	}
+
+	_, err := NewExecutor(NewRegistry()).Execute(execCtx, "complete_handoff_to_human", map[string]interface{}{})
+	assert.Error(t, err, "DB failures during Mark must propagate so the LLM can retry rather than silently 'succeed'")
 }

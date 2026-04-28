@@ -102,13 +102,13 @@ func (m *mockReceiptTokenRepo) GetByToken(_ context.Context, token uuid.UUID) (*
 func newReceiptAppointment(clinicID uuid.UUID) *model.Appointment {
 	start := time.Date(2026, 4, 15, 14, 0, 0, 0, time.UTC)
 	return &model.Appointment{
-		ID:         uuid.New(),
-		ClinicID:   clinicID,
-		PatientID:  uuid.New(),
-		StartTime:  start,
-		EndTime:    start.Add(60 * time.Minute),
-		Price:      200,
-		Patient:    &model.PatientInfo{ID: uuid.New(), Name: "Maria da Silva"},
+		ID:           uuid.New(),
+		ClinicID:     clinicID,
+		PatientID:    uuid.New(),
+		StartTime:    start,
+		EndTime:      start.Add(60 * time.Minute),
+		Price:        200,
+		Patient:      &model.PatientInfo{ID: uuid.New(), Name: "Maria da Silva"},
 		Professional: &model.ProfessionalInfo{Name: "Dr. Joao"},
 	}
 }

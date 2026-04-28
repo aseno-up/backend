@@ -31,6 +31,7 @@ func NewRegistry() *Registry {
 	r.registerAppointmentManagementTools()
 	r.registerInformationTools()
 	r.registerCatalogTools()
+	r.registerHandoffTools()
 
 	return r
 }
@@ -174,13 +175,17 @@ func (r *Registry) registerSlotManagementTools() {
 	// get_available_professionals
 	r.register(&Tool{
 		Name:        "get_available_professionals",
-		Description: "Lista profissionais ativos da clínica com suas especialidades e horário de trabalho semanal (working_hours). Use para responder perguntas como 'vocês têm fisioterapeuta?', 'quando a Thaiane atende?' ou 'quem atende segunda de manhã?'. Retorna array com: id, name, specialties[{id,name}], working_hours{monday,tuesday,...}. Para filtrar por specialty, passe o NOME EXATO retornado por list_specialties (case-insensitive). NUNCA passe termos aproximados sem consultar list_specialties antes — o filtro é estrito.",
+		Description: "Lista profissionais ativos da clínica com suas especialidades e horário de trabalho semanal (working_hours). Use para responder perguntas como 'vocês têm fisioterapeuta?', 'quando a Thaiane atende?' ou 'quem atende segunda de manhã?'. Quando o paciente já escolheu um procedimento específico, SEMPRE passe procedure_id pra ver SÓ os profissionais qualificados — sem isso, a tool retorna todos da clínica e você não sabe quem realmente faz aquele procedimento. Retorna array com: id, name, specialties[{id,name}], working_hours{monday,tuesday,...}.",
 		Parameters: &genai.Schema{
 			Type: genai.TypeObject,
 			Properties: map[string]*genai.Schema{
 				"specialty": {
 					Type:        genai.TypeString,
 					Description: "Filtrar por nome EXATO da especialidade (opcional), conforme retornado por list_specialties. Case-insensitive. Se o paciente usar termo aproximado (ex: 'fisioterapia'), descubra o nome canônico via list_specialties (ex: 'Fisioterapeuta') primeiro.",
+				},
+				"procedure_id": {
+					Type:        genai.TypeString,
+					Description: "UUID de um procedimento (do campo 'id' de list_procedures). Quando passado, filtra a resposta para conter SÓ os profissionais que têm associação ativa com aquele procedimento. Use SEMPRE que o paciente já escolheu o procedimento (ex: 'Avaliação de RPG') — sem esse filtro a tool retorna todos os profissionais da clínica e você pode listar quem não faz aquele procedimento. Se vier vazio, ninguém na clínica faz aquele procedimento — diga isso ao paciente em vez de inventar nomes.",
 				},
 			},
 		},
@@ -189,14 +194,14 @@ func (r *Registry) registerSlotManagementTools() {
 	// get_available_slots
 	r.register(&Tool{
 		Name:        "get_available_slots",
-		Description: "Busca horários disponíveis para agendamento. Busca automaticamente nos próximos 7 dias até encontrar horários. Retorna até 5 opções de horários livres. NUNCA retorna vazio se houver slots disponíveis na semana.",
+		Description: "Busca horários disponíveis. Sem time_filter retorna AMOSTRA de até 4 horários distribuídos pelo dia (não a lista completa). Quando o paciente perguntar por um horário ESPECÍFICO (ex: 'tem 11h amanhã?'), passe date + time_filter — a tool valida AQUELE horário exato no banco em vez de você adivinhar pela amostra anterior.",
 		Parameters: &genai.Schema{
 			Type:     genai.TypeObject,
 			Required: []string{}, // All parameters are optional
 			Properties: map[string]*genai.Schema{
 				"professional_id": {
 					Type:        genai.TypeString,
-					Description: "UUID of the professional. OMIT THIS PARAMETER to search across all professionals. MUST be a valid UUID from get_available_professionals result, never use names or invent values.",
+					Description: "UUID do profissional (do campo 'id' de get_available_professionals). OMIT pra buscar em todos. NUNCA invente UUIDs.",
 				},
 				"professional_name": {
 					Type:        genai.TypeString,
@@ -204,15 +209,23 @@ func (r *Registry) registerSlotManagementTools() {
 				},
 				"date": {
 					Type:        genai.TypeString,
-					Description: "Start date in YYYY-MM-DD format. OMIT THIS PARAMETER to search from today automatically. Only provide if you need a specific future date. Never use past dates.",
+					Description: "Data início no formato YYYY-MM-DD. OMIT pra buscar a partir de hoje. Use sempre que o paciente disser 'amanhã', 'sexta', etc — converta pra YYYY-MM-DD antes.",
+				},
+				"time_filter": {
+					Type:        genai.TypeString,
+					Description: "Horário específico HH:MM que o paciente pediu (ex: '11:00', '14:30'). Quando passado, a tool retorna SOMENTE esse horário se estiver livre, ou vazio se ocupado/fora do expediente. Use SEMPRE que o paciente perguntar 'tem HH:MM?' ou der um horário exato — em vez de procurar na amostra anterior (que pode ter cortado o slot pedido por causa do sample distribuído). Combine com date pra fazer a checagem cirúrgica do dia/hora pedido.",
+				},
+				"procedure_id": {
+					Type:        genai.TypeString,
+					Description: "UUID do procedimento (do campo 'id' de list_procedures). Quando passado, a tool retorna APENAS slots de profissionais qualificados pra esse procedimento (via professional_procedures). USE SEMPRE que o paciente já escolheu o procedimento — sem isso a tool retorna slots de qualquer profissional, inclusive os que não fazem aquele procedimento (alucinação). Se ninguém faz, retorna vazio — diga ao paciente que não tem profissional cadastrado em vez de inventar.",
 				},
 				"duration_minutes": {
 					Type:        genai.TypeInteger,
-					Description: "Consultation duration in minutes. OMIT THIS PARAMETER to use default of 60 minutes. Only provide if a different duration is needed.",
+					Description: "Duração da consulta em minutos. OMIT pra usar 60. Use o valor de duration_minutes do procedimento (vem em list_procedures).",
 				},
 				"days_ahead": {
 					Type:        genai.TypeInteger,
-					Description: "How many days ahead to search. OMIT THIS PARAMETER to use default of 7 days. Only provide if a different range is needed.",
+					Description: "Quantos dias buscar à frente. OMIT pra usar 7. Quando passar time_filter + date, omita esse param (a busca é cirúrgica num dia só).",
 				},
 			},
 		},
@@ -262,7 +275,7 @@ func (r *Registry) registerAppointmentManagementTools() {
 			Properties: map[string]*genai.Schema{
 				"professional_id": {
 					Type:        genai.TypeString,
-					Description: "The UUID from the \"id\" field returned by get_available_professionals (e.g. \"<UUID_FROM_PROFESSIONALS_LIST>\"). REQUIRED. MUST be a valid UUID in xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx format. NEVER pass names, text, or invented values.",
+					Description: "The UUID from the \"id\" field returned by get_available_professionals. REQUIRED. MUST be a valid UUID in xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx format. NEVER pass names, text, or invented values.",
 				},
 				"start_time": {
 					Type:        genai.TypeString,
@@ -289,7 +302,7 @@ func (r *Registry) registerAppointmentManagementTools() {
 			Properties: map[string]*genai.Schema{
 				"appointment_id": {
 					Type:        genai.TypeString,
-					Description: "UUID of the appointment (e.g. '<UUID_FROM_APPOINTMENTS_LIST>'). OMIT THIS PARAMETER if there is only one pending appointment - system will auto-detect. MUST be valid UUID format.",
+					Description: "UUID of the appointment. OMIT THIS PARAMETER if there is only one pending appointment - system will auto-detect. MUST be valid UUID format.",
 				},
 			},
 		},
@@ -364,7 +377,7 @@ func (r *Registry) registerAppointmentManagementTools() {
 			Properties: map[string]*genai.Schema{
 				"appointment_id": {
 					Type:        genai.TypeString,
-					Description: "UUID of the appointment to reschedule (e.g. '<UUID_FROM_APPOINTMENTS_LIST>'). REQUIRED. MUST be valid UUID format.",
+					Description: "UUID of the appointment to reschedule. REQUIRED. MUST be valid UUID format.",
 				},
 				"new_start_time": {
 					Type:        genai.TypeString,
@@ -481,6 +494,89 @@ func (r *Registry) registerInformationTools() {
 	})
 }
 
+// registerHandoffTools registers tools used in handoff mode (clinic has the
+// action tool — schedule/reschedule/cancel — disabled). The only tool here
+// is complete_handoff_to_human, which marks the existing per-patient takeover
+// after the LLM has gathered enough context for the human team to act.
+func (r *Registry) registerHandoffTools() {
+	r.register(&Tool{
+		Name:        "complete_handoff_to_human",
+		Description: "Sinaliza que a coleta de contexto terminou e o time humano deve assumir a conversa. Chame APENAS quando você tiver coletado tipo de atendimento + dia/horário + profissional (ou quando o paciente disse 'qualquer um' para algum). Esta tool registra a transferência no sistema (silenciando suas respostas até o time humano assumir) e retorna a mensagem que será enviada ao paciente. Sem argumentos.",
+		Parameters: &genai.Schema{
+			Type:       genai.TypeObject,
+			Properties: map[string]*genai.Schema{},
+		},
+	})
+}
+
+// FilteredOpenRouterFunctionDeclarations returns OpenRouter-compatible
+// declarations after applying the (optional) allow whitelist and (optional)
+// disallow blacklist. Order: whitelist first (or all if empty), then remove
+// blacklisted names. Used by per-request tool gating — handoff mode passes
+// an explicit whitelist, every request passes the clinic-flag blacklist.
+func (r *Registry) FilteredOpenRouterFunctionDeclarations(allowed, disallowed []string) []OpenRouterTool {
+	disallowSet := setOf(disallowed)
+	allowSet := setOf(allowed)
+	useWhitelist := len(allowed) > 0
+
+	out := make([]OpenRouterTool, 0, len(r.tools))
+	for _, tool := range r.tools {
+		if useWhitelist {
+			if _, ok := allowSet[tool.Name]; !ok {
+				continue
+			}
+		}
+		if _, ok := disallowSet[tool.Name]; ok {
+			continue
+		}
+		out = append(out, OpenRouterTool{
+			Type: "function",
+			Function: OpenRouterFunction{
+				Name:        tool.Name,
+				Description: tool.Description,
+				Parameters:  convertGeminiSchemaToOpenRouter(tool.Parameters),
+			},
+		})
+	}
+	return out
+}
+
+// FilteredGeminiFunctionDeclarations is the Gemini variant — same semantics.
+func (r *Registry) FilteredGeminiFunctionDeclarations(allowed, disallowed []string) []*genai.FunctionDeclaration {
+	disallowSet := setOf(disallowed)
+	allowSet := setOf(allowed)
+	useWhitelist := len(allowed) > 0
+
+	out := make([]*genai.FunctionDeclaration, 0, len(r.tools))
+	for _, tool := range r.tools {
+		if useWhitelist {
+			if _, ok := allowSet[tool.Name]; !ok {
+				continue
+			}
+		}
+		if _, ok := disallowSet[tool.Name]; ok {
+			continue
+		}
+		out = append(out, &genai.FunctionDeclaration{
+			Name:        tool.Name,
+			Description: tool.Description,
+			Parameters:  tool.Parameters,
+		})
+	}
+	return out
+}
+
+func setOf(names []string) map[string]struct{} {
+	if len(names) == 0 {
+		return nil
+	}
+	s := make(map[string]struct{}, len(names))
+	for _, n := range names {
+		s[n] = struct{}{}
+	}
+	return s
+}
+
 // registerCatalogTools registers tools that expose the clinic catalog
 // (specialties, procedures with prices and duration) so the AI can answer
 // pricing questions and discover the clinic's taxonomy at runtime.
@@ -498,13 +594,20 @@ func (r *Registry) registerCatalogTools() {
 	// list_procedures
 	r.register(&Tool{
 		Name:        "list_procedures",
-		Description: "Lista os procedimentos/serviços oferecidos pela clínica com preço e duração. Use para responder perguntas como 'quanto custa uma massoterapia?', 'quais serviços vocês oferecem?', 'qual o valor da consulta de X?'. Retorna array com: id, name, price (em reais), duration_minutes, specialty_name. Para filtrar por specialty, passe o NOME EXATO retornado por list_specialties (chame list_specialties primeiro).",
+		Description: "Lista os procedimentos/serviços oferecidos pela clínica com preço e duração. Use para responder perguntas como 'quanto custa uma massoterapia?', 'quais serviços vocês oferecem?', 'qual o valor da consulta de X?'. Retorna array com: id, name, price (em reais), duration_minutes, specialty_name. Pra perguntas tipo 'vocês têm/fazem X?' onde X pode ser nome de procedimento OU especialidade, prefira o parâmetro name_contains (filtra por substring no nome) — é mais robusto que specialty pois pega procedimentos com nomes parecidos em qualquer especialidade.",
 		Parameters: &genai.Schema{
 			Type: genai.TypeObject,
 			Properties: map[string]*genai.Schema{
 				"specialty": {
 					Type:        genai.TypeString,
-					Description: "Filtrar por nome EXATO da especialidade (opcional), conforme retornado por list_specialties. Case-insensitive. Se o paciente usar termo aproximado, descubra o nome canônico via list_specialties primeiro.",
+					Description: "Filtrar por nome EXATO da especialidade (opcional), conforme retornado por list_specialties. Use SÓ pra perguntas claramente sobre uma área inteira (ex: 'todos procedimentos de fisioterapia'). NÃO use pra perguntas tipo 'vocês têm RPG?' — use name_contains pra esse caso.",
+				},
+				"name_contains": {
+					Type: genai.TypeArray,
+					Items: &genai.Schema{
+						Type: genai.TypeString,
+					},
+					Description: "Lista de termos pra filtrar por substring no nome do procedimento. Case-insensitive E accent-insensitive: 'avaliacao' casa com 'Avaliação'. OR semântico: um procedimento entra se qualquer termo da lista estiver no nome. Use pra cobrir sigla + nome completo numa só chamada (ex: ['RPG', 'Reeducação Postural Global']) ou variações que o paciente pode usar (ex: ['drenagem', 'linfática']). Pode passar 1 termo só (['RPG']) se for específico. Retorna TODOS os procedimentos que casam, em qualquer especialidade. Mais robusto que specialty pra termos ambíguos.",
 				},
 			},
 		},

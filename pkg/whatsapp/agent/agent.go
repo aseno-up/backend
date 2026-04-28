@@ -19,6 +19,23 @@ type AgentRequest struct {
 	// HistoryTurns limits how many past turns are injected into the prompt.
 	// 0 uses the package default (DefaultPromptHistoryTurns = 10).
 	HistoryTurns int
+
+	// AllowedTools restricts which tools are exposed to the LLM for this
+	// request. When nil/empty, the full registry is exposed (default).
+	// Reserved as a primitive — current flow does not set it, the per-clinic
+	// gating goes through DisallowedTools instead.
+	AllowedTools []string
+	// DisallowedTools is a blacklist set per-request from the clinic's
+	// AITool* flags (Schedule/Cancel/Reschedule/Confirm). Write tools the
+	// clinic disabled are filtered out of the LLM's view, regardless of
+	// intent. The LLM falls back to complete_handoff_to_human when it would
+	// have called a now-blacklisted tool.
+	DisallowedTools []string
+	// BlockedIntentReply is the resolved canned reply for this clinic. It is
+	// the patient-facing message that complete_handoff_to_human returns when
+	// the LLM transfers the conversation to the human team. Plumbed on every
+	// request so the tool can render the right wording per clinic.
+	BlockedIntentReply string
 }
 
 // AgentResponse represents the agent's response

@@ -42,7 +42,8 @@ func (s *stubAIAgentService) ShouldUseAIAgent(_ model.MessageIntent, _ *clinic_m
 	return true
 }
 
-func (s *stubAIAgentService) SetPromptHistoryTurns(_ int) {}
+func (s *stubAIAgentService) SetPromptHistoryTurns(_ int)            {}
+func (s *stubAIAgentService) SetTemperatures(_ float32, _ float32)   {}
 
 func (s *stubAIAgentService) callCount() int {
 	s.mu.Lock()

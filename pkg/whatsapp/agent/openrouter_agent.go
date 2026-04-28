@@ -206,11 +206,21 @@ func (a *openRouterAgent) generateWithModel(ctx context.Context, req *AgentReque
 	// Track tool calls made during this turn
 	var allToolCalls []conversation.ToolCall
 
-	// Get tools in OpenRouter format
-	toolDeclarations := a.toolRegistry.GetOpenRouterFunctionDeclarations()
+	// Get tools in OpenRouter format. AllowedTools whitelist (e.g. handoff
+	// mode) restricts the LLM physically — the schedule/cancel tools are
+	// not even visible, so the LLM cannot violate the clinic's policy by
+	// hallucinating a tool call.
+	toolDeclarations := a.toolRegistry.FilteredOpenRouterFunctionDeclarations(req.AllowedTools, req.DisallowedTools)
 
 	// Handle multi-turn function calling
-	maxIterations := 5
+	// 5 iterations was too low for the unified handoff flow: gather usually
+	// needs list_procedures + get_available_professionals(procedure_id) +
+	// get_available_slots, plus re-validations when the patient changes
+	// preference mid-flow. gpt-4o-mini hit the cap with finish_reason=
+	// "tool_calls" and returned empty content, falling back to a weaker
+	// model that produced "Vou verificar..." dead-ends. 10 covers the
+	// typical worst case while still preventing genuine infinite loops.
+	maxIterations := 10
 	var finalResponse *openRouterResponse
 
 	for i := 0; i < maxIterations; i++ {
@@ -327,10 +337,27 @@ func (a *openRouterAgent) generateWithModel(ctx context.Context, req *AgentReque
 		responseText = finalResponse.Choices[0].Message.Content
 	}
 
-	// Validate response is not empty
+	// Validate response is not empty. When this fires, capture as much
+	// diagnostic context as possible — primary cause of the "AI stopped
+	// responding" outage on Renascer was an empty response that gave us
+	// nothing to debug. finish_reason and tool-call count are the two most
+	// useful signals: "tool_calls" finish reason means the model wanted
+	// MORE tool calls but hit our maxIterations cap, "length" means the
+	// output was truncated by max_tokens, "stop" with empty content means
+	// the model genuinely produced nothing.
 	trimmedResponse := strings.TrimSpace(responseText)
 	if trimmedResponse == "" {
-		return nil, fmt.Errorf("empty or whitespace-only response from OpenRouter (tool calls: %d)", len(allToolCalls))
+		finishReason := ""
+		if len(finalResponse.Choices) > 0 {
+			finishReason = finalResponse.Choices[0].FinishReason
+		}
+		toolNames := make([]string, 0, len(allToolCalls))
+		for _, tc := range allToolCalls {
+			toolNames = append(toolNames, tc.Name)
+		}
+		return nil, fmt.Errorf("empty or whitespace-only response from OpenRouter (model=%s, finish_reason=%q, tool_calls=%d [%s], prompt_tokens=%d, completion_tokens=%d)",
+			modelName, finishReason, len(allToolCalls), strings.Join(toolNames, ","),
+			finalResponse.Usage.PromptTokens, finalResponse.Usage.CompletionTokens)
 	}
 
 	// Build agent response

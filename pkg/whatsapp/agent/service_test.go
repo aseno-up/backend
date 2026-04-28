@@ -65,22 +65,19 @@ func TestShouldUseAIAgent_UnknownAlwaysAllowedWhenAgentOn(t *testing.T) {
 		"Unknown must reach the AI so it can reclassify or ask clarification")
 }
 
-func TestShouldUseAIAgent_ClinicOverrideBlocksScheduling(t *testing.T) {
+func TestShouldUseAIAgent_ClinicConfigDoesNotBlockGate(t *testing.T) {
+	// Unification: per-clinic AITool* flags no longer block ShouldUseAIAgent.
+	// They are enforced INSIDE the agent (via DisallowedTools) so the agent
+	// still runs for blocked intents and routes through complete_handoff_to_human
+	// instead of returning a canned reply. ShouldUseAIAgent only enforces the
+	// global kill-switch.
 	svc := newSvc(allToolsGlobalOn())
-	c := clinicWithTools(boolPtr(false), nil, nil, nil)
-	assert.False(t, svc.ShouldUseAIAgent(model.MessageIntentSchedule, c))
-	assert.True(t, svc.ShouldUseAIAgent(model.MessageIntentConfirm, c), "other tools unaffected")
-	assert.True(t, svc.ShouldUseAIAgent(model.MessageIntentCancel, c))
+	c := clinicWithTools(boolPtr(false), boolPtr(false), boolPtr(false), boolPtr(false))
+	assert.True(t, svc.ShouldUseAIAgent(model.MessageIntentSchedule, c),
+		"clinic-disabled tools must NOT block the agent — DisallowedTools handles tool-level filtering inside ProcessMessage")
 	assert.True(t, svc.ShouldUseAIAgent(model.MessageIntentReschedule, c))
-}
-
-func TestShouldUseAIAgent_ClinicOverrideBlocksReschedule_IndependentFromCancel(t *testing.T) {
-	svc := newSvc(allToolsGlobalOn())
-	c := clinicWithTools(nil, nil, nil, boolPtr(false))
-	assert.False(t, svc.ShouldUseAIAgent(model.MessageIntentReschedule, c),
-		"Reschedule disabled must only block reschedule")
-	assert.True(t, svc.ShouldUseAIAgent(model.MessageIntentCancel, c),
-		"Cancel must not be coupled to Reschedule flag (regression of old bug)")
+	assert.True(t, svc.ShouldUseAIAgent(model.MessageIntentCancel, c))
+	assert.True(t, svc.ShouldUseAIAgent(model.MessageIntentConfirm, c))
 }
 
 func TestShouldUseAIAgent_NilClinicDefaultsAllowed(t *testing.T) {
@@ -106,14 +103,17 @@ func TestShouldUseAIAgent_GlobalKillSwitchBlocksEvenIfClinicAllows(t *testing.T)
 	assert.False(t, svc.ShouldUseAIAgent(model.MessageIntentReschedule, c))
 }
 
-func TestShouldUseAIAgent_GlobalAllowClinicBlocksOne(t *testing.T) {
+func TestShouldUseAIAgent_GlobalAllowClinicBlocksOne_NoLongerBlocks(t *testing.T) {
+	// Post-unification: clinic-level Reschedule=false no longer blocks the
+	// gate (DisallowedTools handles it). All four return true here because
+	// the global kill-switch is on.
 	svc := newSvc(allToolsGlobalOn())
 	c := clinicWithTools(boolPtr(true), boolPtr(true), boolPtr(true), boolPtr(false))
 	assert.True(t, svc.ShouldUseAIAgent(model.MessageIntentSchedule, c))
 	assert.True(t, svc.ShouldUseAIAgent(model.MessageIntentConfirm, c))
 	assert.True(t, svc.ShouldUseAIAgent(model.MessageIntentCancel, c))
-	assert.False(t, svc.ShouldUseAIAgent(model.MessageIntentReschedule, c),
-		"clinic turns reschedule off, global stays on — reschedule must be blocked")
+	assert.True(t, svc.ShouldUseAIAgent(model.MessageIntentReschedule, c),
+		"clinic-level config no longer affects ShouldUseAIAgent — DisallowedTools enforces it inside the agent")
 }
 
 func TestBlockedIntentReply_DefaultWhenEmpty(t *testing.T) {
@@ -140,11 +140,13 @@ func TestBlockedIntentReply_NilClinicUsesDefault(t *testing.T) {
 
 type fakeAgent struct {
 	generateCalls int
+	lastRequest   *AgentRequest
 	response      *AgentResponse
 }
 
-func (f *fakeAgent) Generate(_ context.Context, _ *AgentRequest) (*AgentResponse, error) {
+func (f *fakeAgent) Generate(_ context.Context, req *AgentRequest) (*AgentResponse, error) {
 	f.generateCalls++
+	f.lastRequest = req
 	if f.response != nil {
 		return f.response, nil
 	}
@@ -256,7 +258,12 @@ func buildSvcWithGate(clinic *clinic_model.Clinic, flags *FeatureFlags, fa *fake
 	}
 }
 
-func TestProcessMessage_BlockedIntent_ReturnsCannedAndSkipsLLM(t *testing.T) {
+// Blocked intent path: instead of returning the canned reply directly, the
+// service must run the LLM in handoff mode so it can gather context (tipo /
+// dia-horário / profissional) before triggering the existing human-takeover
+// gate. The team takes over with the conversation pre-loaded.
+
+func TestProcessMessage_BlockedIntent_CallsGenerateInHandoffMode(t *testing.T) {
 	clinic := &clinic_model.Clinic{
 		ID: uuid.New(),
 		Settings: clinic_model.ClinicSettings{
@@ -264,11 +271,11 @@ func TestProcessMessage_BlockedIntent_ReturnsCannedAndSkipsLLM(t *testing.T) {
 			AIToolReschedule: boolPtr(false),
 		},
 	}
-	fa := &fakeAgent{}
+	fa := &fakeAgent{response: &AgentResponse{Content: "Que tipo de consulta? E para quando?"}}
 	fcm := newFakeConvManager()
 	svc := buildSvcWithGate(clinic, allToolsGlobalOn(), fa, fcm)
 
-	resp, err := svc.ProcessMessage(context.Background(), &MessageRequest{
+	_, err := svc.ProcessMessage(context.Background(), &MessageRequest{
 		ClinicID:     clinic.ID,
 		PatientPhone: "+5511999990000",
 		PatientName:  "Ana",
@@ -277,39 +284,242 @@ func TestProcessMessage_BlockedIntent_ReturnsCannedAndSkipsLLM(t *testing.T) {
 	})
 
 	require.NoError(t, err)
-	require.NotNil(t, resp)
-	assert.Equal(t, 0, fa.generateCalls, "agent.Generate must NOT be called when intent is blocked")
-	assert.NotEmpty(t, resp.Segments, "canned response must produce a segment")
-	assert.Equal(t, resp.ResponseText, resp.Segments[0].Content)
-	assert.Contains(t, resp.ResponseText, "minutinho", "default canned text should be used when clinic has no custom")
-	assert.Equal(t, []string{"quero remarcar minha consulta"}, fcm.userMessages,
-		"user message must be persisted so later intent classification has context")
-	assert.Len(t, fcm.assistantMsgs, 1, "canned assistant reply must be persisted to conversation history")
-	assert.Equal(t, resp.ResponseText, fcm.assistantMsgs[0])
+	require.Equal(t, 1, fa.generateCalls, "Generate must run — clinic-disabled tools no longer block the agent, only filter the toolset")
+	require.NotNil(t, fa.lastRequest)
+
+	// Unified flow: write tools the clinic disabled appear in DisallowedTools
+	// (filtered at registry level). The LLM falls back to
+	// complete_handoff_to_human via the prompt rule.
+	disallowed := fa.lastRequest.DisallowedTools
+	bannedWrite := []string{"reschedule_appointment", "quick_reschedule"}
+	for _, banned := range bannedWrite {
+		assert.Contains(t, disallowed, banned, "write tool %q must be blacklisted because clinic disabled AIToolReschedule", banned)
+	}
+	assert.NotEmpty(t, fa.lastRequest.BlockedIntentReply, "the canned reply must be plumbed so complete_handoff_to_human can return it as the patient-facing message")
 }
 
-func TestProcessMessage_BlockedIntent_UsesClinicCustomReply(t *testing.T) {
+func TestProcessMessage_BlockedIntent_PassesClinicConfiguredCannedReply(t *testing.T) {
+	custom := "Aguarde, vamos te ligar."
 	clinic := &clinic_model.Clinic{
 		ID: uuid.New(),
 		Settings: clinic_model.ClinicSettings{
 			AIAgentEnabled:       true,
 			AIToolReschedule:     boolPtr(false),
-			AIBlockedIntentReply: "Aguarde, vamos te ligar.",
+			AIBlockedIntentReply: custom,
 		},
 	}
-	fa := &fakeAgent{}
+	fa := &fakeAgent{response: &AgentResponse{Content: "ok"}}
 	fcm := newFakeConvManager()
 	svc := buildSvcWithGate(clinic, allToolsGlobalOn(), fa, fcm)
 
-	resp, err := svc.ProcessMessage(context.Background(), &MessageRequest{
+	_, err := svc.ProcessMessage(context.Background(), &MessageRequest{
 		ClinicID:     clinic.ID,
 		PatientPhone: "+5511999990000",
 		MessageText:  "quero remarcar",
 		Intent:       model.MessageIntentReschedule,
 	})
 	require.NoError(t, err)
-	assert.Equal(t, "Aguarde, vamos te ligar.", resp.ResponseText)
-	assert.Equal(t, 0, fa.generateCalls)
+	require.NotNil(t, fa.lastRequest)
+	assert.Equal(t, custom, fa.lastRequest.BlockedIntentReply,
+		"clinic-configured canned reply must reach the agent so the handoff tool returns the right text")
+}
+
+func TestProcessMessage_BlockedIntent_PersistsUserMessageBeforeHandoff(t *testing.T) {
+	// The team needs to see the patient's original message when they take
+	// over. Persisting it early means even if the LLM call later fails, the
+	// message is already in conversation history.
+	clinic := &clinic_model.Clinic{
+		ID: uuid.New(),
+		Settings: clinic_model.ClinicSettings{
+			AIAgentEnabled: true,
+			AIToolCancel:   boolPtr(false),
+		},
+	}
+	fa := &fakeAgent{response: &AgentResponse{Content: "qual aula você quer cancelar?"}}
+	fcm := newFakeConvManager()
+	svc := buildSvcWithGate(clinic, allToolsGlobalOn(), fa, fcm)
+
+	_, err := svc.ProcessMessage(context.Background(), &MessageRequest{
+		ClinicID:     clinic.ID,
+		PatientPhone: "+5511999990000",
+		MessageText:  "quero cancelar",
+		Intent:       model.MessageIntentCancel,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"quero cancelar"}, fcm.userMessages,
+		"patient message must be persisted exactly once even when the path goes through handoff mode")
+}
+
+func TestProcessMessage_BlockedIntent_UsesHandoffTemperature(t *testing.T) {
+	// Handoff temperature must be lower than the conversational default
+	// because handoff mode requires strict rule-following (call list_procedures
+	// when type is vague, format R$ X,XX, never call complete_handoff_to_human
+	// before gathering). Higher temp = more likely to skip rules.
+	clinic := &clinic_model.Clinic{
+		ID: uuid.New(),
+		Settings: clinic_model.ClinicSettings{
+			AIAgentEnabled:   true,
+			AIToolReschedule: boolPtr(false),
+		},
+	}
+	fa := &fakeAgent{response: &AgentResponse{Content: "que tipo?"}}
+	fcm := newFakeConvManager()
+	svc := buildSvcWithGate(clinic, allToolsGlobalOn(), fa, fcm)
+	svc.SetTemperatures(0.5, 0.3)
+
+	_, err := svc.ProcessMessage(context.Background(), &MessageRequest{
+		ClinicID:     clinic.ID,
+		PatientPhone: "+5511999990000",
+		MessageText:  "quero remarcar",
+		Intent:       model.MessageIntentReschedule,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, fa.lastRequest)
+	assert.InDelta(t, 0.3, fa.lastRequest.Temperature, 0.001,
+		"handoff mode must use the configured handoff temperature so the LLM follows strict gather rules")
+}
+
+func TestProcessMessage_NormalIntent_UsesConfiguredAgentTemperature(t *testing.T) {
+	// Regression: env-configured temperature must reach the request. Before
+	// the fix, service.go had Temperature:0.7 hardcoded and the env var was
+	// silently dropped on the floor.
+	clinic := &clinic_model.Clinic{
+		ID:       uuid.New(),
+		Settings: clinic_model.ClinicSettings{AIAgentEnabled: true},
+	}
+	fa := &fakeAgent{response: &AgentResponse{Content: "ok"}}
+	fcm := newFakeConvManager()
+	svc := buildSvcWithGate(clinic, allToolsGlobalOn(), fa, fcm)
+	svc.SetTemperatures(0.5, 0.3)
+
+	_, err := svc.ProcessMessage(context.Background(), &MessageRequest{
+		ClinicID:     clinic.ID,
+		PatientPhone: "+5511999990000",
+		MessageText:  "tudo certo?",
+		Intent:       model.MessageIntentConfirm,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, fa.lastRequest)
+	assert.InDelta(t, 0.5, fa.lastRequest.Temperature, 0.001,
+		"normal flow must use the configured agent temperature, not a hardcoded value")
+}
+
+// Real-world bug: clinic Renascer had AIToolSchedule=false, AIToolCancel=false,
+// AIToolReschedule=false, AIToolConfirm=false. AI in middle of multi-turn
+// scheduling conversation classified one message as Unknown (e.g. "com
+// hamilton"), which makes ShouldUseAIAgent return true regardless of clinic
+// flags — AI got full toolset including quick_schedule and CREATED an
+// appointment. The fix: per-clinic disabled tools must be filtered out of
+// the toolset on EVERY request, not just when intent is Schedule/Cancel/etc.
+
+func TestProcessMessage_DisabledScheduleTools_BlacklistedEvenForQuestionIntent(t *testing.T) {
+	clinic := &clinic_model.Clinic{
+		ID: uuid.New(),
+		Settings: clinic_model.ClinicSettings{
+			AIAgentEnabled: true,
+			AIToolSchedule: boolPtr(false),
+		},
+	}
+	fa := &fakeAgent{response: &AgentResponse{Content: "ok"}}
+	fcm := newFakeConvManager()
+	svc := buildSvcWithGate(clinic, allToolsGlobalOn(), fa, fcm)
+
+	_, err := svc.ProcessMessage(context.Background(), &MessageRequest{
+		ClinicID:     clinic.ID,
+		PatientPhone: "+5511999990000",
+		MessageText:  "vocês fazem fisioterapia?",
+		Intent:       model.MessageIntentQuestion, // bypass intent — but tools must still be filtered
+	})
+	require.NoError(t, err)
+	require.NotNil(t, fa.lastRequest)
+
+	// Schedule write tools must be blacklisted because clinic disabled them.
+	disallowed := fa.lastRequest.DisallowedTools
+	assert.Contains(t, disallowed, "create_appointment", "AIToolSchedule=false must blacklist create_appointment even on Question intent")
+	assert.Contains(t, disallowed, "quick_schedule", "AIToolSchedule=false must blacklist quick_schedule even on Question intent")
+}
+
+func TestProcessMessage_DisabledTools_AllFlagsRespected(t *testing.T) {
+	// All four tool flags off (Renascer setup): every write tool blacklisted.
+	clinic := &clinic_model.Clinic{
+		ID: uuid.New(),
+		Settings: clinic_model.ClinicSettings{
+			AIAgentEnabled:   true,
+			AIToolSchedule:   boolPtr(false),
+			AIToolConfirm:    boolPtr(false),
+			AIToolCancel:     boolPtr(false),
+			AIToolReschedule: boolPtr(false),
+		},
+	}
+	fa := &fakeAgent{response: &AgentResponse{Content: "ok"}}
+	fcm := newFakeConvManager()
+	svc := buildSvcWithGate(clinic, allToolsGlobalOn(), fa, fcm)
+
+	_, err := svc.ProcessMessage(context.Background(), &MessageRequest{
+		ClinicID:     clinic.ID,
+		PatientPhone: "+5511999990000",
+		MessageText:  "ok",
+		Intent:       model.MessageIntentUnknown,
+	})
+	require.NoError(t, err)
+
+	disallowed := fa.lastRequest.DisallowedTools
+	for _, tool := range []string{"create_appointment", "quick_schedule", "confirm_appointment", "cancel_appointment", "reschedule_appointment", "quick_reschedule"} {
+		assert.Contains(t, disallowed, tool, "all-disabled clinic must blacklist write tool %q", tool)
+	}
+}
+
+func TestProcessMessage_AllToolsEnabled_NoBlacklist(t *testing.T) {
+	// Clinic with everything enabled: no blacklist, AI has full toolset.
+	clinic := &clinic_model.Clinic{
+		ID: uuid.New(),
+		Settings: clinic_model.ClinicSettings{
+			AIAgentEnabled:   true,
+			AIToolSchedule:   boolPtr(true),
+			AIToolConfirm:    boolPtr(true),
+			AIToolCancel:     boolPtr(true),
+			AIToolReschedule: boolPtr(true),
+		},
+	}
+	fa := &fakeAgent{response: &AgentResponse{Content: "ok"}}
+	fcm := newFakeConvManager()
+	svc := buildSvcWithGate(clinic, allToolsGlobalOn(), fa, fcm)
+
+	_, err := svc.ProcessMessage(context.Background(), &MessageRequest{
+		ClinicID:     clinic.ID,
+		PatientPhone: "+5511999990000",
+		MessageText:  "quero marcar",
+		Intent:       model.MessageIntentSchedule,
+	})
+	require.NoError(t, err)
+	assert.Empty(t, fa.lastRequest.DisallowedTools, "all-enabled clinic must not blacklist anything")
+}
+
+func TestProcessMessage_ScheduleEnabled_NoBlacklist(t *testing.T) {
+	// Regression: clinics with scheduling tool enabled keep the full toolset.
+	clinic := &clinic_model.Clinic{
+		ID: uuid.New(),
+		Settings: clinic_model.ClinicSettings{
+			AIAgentEnabled: true,
+			AIToolSchedule: boolPtr(true),
+		},
+	}
+	fa := &fakeAgent{response: &AgentResponse{Content: "que dia?"}}
+	fcm := newFakeConvManager()
+	svc := buildSvcWithGate(clinic, allToolsGlobalOn(), fa, fcm)
+
+	_, err := svc.ProcessMessage(context.Background(), &MessageRequest{
+		ClinicID:     clinic.ID,
+		PatientPhone: "+5511999990000",
+		MessageText:  "quero agendar",
+		Intent:       model.MessageIntentSchedule,
+	})
+	require.NoError(t, err)
+	require.Equal(t, 1, fa.generateCalls)
+	require.NotNil(t, fa.lastRequest)
+	assert.Empty(t, fa.lastRequest.AllowedTools, "no tool whitelist on the unified path — only DisallowedTools is used")
+	assert.NotContains(t, fa.lastRequest.DisallowedTools, "create_appointment", "scheduling-enabled clinic must not blacklist write tools")
+	assert.NotContains(t, fa.lastRequest.DisallowedTools, "quick_schedule", "scheduling-enabled clinic must not blacklist write tools")
 }
 
 // ---------------------------------------------------------------------------

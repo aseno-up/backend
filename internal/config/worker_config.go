@@ -64,7 +64,12 @@ type WorkerConfig struct {
 	AIAgentFallbackModels   []string // List of fallback models to try in order
 	AIAgentMaxTokens        int
 	AIAgentTemperature      float32
-	AIAgentTimeout          time.Duration
+	// AIAgentHandoffTemperature is the stricter temperature used only when
+	// the AI runs in handoff mode (clinic with action tool disabled, AI
+	// gathering context for the human team). Lower than AIAgentTemperature
+	// because handoff requires strict rule-following.
+	AIAgentHandoffTemperature float32
+	AIAgentTimeout            time.Duration
 	ConversationMaxTurns    int
 	ConversationRedisTTL    time.Duration
 	ConversationPostgresTTL time.Duration
@@ -135,7 +140,8 @@ func NewWorkerConfig() *WorkerConfig {
 			"qwen/qwen-2.5-72b-instruct",
 		}),
 		AIAgentMaxTokens:               getEnvAsIntW("AI_AGENT_MAX_TOKENS", 2048),
-		AIAgentTemperature:             getEnvAsFloat32W("AI_AGENT_TEMPERATURE", 0.7),
+		AIAgentTemperature:             getEnvAsFloat32W("AI_AGENT_TEMPERATURE", 0.5),
+		AIAgentHandoffTemperature:      getEnvAsFloat32W("AI_AGENT_HANDOFF_TEMPERATURE", 0.3),
 		AIAgentTimeout:                 getEnvAsDurationW("AI_AGENT_TIMEOUT", 30*time.Second),
 		ConversationMaxTurns:           getEnvAsIntW("CONVERSATION_MAX_TURNS", 30),
 		ConversationRedisTTL:           getEnvAsDurationW("CONVERSATION_REDIS_TTL", 30*time.Minute),

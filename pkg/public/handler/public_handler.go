@@ -80,9 +80,9 @@ func (h *publicHandler) SubmitContact(c *gin.Context) {
 
 // PlanConfigResponse represents a single plan's public configuration
 type PlanConfigResponse struct {
-	LimitProfessionals int      `json:"limit_professionals"` // -1 = unlimited
-	PriceMonthly       int      `json:"price_monthly"`
-	PriceYearly        int      `json:"price_yearly"`
+	LimitProfessionals int `json:"limit_professionals"` // -1 = unlimited
+	PriceMonthly       int `json:"price_monthly"`
+	PriceYearly        int `json:"price_yearly"`
 	// SoloPriceMonthly / SoloPriceYearly are the discounted prices for a single-professional
 	// contract. A value of 0 means this plan does not offer a solo variant for that cycle.
 	SoloPriceMonthly int      `json:"solo_price_monthly"`

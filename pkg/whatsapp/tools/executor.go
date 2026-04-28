@@ -5,9 +5,36 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/google/uuid"
+	"golang.org/x/text/runes"
+	"golang.org/x/text/transform"
+	"golang.org/x/text/unicode/norm"
 )
+
+// searchNormalizer strips diacritics (acentos) and is paired with strings.ToLower
+// to make the procedure-name filter accent + case insensitive without depending
+// on a Postgres extension (unaccent). NFD splits "ç" into "c"+combining-cedilla,
+// the runes.Remove drops anything in the Mn (Mark, Nonspacing) category, and
+// NFC recomposes the rest.
+var searchNormalizer = transform.Chain(
+	norm.NFD,
+	runes.Remove(runes.In(unicode.Mn)),
+	norm.NFC,
+)
+
+// normalizeForSearch lowercases and strips diacritics. "Avaliação" → "avaliacao",
+// "Reeducação" → "reeducacao". On error (extremely unlikely for valid UTF-8),
+// falls back to the lowercased original — at worst the comparison stays
+// accent-sensitive for that single string.
+func normalizeForSearch(s string) string {
+	out, _, err := transform.String(searchNormalizer, s)
+	if err != nil {
+		return strings.ToLower(s)
+	}
+	return strings.ToLower(out)
+}
 
 // ExecutionContext holds the context needed to execute tools
 type ExecutionContext struct {
@@ -33,12 +60,59 @@ type ExecutionContext struct {
 	PatientInfoProvider      PatientInfoProvider
 	PatientFinderCreator     PatientFinderCreator
 	PatientNameUpdater       PatientNameUpdater
+	HumanTakeoverMarker      HumanTakeoverMarker
+	ConversationMetadata     ConversationMetadataWriter
+
+	// BlockedIntentReply is the resolved per-clinic canned reply, set per
+	// request when running in handoff mode. complete_handoff_to_human reads
+	// this and returns it as the patient-facing message after marking the
+	// takeover, so the wording always matches the clinic's configuration.
+	BlockedIntentReply string
+}
+
+// ConversationMetadataWriter persists per-conversation hints that survive
+// turns (e.g. last list_procedures filter so the next turn's prompt can hint
+// at the active topic). Backed by conversation.Manager.SetMetadata in prod;
+// stubs in tests record calls for assertions.
+type ConversationMetadataWriter interface {
+	SetMetadata(ctx context.Context, conversationID uuid.UUID, key string, value interface{}) error
+}
+
+// LastProcedureFilterMetadataKey is the metadata key under which we stash a
+// snapshot of the last list_procedures call (filter terms + matched names).
+// The agent prompt builder reads this back next turn to inject a "topic
+// recente" hint, so the LLM uses prior context to interpret ambiguous
+// follow-ups (e.g. patient asks "RPG?" → AI lists 2; patient says "quero
+// agendar avaliação" → LLM should infer the RPG — Avaliação from this hint).
+const LastProcedureFilterMetadataKey = "last_procedure_filter"
+
+// LastProcedureFilterSnapshot is the JSON shape persisted under
+// LastProcedureFilterMetadataKey. Names are capped to keep token cost small.
+type LastProcedureFilterSnapshot struct {
+	Filter []string `json:"filter"`
+	Names  []string `json:"names"`
+}
+
+// HumanTakeoverMarker activates the per-patient human-takeover pause. Same
+// semantics as the WhatsAppService-level HumanTakeoverTracker, exposed here
+// without the read side because tools only need to write. Backed by the
+// patient_whatsapp_connections table; the gate at the WhatsApp service layer
+// reads back from the same row to silence subsequent patient messages
+// during the configured pause window (default 4h).
+type HumanTakeoverMarker interface {
+	Mark(ctx context.Context, clinicID uuid.UUID, phone string, at time.Time) error
 }
 
 // Service interfaces that tools will call
 
 type ProfessionalLister interface {
-	ListAvailable(ctx context.Context, clinicID uuid.UUID, specialty string) ([]*ProfessionalInfo, error)
+	// procedureID, when non-nil, restricts the result to professionals who
+	// have an active association in professional_procedures with that
+	// procedure. Without this filter the AI cannot tell who actually
+	// performs a given procedure and may invent qualifications (e.g. listed
+	// Hamilton for "RPG — Avaliação" even though Hamilton has no association
+	// with that procedure).
+	ListAvailable(ctx context.Context, clinicID uuid.UUID, specialty string, procedureID *uuid.UUID) ([]*ProfessionalInfo, error)
 }
 
 type ProfessionalInfo struct {
@@ -229,6 +303,8 @@ func (e *Executor) Execute(execCtx *ExecutionContext, toolName string, params ma
 		return e.getPatientInfo(execCtx, params)
 	case "update_patient_name":
 		return e.updatePatientName(execCtx, params)
+	case "complete_handoff_to_human":
+		return e.completeHandoffToHuman(execCtx, params)
 	default:
 		// Fallback to generic handler if exists
 		if tool.Handler != nil {
@@ -246,11 +322,26 @@ func (e *Executor) getAvailableProfessionals(execCtx *ExecutionContext, params m
 		specialty = s
 	}
 
+	// procedure_id, when set, restricts the result to professionals who
+	// actually perform that procedure (via professional_procedures join).
+	// Without this filter the LLM may list any clinic professional as
+	// "qualified" for a procedure they have no association with.
+	var procedureID *uuid.UUID
+	if s, ok := params["procedure_id"].(string); ok {
+		if t := strings.TrimSpace(s); t != "" {
+			if parsed, err := uuid.Parse(t); err == nil {
+				procedureID = &parsed
+			} else {
+				return nil, fmt.Errorf("invalid procedure_id %q: must be a UUID from list_procedures", t)
+			}
+		}
+	}
+
 	if execCtx.ProfessionalLister == nil {
 		return nil, fmt.Errorf("ProfessionalLister not configured")
 	}
 
-	professionals, err := execCtx.ProfessionalLister.ListAvailable(execCtx.Context, execCtx.ClinicID, specialty)
+	professionals, err := execCtx.ProfessionalLister.ListAvailable(execCtx.Context, execCtx.ClinicID, specialty, procedureID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list professionals: %w", err)
 	}
@@ -275,6 +366,28 @@ func (e *Executor) listProcedures(execCtx *ExecutionContext, params map[string]i
 		specialty = s
 	}
 
+	// name_contains accepts either a string (single term) or array of strings
+	// (multiple terms ORed together). Lets the LLM cover sigla + nome completo
+	// in one call: ["RPG", "Reeducação Postural Global"]. Empty/whitespace
+	// terms are dropped so an LLM hallucinating ["", "RPG"] still works.
+	var terms []string
+	if raw, ok := params["name_contains"]; ok && raw != nil {
+		switch v := raw.(type) {
+		case string:
+			if t := strings.TrimSpace(v); t != "" {
+				terms = append(terms, t)
+			}
+		case []interface{}:
+			for _, item := range v {
+				if s, ok := item.(string); ok {
+					if t := strings.TrimSpace(s); t != "" {
+						terms = append(terms, t)
+					}
+				}
+			}
+		}
+	}
+
 	if execCtx.ProcedureLister == nil {
 		return nil, fmt.Errorf("ProcedureLister not configured")
 	}
@@ -282,6 +395,49 @@ func (e *Executor) listProcedures(execCtx *ExecutionContext, params map[string]i
 	procedures, err := execCtx.ProcedureLister.ListProcedures(execCtx.Context, execCtx.ClinicID, specialty)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list procedures: %w", err)
+	}
+
+	// Filter in Go with Unicode normalization — accent + case insensitive,
+	// no Postgres extension required. Patient writing "avaliacao" (no accent)
+	// still matches "Avaliação"; "Reeducação" matches "reeducacao". OR over
+	// the term array: a procedure matches if ANY term is contained in its
+	// normalized name.
+	if len(terms) > 0 {
+		needles := make([]string, len(terms))
+		for i, t := range terms {
+			needles[i] = normalizeForSearch(t)
+		}
+		filtered := make([]*ProcedureInfo, 0, len(procedures))
+		for _, p := range procedures {
+			haystack := normalizeForSearch(p.Name)
+			for _, needle := range needles {
+				if strings.Contains(haystack, needle) {
+					filtered = append(filtered, p)
+					break
+				}
+			}
+		}
+		procedures = filtered
+	}
+
+	// Persist a topic snapshot so the next turn's prompt can hint at the
+	// active filter — solves the real bug where the LLM ignored prior
+	// context (e.g. asked about RPG, then "quero agendar avaliação" got
+	// interpreted as "list ALL avaliações" instead of "RPG — Avaliação").
+	// Only persist when the filter was used; calls without a filter aren't
+	// a focused topic worth carrying forward.
+	if len(terms) > 0 && execCtx.ConversationMetadata != nil && execCtx.ConversationID != uuid.Nil {
+		const maxNames = 10
+		names := make([]string, 0, len(procedures))
+		for i, p := range procedures {
+			if i >= maxNames {
+				break
+			}
+			names = append(names, p.Name)
+		}
+		snapshot := LastProcedureFilterSnapshot{Filter: terms, Names: names}
+		// Best-effort: a metadata write failure must NOT break the tool call.
+		_ = execCtx.ConversationMetadata.SetMetadata(execCtx.Context, execCtx.ConversationID, LastProcedureFilterMetadataKey, snapshot)
 	}
 
 	return procedures, nil
@@ -309,6 +465,55 @@ func (e *Executor) getAvailableSlots(execCtx *ExecutionContext, params map[strin
 	daysAhead := 7
 	if d, ok := params["days_ahead"].(float64); ok {
 		daysAhead = int(d)
+	}
+
+	// time_filter narrows the response to a specific HH:MM the patient asked
+	// about (e.g. "tem 11h amanhã?"). Solves the bug where the distributed
+	// sample of 4 slots cut the exact hour the patient wanted, and the LLM
+	// answered "não tem" looking only at the cached sample. With time_filter,
+	// the tool checks the real backend grid for that hour:date pair and
+	// returns the matching slot or empty if not free / outside hours.
+	timeFilterHH, timeFilterMM, hasTimeFilter := 0, 0, false
+	if tf, ok := params["time_filter"].(string); ok {
+		if t := strings.TrimSpace(tf); t != "" {
+			h, m, ok := parseHHMM(t)
+			if !ok {
+				return nil, fmt.Errorf("invalid time_filter %q: use HH:MM (e.g. '11:00')", t)
+			}
+			timeFilterHH, timeFilterMM, hasTimeFilter = h, m, true
+		}
+	}
+
+	// procedure_id filter: only return slots from professionals qualified
+	// to perform this procedure (via professional_procedures). Without this,
+	// the tool returns slots from any active professional — even those who
+	// don't perform the procedure — and the LLM has no way to know,
+	// surfacing them as "available" (real bug: AI listed Mariana for
+	// "RPG — Avaliação" but only Hamilton has that association).
+	var qualifiedProfessionalIDs map[uuid.UUID]struct{}
+	if v, ok := params["procedure_id"].(string); ok {
+		if t := strings.TrimSpace(v); t != "" {
+			procID, err := uuid.Parse(t)
+			if err != nil {
+				return nil, fmt.Errorf("invalid procedure_id %q in get_available_slots: must be a UUID from list_procedures", t)
+			}
+			if execCtx.ProfessionalLister == nil {
+				return nil, fmt.Errorf("ProfessionalLister not configured (needed to resolve procedure_id filter)")
+			}
+			profs, err := execCtx.ProfessionalLister.ListAvailable(execCtx.Context, execCtx.ClinicID, "", &procID)
+			if err != nil {
+				return nil, fmt.Errorf("failed to load professionals for procedure %s: %w", procID, err)
+			}
+			qualifiedProfessionalIDs = make(map[uuid.UUID]struct{}, len(profs))
+			for _, p := range profs {
+				qualifiedProfessionalIDs[p.ID] = struct{}{}
+			}
+			// If nobody is qualified for this procedure, return empty —
+			// LLM should tell the patient instead of inventing.
+			if len(qualifiedProfessionalIDs) == 0 {
+				return []*AvailableSlot{}, nil
+			}
+		}
 	}
 
 	if execCtx.SlotFinder == nil {
@@ -341,7 +546,7 @@ func (e *Executor) getAvailableSlots(execCtx *ExecutionContext, params map[strin
 
 		// Validate/resolve against the real list of professionals.
 		if execCtx.ProfessionalLister != nil {
-			profs, listErr := execCtx.ProfessionalLister.ListAvailable(execCtx.Context, execCtx.ClinicID, "")
+			profs, listErr := execCtx.ProfessionalLister.ListAvailable(execCtx.Context, execCtx.ClinicID, "", nil)
 			if listErr == nil {
 				valid := make([]string, 0, len(profs))
 				var foundByID *ProfessionalInfo
@@ -385,13 +590,50 @@ func (e *Executor) getAvailableSlots(execCtx *ExecutionContext, params map[strin
 			return nil, fmt.Errorf("could not resolve professional from id=%q or name=%q", profIDStr, profNameFrag)
 		}
 
-		// Collect slots from the next `daysAhead` days. A prior version
-		// stopped at 5 slots total, which meant a professional with many
-		// morning openings never surfaced afternoon/evening availability —
-		// e.g., a 9–18h schedule would only return 09:00–13:00 and the LLM
-		// never saw 14:00+. We now walk full days and sample across the day
-		// so the patient gets a realistic view of the professional's agenda.
-		maxSlots := 15
+		// procedure_id filter: if set, ensure this professional is qualified
+		// for the procedure. Mariana ≠ RPG — Avaliação so we'd return [] here
+		// instead of slots she has free for OTHER procedures.
+		if qualifiedProfessionalIDs != nil {
+			if _, ok := qualifiedProfessionalIDs[profID]; !ok {
+				return []*AvailableSlot{}, nil
+			}
+		}
+
+		// time_filter path: surgical lookup of a single HH:MM on the given
+		// date. Bypasses the sampling logic entirely — returns either the
+		// matching slot (if free) or empty (if occupied / outside hours).
+		// Solves the "AI listou só 4 sampled, paciente pediu HH:MM que foi
+		// cortado" bug — now the AI re-checks the exact slot in the backend
+		// instead of trusting the sample cache.
+		if hasTimeFilter {
+			loc, lerr := time.LoadLocation("America/Sao_Paulo")
+			if lerr != nil {
+				loc = time.Local
+			}
+			daySlots, err := execCtx.SlotFinder.GetAvailableSlots(execCtx.Context, execCtx.ClinicID, profID, date, int(durationMinutes))
+			if err != nil {
+				return nil, fmt.Errorf("failed to get slots for time_filter check: %w", err)
+			}
+			for _, s := range daySlots {
+				local := s.StartTime.In(loc)
+				if local.Hour() == timeFilterHH && local.Minute() == timeFilterMM && sameYMD(local, date) {
+					return []*AvailableSlot{s}, nil
+				}
+			}
+			return []*AvailableSlot{}, nil
+		}
+
+		// Collect slots from the next `daysAhead` days. We accumulate a small
+		// pool (~3 days × 3 distributed picks each) and then sample 4 final
+		// slots distributed across the pool. The hard cap is intentional:
+		// returning 15+ slots makes the LLM dump them all to the patient (no
+		// prompt rule reliably caps it), and a 14-line slot list overwhelms
+		// WhatsApp UX. 4 distributed picks is the sweet spot — patient sees
+		// real variety (different days, different times of day) without
+		// scrolling.
+		const finalCap = 4
+		const perDayPick = 3
+		const poolTarget = 12 // accumulate enough to allow varied distribution
 		var allSlots []*AvailableSlot
 		for day := 0; day < daysAhead; day++ {
 			searchDate := date.AddDate(0, 0, day)
@@ -404,21 +646,30 @@ func (e *Executor) getAvailableSlots(execCtx *ExecutionContext, params map[strin
 			// Sample slots spread across the day (morning + afternoon)
 			// instead of taking only the first N — otherwise we'd bias
 			// heavily toward early-morning picks.
-			allSlots = append(allSlots, sampleSlotsAcrossDay(daySlots, 5)...)
+			allSlots = append(allSlots, sampleSlotsAcrossDay(daySlots, perDayPick)...)
 
-			if len(allSlots) >= maxSlots {
+			if len(allSlots) >= poolTarget {
 				break
 			}
 		}
 
-		if len(allSlots) > maxSlots {
-			allSlots = allSlots[:maxSlots]
+		// Final distributed sample. Slots are in chronological order across
+		// days, so picking N evenly-spaced indices yields one early-week +
+		// one mid-week + one late-week (when 3+ days returned slots).
+		if len(allSlots) > finalCap {
+			allSlots = sampleSlotsAcrossDay(allSlots, finalCap)
 		}
 
 		return allSlots, nil
 	}
 
-	// Otherwise, search across all professionals
+	// Otherwise, search across all professionals. Same 4-slot final cap as
+	// the per-professional path so the LLM never has more than 4 to surface
+	// to the patient. time_filter applies here too — the LLM frequently
+	// calls get_available_slots without a professional_id (relying on the
+	// AI to pick later), so we must support the surgical HH:MM check in
+	// this path as well, otherwise the time_filter is silently ignored
+	// and the AI answers from the distributed sample like before.
 	slots, err := execCtx.SlotFinder.GetAvailableSlotsMultipleProfessionals(
 		execCtx.Context,
 		execCtx.ClinicID,
@@ -426,10 +677,47 @@ func (e *Executor) getAvailableSlots(execCtx *ExecutionContext, params map[strin
 		date,
 		daysAhead,
 		int(durationMinutes),
-		5, // Limit to 5 slots
+		50, // wider pool when time_filter is set so we don't miss matches
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get slots: %w", err)
+	}
+
+	// Apply procedure_id filter (cross-prof path) — drop slots from
+	// professionals not qualified for the procedure. Without this the
+	// LLM gets slots from any active prof and surfaces them as if they
+	// could perform the procedure.
+	if qualifiedProfessionalIDs != nil {
+		filtered := make([]*AvailableSlot, 0, len(slots))
+		for _, s := range slots {
+			if _, ok := qualifiedProfessionalIDs[s.ProfessionalID]; ok {
+				filtered = append(filtered, s)
+			}
+		}
+		slots = filtered
+	}
+
+	if hasTimeFilter {
+		loc, lerr := time.LoadLocation("America/Sao_Paulo")
+		if lerr != nil {
+			loc = time.Local
+		}
+		matching := make([]*AvailableSlot, 0, 4)
+		for _, s := range slots {
+			local := s.StartTime.In(loc)
+			if local.Hour() == timeFilterHH && local.Minute() == timeFilterMM && sameYMD(local, date) {
+				matching = append(matching, s)
+			}
+		}
+		// Cap at 4 different professionals offering this exact slot.
+		if len(matching) > 4 {
+			matching = matching[:4]
+		}
+		return matching, nil
+	}
+
+	if len(slots) > 4 {
+		slots = sampleSlotsAcrossDay(slots, 4)
 	}
 
 	return slots, nil
@@ -451,7 +739,7 @@ func (e *Executor) createAppointment(execCtx *ExecutionContext, params map[strin
 	// UUIDs; without this check, we'd surface a generic foreign-key error and
 	// the model has no chance of self-correcting on retry.
 	if execCtx.ProfessionalLister != nil {
-		profs, listErr := execCtx.ProfessionalLister.ListAvailable(execCtx.Context, execCtx.ClinicID, "")
+		profs, listErr := execCtx.ProfessionalLister.ListAvailable(execCtx.Context, execCtx.ClinicID, "", nil)
 		if listErr == nil {
 			found := false
 			validIDs := make([]string, 0, len(profs))
@@ -995,6 +1283,27 @@ func (e *Executor) getPatientInfo(execCtx *ExecutionContext, params map[string]i
 	return info, nil
 }
 
+// completeHandoffToHuman is the deterministic signal the LLM emits in handoff
+// mode. It marks the existing per-patient takeover (so subsequent patient
+// messages are silenced by the gate at the WhatsApp service layer) and
+// returns the clinic-resolved canned reply as the patient-facing message.
+//
+// Failing loudly when the marker isn't wired is intentional: silently
+// succeeding would leave the team blind to follow-up messages because the
+// takeover gate would never fire.
+func (e *Executor) completeHandoffToHuman(execCtx *ExecutionContext, _ map[string]interface{}) (interface{}, error) {
+	if execCtx.HumanTakeoverMarker == nil {
+		return nil, fmt.Errorf("HumanTakeoverMarker not configured — handoff cannot be completed without marking the takeover")
+	}
+	if err := execCtx.HumanTakeoverMarker.Mark(execCtx.Context, execCtx.ClinicID, execCtx.PatientPhone, time.Now()); err != nil {
+		return nil, fmt.Errorf("failed to mark human takeover: %w", err)
+	}
+	return map[string]interface{}{
+		"status":  "handoff_completed",
+		"message": execCtx.BlockedIntentReply,
+	}, nil
+}
+
 func (e *Executor) updatePatientName(execCtx *ExecutionContext, params map[string]interface{}) (interface{}, error) {
 	newName, ok := params["new_name"].(string)
 	if !ok || newName == "" {
@@ -1235,7 +1544,7 @@ func (e *Executor) quickSchedule(execCtx *ExecutionContext, params map[string]in
 	if execCtx.ProfessionalLister == nil {
 		return nil, fmt.Errorf("ProfessionalLister not configured")
 	}
-	profs, err := execCtx.ProfessionalLister.ListAvailable(execCtx.Context, execCtx.ClinicID, "")
+	profs, err := execCtx.ProfessionalLister.ListAvailable(execCtx.Context, execCtx.ClinicID, "", nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list professionals: %w", err)
 	}

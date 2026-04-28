@@ -23,6 +23,10 @@ import (
 	"github.com/aseno/backend/internal/worker"
 	account_model "github.com/aseno/backend/pkg/account/model"
 	account_repository "github.com/aseno/backend/pkg/account/repository"
+	aitokenusage_handler "github.com/aseno/backend/pkg/aitokenusage/handler"
+	aitokenusage_model "github.com/aseno/backend/pkg/aitokenusage/model"
+	aitokenusage_repository "github.com/aseno/backend/pkg/aitokenusage/repository"
+	aitokenusage_service "github.com/aseno/backend/pkg/aitokenusage/service"
 	analytics_handler "github.com/aseno/backend/pkg/analytics/handler"
 	analytics_repository "github.com/aseno/backend/pkg/analytics/repository"
 	analytics_service "github.com/aseno/backend/pkg/analytics/service"
@@ -154,10 +158,6 @@ import (
 	systemlog_model "github.com/aseno/backend/pkg/systemlog/model"
 	systemlog_repository "github.com/aseno/backend/pkg/systemlog/repository"
 	systemlog_service "github.com/aseno/backend/pkg/systemlog/service"
-	aitokenusage_handler "github.com/aseno/backend/pkg/aitokenusage/handler"
-	aitokenusage_model "github.com/aseno/backend/pkg/aitokenusage/model"
-	aitokenusage_repository "github.com/aseno/backend/pkg/aitokenusage/repository"
-	aitokenusage_service "github.com/aseno/backend/pkg/aitokenusage/service"
 	usagemetric_handler "github.com/aseno/backend/pkg/usagemetric/handler"
 	usagemetric_model "github.com/aseno/backend/pkg/usagemetric/model"
 	usagemetric_repository "github.com/aseno/backend/pkg/usagemetric/repository"
@@ -536,6 +536,16 @@ func main() {
 		// Initialize AI Agent for dynamic WhatsApp conversations (if enabled)
 		if redis != nil && workerCfg.AIAgentEnabled {
 			clinicService := clinic_service.NewClinicService(clinicRepo, cfg.GetFrontendURL())
+			// Built once and shared between the takeover tracker (which the
+			// WhatsApp service reads to silence the AI when a human assumes)
+			// and the tools.HumanTakeoverMarker (which complete_handoff_to_human
+			// writes to trigger that same silence after gathering context).
+			pwcRepo := patient_repository.NewPatientWhatsAppConnectionRepository(db.GetDB())
+			takeoverAdapter := &humanTakeoverTrackerAdapter{
+				patientRepo:  patientRepo,
+				connRepo:     pwcRepo,
+				whatsappRepo: whatsappConnRepo,
+			}
 			aiAgentService, conversationMgr, _, err := initializeAIAgent(
 				cfg,
 				db,
@@ -551,14 +561,17 @@ func main() {
 				bookingSvc,
 				clinicRepo,
 				professionalRepo,
+				professionalProcedureRepo,
 				systemLogSvc,
 				usageMetricSvc,
 				aiTokenUsageSvc,
+				takeoverAdapter,
 			)
 			if err != nil {
 				logger.Printf("Warning: Failed to initialize AI Agent: %v", err)
 			} else if aiAgentService != nil {
 				aiAgentService.SetPromptHistoryTurns(workerCfg.ConversationPromptHistoryTurns)
+				aiAgentService.SetTemperatures(workerCfg.AIAgentTemperature, workerCfg.AIAgentHandoffTemperature)
 				whatsappService.SetAIAgentService(aiAgentService)
 				if conversationMgr != nil {
 					whatsappService.SetConversationManager(conversationMgr)
@@ -566,16 +579,11 @@ func main() {
 				whatsappService.SetClinicRepo(clinicRepo)
 				whatsappService.SetPlanGateChecker(whatsapp_service.NewPlanGateChecker(subscriptionRepo, planRepo))
 				whatsappService.SetScheduledMessageRepo(scheduledMsgRepo)
-				pwcRepo := patient_repository.NewPatientWhatsAppConnectionRepository(db.GetDB())
 				whatsappService.SetPatientAIPreferenceChecker(&patientAIPreferenceAdapter{
 					patientRepo: patientRepo,
 					connRepo:    pwcRepo,
 				})
-				whatsappService.SetHumanTakeoverTracker(&humanTakeoverTrackerAdapter{
-					patientRepo:  patientRepo,
-					connRepo:     pwcRepo,
-					whatsappRepo: whatsappConnRepo,
-				})
+				whatsappService.SetHumanTakeoverTracker(takeoverAdapter)
 				whatsappService.SetSystemLogService(systemLogSvc)
 				whatsappService.SetDefaultDelayBetweenPatients(workerCfg.MinDelayBetweenPatientsSeconds)
 				whatsappService.SetDebounceDelay(time.Duration(workerCfg.ResponseDebounceSeconds) * time.Second)
@@ -2364,9 +2372,11 @@ func initializeAIAgent(
 	bookingService booking_service.BookingService,
 	clinicRepo clinic_repository.ClinicRepository,
 	professionalRepo professional_repository.ProfessionalRepository,
+	professionalProcedureRepo professional_repository.ProfessionalProcedureRepository,
 	systemLogSvc systemlog_service.SystemLogService,
 	usageMetricSvc usagemetric_service.UsageMetricService,
 	aiTokenUsageSvc aitokenusage_service.Service,
+	humanTakeoverMarker tools.HumanTakeoverMarker,
 ) (agent.Service, conversation.Manager, *tools.ExecutionContext, error) {
 	// Check if AI agent is enabled
 	workerCfg := config.NewWorkerConfig()
@@ -2399,7 +2409,7 @@ func initializeAIAgent(
 	// 4. Create execution context (will be updated per request)
 	execContext := &tools.ExecutionContext{
 		// Service dependencies - wrapped with adapters
-		ProfessionalLister:       &aiAgentProfessionalListerAdapter{professionalService: professionalService},
+		ProfessionalLister:       &aiAgentProfessionalListerAdapter{professionalService: professionalService, professionalProcedures: professionalProcedureRepo},
 		ProcedureLister:          &aiAgentProcedureListerAdapter{procedureService: procedureService, specialtyRepo: specialtyRepo},
 		SpecialtyLister:          &aiAgentSpecialtyListerAdapter{specialtyRepo: specialtyRepo},
 		SlotFinder:               &aiAgentSlotFinderAdapter{appointmentService: appointmentService, clinicRepo: clinicRepo, professionalRepo: professionalRepo},
@@ -2413,6 +2423,7 @@ func initializeAIAgent(
 		PatientInfoProvider:      &aiAgentPatientInfoAdapter{patientService: patientService},
 		PatientFinderCreator:     &aiAgentPatientFinderCreatorAdapter{patientService: patientService, patientRepo: patientRepo},
 		PatientNameUpdater:       &aiAgentPatientNameUpdaterAdapter{patientService: patientService},
+		HumanTakeoverMarker:      humanTakeoverMarker,
 	}
 
 	// 5. Create tool executor
@@ -2495,19 +2506,43 @@ func initializeAIAgent(
 // AI Agent adapters - wrap existing services to match tool interfaces
 
 type aiAgentProfessionalListerAdapter struct {
-	professionalService professional_service.ProfessionalService
+	professionalService    professional_service.ProfessionalService
+	professionalProcedures professional_repository.ProfessionalProcedureRepository
 }
 
-func (a *aiAgentProfessionalListerAdapter) ListAvailable(ctx context.Context, clinicID uuid.UUID, specialty string) ([]*tools.ProfessionalInfo, error) {
+func (a *aiAgentProfessionalListerAdapter) ListAvailable(ctx context.Context, clinicID uuid.UUID, specialty string, procedureID *uuid.UUID) ([]*tools.ProfessionalInfo, error) {
 	listResp, err := a.professionalService.List(ctx, clinicID, pagination.Filter{Status: "active", Page: 1, Limit: 100})
 	if err != nil {
 		return nil, err
+	}
+
+	// procedure_id filter: build the set of professional IDs that have an
+	// active association with the requested procedure. If empty, the result
+	// must be empty too — better to return [] than to mislead the LLM into
+	// listing professionals who don't perform that procedure.
+	var qualifiedSet map[uuid.UUID]struct{}
+	if procedureID != nil && a.professionalProcedures != nil {
+		links, lerr := a.professionalProcedures.ListByProcedure(ctx, *procedureID, clinicID)
+		if lerr != nil {
+			return nil, fmt.Errorf("failed to load professional_procedures for procedure %s: %w", *procedureID, lerr)
+		}
+		qualifiedSet = make(map[uuid.UUID]struct{}, len(links))
+		for _, link := range links {
+			if link.IsActive {
+				qualifiedSet[link.ProfessionalID] = struct{}{}
+			}
+		}
 	}
 
 	specialtyLower := strings.ToLower(strings.TrimSpace(specialty))
 
 	var result []*tools.ProfessionalInfo
 	for _, p := range listResp.Data {
+		if qualifiedSet != nil {
+			if _, ok := qualifiedSet[p.ID]; !ok {
+				continue
+			}
+		}
 		// Exact case-insensitive match against any of the professional's
 		// specialties. The AI is expected to resolve approximate terms via
 		// list_specialties before calling this tool, so we do not fuzzy-match.
@@ -2601,7 +2636,18 @@ type aiAgentProcedureListerAdapter struct {
 }
 
 func (a *aiAgentProcedureListerAdapter) ListProcedures(ctx context.Context, clinicID uuid.UUID, specialty string) ([]*tools.ProcedureInfo, error) {
-	listResp, err := a.procedureService.List(ctx, clinicID, pagination.Filter{Page: 1, Limit: 200})
+	// Limit aligned with the service's hard cap (100). Previously passed 200,
+	// which the service silently shrunk to 10 — items past the 10th in
+	// name-ASC order disappeared from the AI's view.
+	//
+	// Name filtering happens in the executor (Go-side) with Unicode
+	// normalization for accent-insensitivity. SQL ILIKE was rejected because
+	// it requires the unaccent extension (per-database, would silently break
+	// on environments without it).
+	listResp, err := a.procedureService.List(ctx, clinicID, pagination.Filter{
+		Page:  1,
+		Limit: 100,
+	})
 	if err != nil {
 		return nil, err
 	}

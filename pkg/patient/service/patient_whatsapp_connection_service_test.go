@@ -202,8 +202,12 @@ func (m *mockClinicRepoForConn) Delete(_ context.Context, _ uuid.UUID) error    
 func (m *mockClinicRepoForConn) List(_ context.Context, _, _ int) ([]*clinic_model.Clinic, int64, error) {
 	return nil, 0, nil
 }
-func (m *mockClinicRepoForConn) ExistsBySlug(_ context.Context, _ string) (bool, error)   { return false, nil }
-func (m *mockClinicRepoForConn) ExistsByEmail(_ context.Context, _ string) (bool, error)  { return false, nil }
+func (m *mockClinicRepoForConn) ExistsBySlug(_ context.Context, _ string) (bool, error) {
+	return false, nil
+}
+func (m *mockClinicRepoForConn) ExistsByEmail(_ context.Context, _ string) (bool, error) {
+	return false, nil
+}
 func (m *mockClinicRepoForConn) CountByAccountID(_ context.Context, _ uuid.UUID) (int64, error) {
 	return 0, nil
 }

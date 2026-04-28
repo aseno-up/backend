@@ -9,12 +9,12 @@ import (
 
 // Procedure represents a clinic's procedure catalog item
 type Procedure struct {
-	ID              uuid.UUID  `json:"id" gorm:"type:uuid;primary_key;default:gen_random_uuid()"`
-	ClinicID        uuid.UUID  `json:"clinic_id" gorm:"type:uuid;not null;index"`
-	Name            string     `json:"name" gorm:"not null"`
-	SpecialtyID     *uuid.UUID `json:"specialty_id,omitempty" gorm:"type:uuid;index"` // FK to specialties table
-	Price           float64    `json:"price" gorm:"type:decimal(10,2)"`               // Default price
-	DurationMinutes int        `json:"duration_minutes"`                              // Optional estimated duration
+	ID              uuid.UUID      `json:"id" gorm:"type:uuid;primary_key;default:gen_random_uuid()"`
+	ClinicID        uuid.UUID      `json:"clinic_id" gorm:"type:uuid;not null;index"`
+	Name            string         `json:"name" gorm:"not null"`
+	SpecialtyID     *uuid.UUID     `json:"specialty_id,omitempty" gorm:"type:uuid;index"` // FK to specialties table
+	Price           float64        `json:"price" gorm:"type:decimal(10,2)"`               // Default price
+	DurationMinutes int            `json:"duration_minutes"`                              // Optional estimated duration
 	CreatedAt       time.Time      `json:"created_at"`
 	UpdatedAt       time.Time      `json:"updated_at"`
 	DeletedAt       gorm.DeletedAt `json:"deleted_at,omitempty" gorm:"index"`

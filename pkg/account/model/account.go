@@ -32,22 +32,22 @@ const (
 
 // Account represents a multi-tenant billing profile
 type Account struct {
-	ID                     uuid.UUID          `json:"id" gorm:"type:uuid;primary_key;default:gen_random_uuid()"`
-	OwnerID                uuid.UUID          `json:"owner_id" gorm:"type:uuid;not null;index"`
-	AsaasCustomerID        string             `json:"-"`
-	PlanID                 *uuid.UUID         `json:"plan_id,omitempty" gorm:"type:uuid;index"`
-	Plan                   *plan_model.Plan   `json:"plan,omitempty" gorm:"foreignKey:PlanID"`
+	ID                     uuid.UUID              `json:"id" gorm:"type:uuid;primary_key;default:gen_random_uuid()"`
+	OwnerID                uuid.UUID              `json:"owner_id" gorm:"type:uuid;not null;index"`
+	AsaasCustomerID        string                 `json:"-"`
+	PlanID                 *uuid.UUID             `json:"plan_id,omitempty" gorm:"type:uuid;index"`
+	Plan                   *plan_model.Plan       `json:"plan,omitempty" gorm:"foreignKey:PlanID"`
 	PlanVariant            plan_model.PlanVariant `json:"plan_variant" gorm:"type:varchar(16);not null;default:''"`
-	SubscriptionStatus     SubscriptionStatus `json:"subscription_status" gorm:"default:'trial'"`
-	TrialEndsAt            *time.Time         `json:"trial_ends_at"`
-	SubscriptionEndsAt     *time.Time         `json:"subscription_ends_at"`
-	MaxClinics             int                `json:"max_clinics"`
-	MaxProfessionals       int                `json:"max_professionals"`
-	MaxWhatsappConnections int                `json:"max_whatsapp_connections"`
-	MaxGoogleCalendars     int                `json:"max_google_calendars"`
-	CreatedAt              time.Time          `json:"created_at"`
-	UpdatedAt              time.Time          `json:"updated_at"`
-	DeletedAt              *time.Time         `json:"deleted_at,omitempty" gorm:"index"`
+	SubscriptionStatus     SubscriptionStatus     `json:"subscription_status" gorm:"default:'trial'"`
+	TrialEndsAt            *time.Time             `json:"trial_ends_at"`
+	SubscriptionEndsAt     *time.Time             `json:"subscription_ends_at"`
+	MaxClinics             int                    `json:"max_clinics"`
+	MaxProfessionals       int                    `json:"max_professionals"`
+	MaxWhatsappConnections int                    `json:"max_whatsapp_connections"`
+	MaxGoogleCalendars     int                    `json:"max_google_calendars"`
+	CreatedAt              time.Time              `json:"created_at"`
+	UpdatedAt              time.Time              `json:"updated_at"`
+	DeletedAt              *time.Time             `json:"deleted_at,omitempty" gorm:"index"`
 }
 
 // TableName returns the table name for GORM
@@ -77,14 +77,14 @@ type AccountResponse struct {
 	OwnerID                uuid.UUID              `json:"owner_id"`
 	Plan                   *plan_model.Plan       `json:"plan,omitempty"`
 	PlanVariant            plan_model.PlanVariant `json:"plan_variant"`
-	SubscriptionStatus     SubscriptionStatus `json:"subscription_status"`
-	TrialEndsAt            *time.Time         `json:"trial_ends_at,omitempty"`
-	SubscriptionEndsAt     *time.Time         `json:"subscription_ends_at,omitempty"`
-	MaxClinics             int                `json:"max_clinics"`
-	MaxProfessionals       int                `json:"max_professionals"`
-	MaxWhatsappConnections int                `json:"max_whatsapp_connections"`
-	MaxGoogleCalendars     int                `json:"max_google_calendars"`
-	CreatedAt              time.Time          `json:"created_at"`
+	SubscriptionStatus     SubscriptionStatus     `json:"subscription_status"`
+	TrialEndsAt            *time.Time             `json:"trial_ends_at,omitempty"`
+	SubscriptionEndsAt     *time.Time             `json:"subscription_ends_at,omitempty"`
+	MaxClinics             int                    `json:"max_clinics"`
+	MaxProfessionals       int                    `json:"max_professionals"`
+	MaxWhatsappConnections int                    `json:"max_whatsapp_connections"`
+	MaxGoogleCalendars     int                    `json:"max_google_calendars"`
+	CreatedAt              time.Time              `json:"created_at"`
 }
 
 // ToResponse converts Account to AccountResponse

@@ -10,17 +10,17 @@ import (
 
 // Subscription represents a recurring subscription in Asaas
 type Subscription struct {
-	ID                  uuid.UUID          `json:"id" gorm:"type:uuid;primary_key;default:gen_random_uuid()"`
-	AccountID           uuid.UUID          `json:"account_id" gorm:"type:uuid;index"`
-	CustomerID          uuid.UUID          `json:"customer_id" gorm:"type:uuid;not null;index"`
-	PlanID              *uuid.UUID              `json:"plan_id,omitempty" gorm:"type:uuid"`
-	PlanVariant         plan_model.PlanVariant  `json:"plan_variant" gorm:"type:varchar(16);not null;default:''"`
-	OfferID             *uuid.UUID              `json:"offer_id,omitempty" gorm:"type:uuid"`
-	AsaasSubscriptionID string             `json:"asaas_subscription_id" gorm:"uniqueIndex;not null"`
-	Value               float64            `json:"value" gorm:"not null"`
-	Status              SubscriptionStatus `json:"status" gorm:"not null;default:'ACTIVE'"`
-	BillingType         BillingType        `json:"billing_type" gorm:"not null"`
-	Cycle               BillingCycle       `json:"cycle" gorm:"not null;default:'MONTHLY'"`
+	ID                  uuid.UUID              `json:"id" gorm:"type:uuid;primary_key;default:gen_random_uuid()"`
+	AccountID           uuid.UUID              `json:"account_id" gorm:"type:uuid;index"`
+	CustomerID          uuid.UUID              `json:"customer_id" gorm:"type:uuid;not null;index"`
+	PlanID              *uuid.UUID             `json:"plan_id,omitempty" gorm:"type:uuid"`
+	PlanVariant         plan_model.PlanVariant `json:"plan_variant" gorm:"type:varchar(16);not null;default:''"`
+	OfferID             *uuid.UUID             `json:"offer_id,omitempty" gorm:"type:uuid"`
+	AsaasSubscriptionID string                 `json:"asaas_subscription_id" gorm:"uniqueIndex;not null"`
+	Value               float64                `json:"value" gorm:"not null"`
+	Status              SubscriptionStatus     `json:"status" gorm:"not null;default:'ACTIVE'"`
+	BillingType         BillingType            `json:"billing_type" gorm:"not null"`
+	Cycle               BillingCycle           `json:"cycle" gorm:"not null;default:'MONTHLY'"`
 
 	// Price Lock & Snapshot Fields (INV-002)
 	PriceAtContract            float64 `json:"price_at_contract" gorm:"not null"`

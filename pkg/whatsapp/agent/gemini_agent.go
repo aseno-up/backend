@@ -133,8 +133,9 @@ func (a *geminiAgent) generateWithModel(ctx context.Context, req *AgentRequest, 
 		genModel.SetMaxOutputTokens(2048) // Default max tokens
 	}
 
-	// Configure function calling (tools)
-	functionDeclarations := a.toolRegistry.GetGeminiFunctionDeclarations()
+	// Configure function calling (tools). AllowedTools whitelist restricts
+	// the LLM physically (e.g. handoff mode exposes only complete_handoff_to_human).
+	functionDeclarations := a.toolRegistry.FilteredGeminiFunctionDeclarations(req.AllowedTools, req.DisallowedTools)
 	genModel.Tools = []*genai.Tool{
 		{
 			FunctionDeclarations: functionDeclarations,
@@ -171,7 +172,9 @@ func (a *geminiAgent) generateWithModel(ctx context.Context, req *AgentRequest, 
 
 	// Send message and handle tool calls in a loop (multi-turn function calling)
 	currentPrompt := userPrompt
-	maxIterations := 5 // Prevent infinite loops
+	// See openrouter_agent.go for rationale on 10 (was 5, too low for the
+	// unified handoff flow where the LLM needs ~6-8 tool calls).
+	maxIterations := 10
 	var finalResponse *genai.GenerateContentResponse
 
 	for i := 0; i < maxIterations; i++ {

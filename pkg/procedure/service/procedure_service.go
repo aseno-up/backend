@@ -102,8 +102,15 @@ func (s *procedureService) List(ctx context.Context, clinicID uuid.UUID, filter 
 	if filter.Page < 1 {
 		filter.Page = 1
 	}
-	if filter.Limit < 1 || filter.Limit > 100 {
+	// Sanitize limit: < 1 falls back to 10 (default page size); > 100 caps at
+	// 100. The previous form ("< 1 OR > 100 → 10") silently shrunk legitimate
+	// large requests (e.g. AI agent passing 200) down to 10, dropping items
+	// past the 10th in name-ASC order — caused the RPG — Avaliação ghost.
+	if filter.Limit < 1 {
 		filter.Limit = 10
+	}
+	if filter.Limit > 100 {
+		filter.Limit = 100
 	}
 
 	procedures, total, err := s.repo.List(ctx, clinicID, filter)
