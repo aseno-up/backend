@@ -100,6 +100,10 @@ func (m *mockEnrollRepo) GetByPatientAndPlan(_ context.Context, _, _, _ uuid.UUI
 	}
 	return m.existing, nil
 }
+
+func (m *mockEnrollRepo) GetActiveByPatient(_ context.Context, _, _ uuid.UUID) ([]*model.SessionPlanEnrollment, error) {
+	return nil, nil
+}
 func (m *mockEnrollRepo) CountActiveByPlan(_ context.Context, _, _ uuid.UUID) (int64, error) {
 	var count int64
 	for _, e := range m.active {

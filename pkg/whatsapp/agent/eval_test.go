@@ -192,6 +192,9 @@ func setupEvalHarnessOpts(t *testing.T, opts evalOpts) *evalHarness {
 		agentTemperature:               0.5,
 		handoffTemperature:             0.3,
 	}
+	if opts.PatientContext != nil {
+		svc.patientContextFetcher = &stubPatientContextFetcher{pc: opts.PatientContext}
+	}
 
 	h := &evalHarness{
 		t:       t,
@@ -354,6 +357,22 @@ type evalOpts struct {
 	// Use this to disable specific tools (e.g. AIToolEnrollClass=false to
 	// test the handoff fallback).
 	ClinicSettings *clinic_model.ClinicSettings
+	// PatientContext, when set, is returned by the harness's
+	// PatientContextFetcher stub. Lets each scenario simulate "patient
+	// has appointment Wed 14h" or "patient has no records" without
+	// touching a real DB.
+	PatientContext *PatientContext
+}
+
+// stubPatientContextFetcher returns a pre-canned PatientContext set per
+// test via evalOpts.PatientContext. Nil means "no fetcher wired" (the
+// service then proceeds without context, current behavior).
+type stubPatientContextFetcher struct {
+	pc *PatientContext
+}
+
+func (s *stubPatientContextFetcher) Fetch(_ context.Context, _, _ uuid.UUID) (*PatientContext, error) {
+	return s.pc, nil
 }
 
 func buildEvalExecContext(opts evalOpts) *tools.ExecutionContext {
@@ -1343,5 +1362,454 @@ func TestEval_NaoDaDiagnostico(t *testing.T) {
 	// recommend asking a doctor, etc. Empty reply also bad.
 	if h.lastReply() == "" {
 		t.Errorf("LLM returned empty reply for medical concern")
+	}
+}
+
+// ===========================================================================
+// REGRESSION — bugs reais capturados em conversas de produção (Renascer, abr/2026)
+//
+// Cada cenário replica um padrão observado em proplemas-reais-na-ia.csv.
+// Comentário de cada teste cita a conversation_id da transcript real
+// pra facilitar o cross-reference quando a IA mudar de comportamento.
+// ===========================================================================
+
+// TestEval_RealBug_RespostaCurta_VerificaAgendamento_Sim is the most
+// frequent prod bug: patient sends a one-word/short confirmation ("sim",
+// "9 horas sim", "confirmado", "ok") in reply to a reminder/proposal.
+//
+// With prefetch, the patient's pending appointment is in prompt context.
+// IA must confirm it directly — no fishing tool call needed.
+//
+// Conversation refs: d52d7684 ("Oi querida, sim"), e348054a ("9 horas sim"),
+// 08ba2d43 ("Sim"), 29c5fa08 ("😍"), 4b0612de ("👏"), 4200b014 ("Ok").
+func TestEval_RealBug_RespostaCurta_VerificaAgendamento_Sim(t *testing.T) {
+	// Patient has appointment today at 09:00 — message "9 horas sim"
+	// matches.
+	now := time.Now()
+	apptTime := time.Date(now.Year(), now.Month(), now.Day(), 9, 0, 0, 0, now.Location())
+	if apptTime.Before(now) {
+		// If 09:00 today is in the past, push to tomorrow.
+		apptTime = apptTime.Add(24 * time.Hour)
+	}
+	h := setupEvalHarnessOpts(t, evalOpts{
+		PatientContext: &PatientContext{
+			NextAppointment: &PatientNextAppointment{
+				StartTime:        apptTime,
+				ProfessionalName: "Dra. Mariana Costa",
+				ProcedureName:    "Avaliação Pilates",
+			},
+		},
+	})
+
+	h.Send("9 horas sim")
+
+	confirmed := false
+	for _, c := range h.allToolCalls {
+		if c.Tool == "confirm_appointment" {
+			confirmed = true
+			break
+		}
+	}
+	if !confirmed {
+		t.Errorf("'9 horas sim' with appointment 09:00 in context → must confirm_appointment; calls=%s", summarizeCalls(h.allToolCalls))
+	}
+}
+
+// Variation: "oi" + "sim". Without time hint, the only pending
+// appointment in context is the target.
+func TestEval_RealBug_RespostaCurta_VerificaAgendamento_SimCurto(t *testing.T) {
+	tomorrow := time.Now().Add(24 * time.Hour)
+	apptTime := time.Date(tomorrow.Year(), tomorrow.Month(), tomorrow.Day(), 14, 0, 0, 0, tomorrow.Location())
+	h := setupEvalHarnessOpts(t, evalOpts{
+		PatientContext: &PatientContext{
+			NextAppointment: &PatientNextAppointment{
+				StartTime:        apptTime,
+				ProfessionalName: "Dra. Mariana Costa",
+				ProcedureName:    "RPG Sessão",
+			},
+		},
+	})
+
+	h.Send("oi")
+	h.Send("sim")
+
+	confirmed := false
+	for _, c := range h.allToolCalls {
+		if c.Tool == "confirm_appointment" {
+			confirmed = true
+			break
+		}
+	}
+	if !confirmed {
+		t.Errorf("'oi' + 'sim' with single appointment in context → must confirm_appointment; calls=%s", summarizeCalls(h.allToolCalls))
+	}
+}
+
+// Variation: "Confirmado" — canonical reply to a confirmation request.
+//
+// Conversation refs: a4f57127 ("Confirmado"), 7a425037 ("Vou hoje 15:00").
+func TestEval_RealBug_RespostaCurta_Confirmado(t *testing.T) {
+	tomorrow := time.Now().Add(24 * time.Hour)
+	apptTime := time.Date(tomorrow.Year(), tomorrow.Month(), tomorrow.Day(), 14, 0, 0, 0, tomorrow.Location())
+	h := setupEvalHarnessOpts(t, evalOpts{
+		PatientContext: &PatientContext{
+			NextAppointment: &PatientNextAppointment{
+				StartTime:        apptTime,
+				ProfessionalName: "Dra. Mariana Costa",
+			},
+		},
+	})
+
+	h.Send("confirmado")
+
+	called := false
+	for _, c := range h.allToolCalls {
+		if c.Tool == "confirm_appointment" {
+			called = true
+			break
+		}
+	}
+	if !called {
+		t.Errorf("'confirmado' with appointment in context → must confirm_appointment directly; calls=%s", summarizeCalls(h.allToolCalls))
+	}
+}
+
+// TestEval_RealBug_NaoVouAmanha_VaiPraReschedule: patient cancels or
+// postpones an upcoming appointment. IA in prod asks tipo/horário/
+// profissional generically. Must consult get_patient_appointments and
+// route to cancel/reschedule.
+//
+// Conversation refs: 25f80437 ("Thai, boa noite! Não vou poder ir amanhã"),
+// 9af01ad8 ("Amanhã eu não poderei ir!"), bffd1b9b ("Imprevisto aqui").
+func TestEval_RealBug_NaoVouAmanha_VaiPraReschedule(t *testing.T) {
+	h := setupEvalHarness(t)
+
+	h.Send("oi não vou poder ir amanhã, posso remarcar pra próxima semana?")
+
+	queried := false
+	for _, c := range h.allToolCalls {
+		switch c.Tool {
+		case "get_patient_appointments", "quick_reschedule", "reschedule_appointment", "cancel_appointment":
+			queried = true
+		}
+	}
+	if !queried {
+		t.Errorf("'não vou poder ir amanhã, remarcar' must engage appointment tools; calls=%s", summarizeCalls(h.allToolCalls))
+	}
+}
+
+// Variation: shorter cancel phrasing.
+//
+// Conversation refs: a959646d ("Não irei"), 19e66968 ("Tainá não vai hoje não!").
+func TestEval_RealBug_NaoIrei(t *testing.T) {
+	h := setupEvalHarness(t)
+
+	h.Send("não irei amanhã")
+
+	queried := false
+	for _, c := range h.allToolCalls {
+		switch c.Tool {
+		case "get_patient_appointments", "cancel_appointment", "quick_reschedule":
+			queried = true
+		}
+	}
+	if !queried {
+		t.Errorf("'não irei amanhã' is a clear cancel signal; must touch appointment tools; calls=%s", summarizeCalls(h.allToolCalls))
+	}
+}
+
+// Variation: cancel with reason ("imprevisto", "doente", "tô doente").
+//
+// Conversation refs: bffd1b9b ("Imprevisto aqui e acho que não conseguirei chegar a tempo").
+func TestEval_RealBug_Imprevisto(t *testing.T) {
+	loc, _ := time.LoadLocation("America/Sao_Paulo")
+	now := time.Now().In(loc)
+	apptTime := time.Date(now.Year(), now.Month(), now.Day(), 16, 0, 0, 0, loc)
+	if apptTime.Before(now) {
+		apptTime = apptTime.Add(24 * time.Hour)
+	}
+	h := setupEvalHarnessOpts(t, evalOpts{
+		PatientContext: &PatientContext{
+			NextAppointment: &PatientNextAppointment{
+				StartTime:        apptTime,
+				ProfessionalName: "Dra. Mariana Costa",
+				ProcedureName:    "RPG Sessão",
+			},
+		},
+	})
+
+	h.Send("boa tarde")
+	h.Send("imprevisto aqui e acho que não conseguirei chegar a tempo")
+
+	// IA must engage cancel/reschedule. Acceptable: it asks the
+	// patient explicitly "quer cancelar ou remarcar?" before
+	// committing — that's good UX. We just need it to NOT ignore the
+	// appointment.
+	engaged := false
+	for _, c := range h.allToolCalls {
+		switch c.Tool {
+		case "cancel_appointment", "quick_reschedule", "reschedule_appointment", "get_patient_appointments":
+			engaged = true
+		}
+	}
+	last := strings.ToLower(h.lastReply())
+	asksCancelOrReschedule := strings.Contains(last, "cancelar") ||
+		strings.Contains(last, "remarcar") ||
+		strings.Contains(last, "reagend")
+	if !engaged && !asksCancelOrReschedule {
+		t.Errorf("'imprevisto' with appointment in context → must engage cancel/reschedule; calls=%s reply=%q", summarizeCalls(h.allToolCalls), last)
+	}
+}
+
+// TestEval_RealBug_AceitaServicoNaoNegueSemChecar replicates a critical
+// trust-breaker: patient asks "Aceita RPG pelo gympass?" — IA responded
+// "A clínica não oferece RPG. Trabalhamos com Pilates e Fisioterapia."
+// But the catalog HAS "RPG — Avaliação" and "RPG — Sessão". IA must
+// always consult list_procedures before denying any service.
+//
+// Conversation ref: 00466279 ("Aceita RPG pelo gym pass?").
+func TestEval_RealBug_AceitaServicoNaoNegueSemChecar(t *testing.T) {
+	h := setupEvalHarness(t)
+
+	h.Send("aceita RPG pelo gympass?")
+
+	last := strings.ToLower(h.lastReply())
+	denied := strings.Contains(last, "não oferec") ||
+		strings.Contains(last, "nao oferec") ||
+		strings.Contains(last, "não trabalha") ||
+		strings.Contains(last, "nao trabalha") ||
+		strings.Contains(last, "não temos rpg") ||
+		strings.Contains(last, "nao temos rpg")
+
+	checked := false
+	for _, c := range h.allToolCalls {
+		if c.Tool == "list_procedures" {
+			checked = true
+			break
+		}
+	}
+
+	if denied && !checked {
+		t.Errorf("IA denied a service without checking list_procedures (same as conv 00466279); reply=%q calls=%s", last, summarizeCalls(h.allToolCalls))
+	}
+}
+
+// Variation: "Vocês fazem drenagem linfática?" — clinic actually has it
+// listed as "Drenagem Linfática — Corpo Todo". Test the same anti-deny rule.
+func TestEval_RealBug_FazemDrenagemLinfatica(t *testing.T) {
+	h := setupEvalHarness(t)
+
+	h.Send("vcs fazem drenagem linfática?")
+
+	last := strings.ToLower(h.lastReply())
+	denied := strings.Contains(last, "não fazemos") ||
+		strings.Contains(last, "nao fazemos") ||
+		strings.Contains(last, "não oferec") ||
+		strings.Contains(last, "nao oferec")
+
+	checked := false
+	for _, c := range h.allToolCalls {
+		if c.Tool == "list_procedures" {
+			checked = true
+			break
+		}
+	}
+
+	if denied && !checked {
+		t.Errorf("IA denied 'drenagem linfática' without consulting list_procedures; reply=%q calls=%s", last, summarizeCalls(h.allToolCalls))
+	}
+}
+
+// TestEval_RealBug_CheckinAvulso simulates a patient doing a drive-by
+// check-in on the day before/of the class. IA must look up the
+// appointment, not greet generically or ask for tipo/horário.
+//
+// Conversation refs: 5d024311 ("Estou antecipando o check in de amanhã"),
+// 7a425037 ("Vou hoje eu e o meu marido às 15:00"), a4f57127 ("Vou 8 então").
+func TestEval_RealBug_CheckinAvulso(t *testing.T) {
+	h := setupEvalHarness(t)
+
+	h.Send("oi tai estou antecipando o check in de amanhã")
+
+	checked := false
+	for _, c := range h.allToolCalls {
+		if c.Tool == "get_patient_appointments" || c.Tool == "confirm_appointment" {
+			checked = true
+			break
+		}
+	}
+	if !checked {
+		t.Errorf("'antecipando check in de amanhã' must consult agenda; calls=%s", summarizeCalls(h.allToolCalls))
+	}
+}
+
+// Variation: "Vou hoje 15h" — same intent, different phrasing.
+func TestEval_RealBug_VouHojeAsHora(t *testing.T) {
+	loc, _ := time.LoadLocation("America/Sao_Paulo")
+	now := time.Now().In(loc)
+	apptTime := time.Date(now.Year(), now.Month(), now.Day(), 15, 0, 0, 0, loc)
+	if apptTime.Before(now) {
+		apptTime = apptTime.Add(24 * time.Hour)
+	}
+	h := setupEvalHarnessOpts(t, evalOpts{
+		PatientContext: &PatientContext{
+			NextAppointment: &PatientNextAppointment{
+				StartTime:        apptTime,
+				ProfessionalName: "Dra. Mariana Costa",
+				ProcedureName:    "Avaliação Pilates",
+			},
+		},
+	})
+
+	h.Send("vou hoje às 15h")
+
+	// Acceptable: confirm directly, OR engage appointments (IA may
+	// double-check via get_patient_appointments before confirming when
+	// patient says a specific hour). What we DON'T accept: ignoring
+	// the appointment in context and asking "qual procedimento?".
+	engaged := false
+	for _, c := range h.allToolCalls {
+		switch c.Tool {
+		case "confirm_appointment", "get_patient_appointments":
+			engaged = true
+		}
+	}
+	if !engaged {
+		t.Errorf("'vou hoje às 15h' with appointment in context must engage appointment tool (confirm or fetch); calls=%s", summarizeCalls(h.allToolCalls))
+	}
+}
+
+// TestEval_RealBug_LeadCase_HorarioInvalidadoComAppointment is the
+// scenario the lead described: patient already has a confirmed
+// appointment, sends a short reply, and IA replies "horário não
+// disponível" or "não encontrei". With pre-fetched patient context,
+// the IA must SEE the appointment and act on it (confirm/reschedule)
+// instead of denying it.
+func TestEval_RealBug_LeadCase_HorarioInvalidadoComAppointment(t *testing.T) {
+	tomorrow := time.Now().Add(24 * time.Hour)
+	apptTime := time.Date(tomorrow.Year(), tomorrow.Month(), tomorrow.Day(), 14, 0, 0, 0, time.Local)
+	h := setupEvalHarnessOpts(t, evalOpts{
+		PatientContext: &PatientContext{
+			NextAppointment: &PatientNextAppointment{
+				StartTime:        apptTime,
+				ProfessionalName: "Dra. Mariana Costa",
+				ProcedureName:    "Avaliação Pilates",
+			},
+		},
+	})
+
+	h.Send("oi tem horário ainda?")
+
+	// IA must NOT say "não disponível" / "não encontrei" when the
+	// patient HAS an appointment in context. Should reference the
+	// existing appointment.
+	last := strings.ToLower(h.lastReply())
+	denied := strings.Contains(last, "não dispon") ||
+		strings.Contains(last, "nao dispon") ||
+		strings.Contains(last, "não encontrei") ||
+		strings.Contains(last, "nao encontrei")
+	if denied {
+		t.Errorf("IA denied availability while patient has pending appointment in context — this is the lead's bug; reply: %q", last)
+	}
+}
+
+// TestEval_RealBug_PacienteEmTransicao_SemRegistros simulates a patient
+// with NO records in the system (new client or migrating from another
+// system). When they reply with a short ambiguous message, IA must NOT
+// invent context — should ask for clarification instead.
+func TestEval_RealBug_PacienteEmTransicao_SemRegistros(t *testing.T) {
+	h := setupEvalHarnessOpts(t, evalOpts{
+		PatientContext: &PatientContext{
+			// Empty — no appointments, no plans. Patient in transition.
+		},
+	})
+
+	h.Send("9h sim")
+
+	last := strings.ToLower(h.lastReply())
+	// IA must NOT confirm anything (nothing to confirm) and must NOT
+	// invent an appointment. Acceptable: ask for context or handoff.
+	confirmed := false
+	for _, c := range h.allToolCalls {
+		if c.Tool == "confirm_appointment" || c.Tool == "confirm_class_attendance" {
+			confirmed = true
+			break
+		}
+	}
+	if confirmed {
+		t.Errorf("IA confirmed something for a patient with no records — fabrication; calls=%s", summarizeCalls(h.allToolCalls))
+	}
+
+	// Reply should ask clarification or hand off — not just be a
+	// generic greeting that ignores the "9h sim".
+	asksClarif := strings.Contains(last, "context") ||
+		strings.Contains(last, "agendamento") ||
+		strings.Contains(last, "explic") ||
+		strings.Contains(last, "informa") ||
+		strings.Contains(last, "qual ") ||
+		strings.Contains(last, "minutinho")
+	if !asksClarif {
+		t.Errorf("IA must ask clarification or handoff when patient has no records and replies ambiguously; reply: %q", last)
+	}
+}
+
+// TestEval_PreFetch_AppointmentNoContext: simulates a patient with a
+// pending appointment in context who replies confirming. IA should
+// confirm the SPECIFIC appointment (no get_patient_appointments needed —
+// context already has it). Note: matching the appointment hour to the
+// patient's reply matters — mismatched times would correctly trigger
+// disambiguation.
+func TestEval_PreFetch_AppointmentNoContext(t *testing.T) {
+	tomorrow := time.Now().Add(24 * time.Hour)
+	apptTime := time.Date(tomorrow.Year(), tomorrow.Month(), tomorrow.Day(), 14, 0, 0, 0, time.Local)
+	h := setupEvalHarnessOpts(t, evalOpts{
+		PatientContext: &PatientContext{
+			NextAppointment: &PatientNextAppointment{
+				StartTime:        apptTime,
+				ProfessionalName: "Dra. Mariana Costa",
+				ProcedureName:    "Avaliação Pilates",
+			},
+		},
+	})
+
+	// Plain "confirmo" — no time mismatch. Must hit the only
+	// appointment in context.
+	h.Send("confirmo")
+
+	confirmed := false
+	for _, c := range h.allToolCalls {
+		if c.Tool == "confirm_appointment" {
+			confirmed = true
+			break
+		}
+	}
+	if !confirmed {
+		t.Errorf("with single pending appointment in context, 'confirmo' must call confirm_appointment directly; calls=%s", summarizeCalls(h.allToolCalls))
+	}
+}
+
+// TestEval_RealBug_PerguntaTurma_UsaGroupSlots is forward-looking: in
+// prod conversations 519b8ff6 ("turma das 18h ou 19h?") and 4f2b92a7
+// ("vaga de pilates às 8h10?"), IA called get_available_slots in a loop
+// across professionals (1-on-1 path) and reported "não encontrei". This
+// tool is now wired locally; once deployed, this test must pass — IA
+// must reach for get_group_class_slots instead.
+func TestEval_RealBug_PerguntaTurma_UsaGroupSlots(t *testing.T) {
+	h := setupEvalHarness(t)
+
+	h.Send("oi tem turma das 18h hoje?")
+
+	usesIndividualLoop := 0
+	usesGroup := 0
+	for _, c := range h.allToolCalls {
+		if c.Tool == "get_available_slots" {
+			usesIndividualLoop++
+		}
+		if c.Tool == "get_group_class_slots" {
+			usesGroup++
+		}
+	}
+	if usesGroup == 0 && usesIndividualLoop > 0 {
+		t.Errorf("turma question routed to 1-on-1 get_available_slots loop instead of get_group_class_slots; this is the prod bug from convs 519b8ff6/4f2b92a7. calls=%s", summarizeCalls(h.allToolCalls))
 	}
 }

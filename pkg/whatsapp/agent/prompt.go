@@ -10,11 +10,12 @@ import (
 
 // SystemPromptBuilder builds system prompts for the AI agent
 type SystemPromptBuilder struct {
-	clinicName   string
-	patientName  string
-	businessInfo string
-	faq          string
-	context      *conversation.ConversationContext
+	clinicName     string
+	patientName    string
+	businessInfo   string
+	faq            string
+	context        *conversation.ConversationContext
+	patientContext *PatientContext
 }
 
 // NewSystemPromptBuilder creates a new system prompt builder
@@ -35,6 +36,16 @@ func (b *SystemPromptBuilder) WithBusinessInfo(info string) *SystemPromptBuilder
 
 // WithFAQ sets the clinic's FAQ content to be injected into the system prompt.
 // Empty/whitespace values are ignored.
+// WithPatientContext attaches pre-fetched per-turn patient state (next
+// appointment + active plans) so the dynamic tail of the prompt carries
+// concrete agendamentos for short-reply interpretation. nil = caller
+// disabled the pre-fetch or patient_id wasn't resolved yet; the prompt
+// renders an "unknown patient" notice in that case.
+func (b *SystemPromptBuilder) WithPatientContext(pc *PatientContext) *SystemPromptBuilder {
+	b.patientContext = pc
+	return b
+}
+
 func (b *SystemPromptBuilder) WithFAQ(faq string) *SystemPromptBuilder {
 	b.faq = faq
 	return b
@@ -84,6 +95,15 @@ func (b *SystemPromptBuilder) Build() string {
 	if b.context != nil {
 		prompt.WriteString("\n\n")
 		prompt.WriteString(b.contextSpecificInstructions())
+	}
+
+	// Pre-fetched patient context (next appointment + active plans).
+	// Strictly dynamic — never cacheable — so it goes after everything
+	// else. The whole point is to give the LLM ground truth for short
+	// replies BEFORE it has to invent intent.
+	if section := b.patientContextSection(); section != "" {
+		prompt.WriteString("\n\n")
+		prompt.WriteString(section)
 	}
 
 	return prompt.String()
@@ -252,6 +272,128 @@ func quoteEach(items []string) []string {
 		out[i] = fmt.Sprintf("%q", s)
 	}
 	return out
+}
+
+// patientContextSection renders the pre-fetched patient state for the
+// dynamic tail of the prompt. Returns "" when caller didn't pre-fetch
+// (b.patientContext == nil); renders an explicit "no records" notice
+// when the patient was looked up but has nothing — that's important
+// signal: short replies from such patients are AMBIGUOUS, not implicit
+// confirmations of something that doesn't exist.
+func (b *SystemPromptBuilder) patientContextSection() string {
+	if b.patientContext == nil {
+		return ""
+	}
+
+	pc := b.patientContext
+	hasAppt := pc.NextAppointment != nil
+	hasPlans := len(pc.ActivePlans) > 0
+
+	if !hasAppt && !hasPlans {
+		return `📅 **CONTEXTO DO PACIENTE — NENHUM REGISTRO**
+
+Este paciente não tem agendamento pendente nem plano ativo no sistema. Pode ser cliente novo OU em transição vindo de outro sistema (cadastro fora do banco).
+
+🚨 Quando o paciente mandar mensagem CURTA ou IMPLÍCITA ("sim", "confirmado", "vou hoje", "imprevisto", "9h sim", "tá certo"), NÃO assuma que ele está confirmando ou cancelando algo — você não tem como saber. Pergunte UMA frase de clarificação:
+
+"Pra te ajudar melhor, pode me dar mais contexto? Não encontrei agendamento ou plano ativo no seu cadastro. Está confirmando algo, querendo marcar uma consulta nova, ou outra coisa?"
+
+Se após 1-2 trocas continuar ambíguo, chame complete_handoff_to_human — provavelmente é caso que o time humano tem que olhar.`
+	}
+
+	loc := saoPauloLocation()
+	var sb strings.Builder
+	sb.WriteString("📅 **CONTEXTO DO PACIENTE — interprete respostas curtas/ambíguas contra esta lista:**\n")
+
+	if hasAppt {
+		appt := pc.NextAppointment
+		local := appt.StartTime.In(loc)
+		weekday := weekdayPTLong(local.Weekday())
+		line := fmt.Sprintf("\nPróximo agendamento individual: %s %s às %s", weekday, local.Format("02/01"), local.Format("15:04"))
+		if appt.ProfessionalName != "" {
+			line += " — " + appt.ProfessionalName
+		}
+		if appt.ProcedureName != "" {
+			line += " (" + appt.ProcedureName + ")"
+		}
+		sb.WriteString(line)
+		sb.WriteString("\n")
+	}
+
+	if hasPlans {
+		var individuals, groups []PatientActivePlan
+		for _, p := range pc.ActivePlans {
+			if p.Type == "group" {
+				groups = append(groups, p)
+			} else {
+				individuals = append(individuals, p)
+			}
+		}
+
+		if len(individuals) > 0 {
+			sb.WriteString("\nPlanos individuais recorrentes (cada aula é virtual até materializar — use confirm_appointment SOMENTE depois de materializar):\n")
+			for _, p := range individuals {
+				sb.WriteString("- ")
+				sb.WriteString(formatPlanLine(p, loc))
+				sb.WriteString("\n")
+			}
+		}
+
+		if len(groups) > 0 {
+			sb.WriteString("\nMatrículas em turma (aulas em grupo — use confirm_class_attendance, NUNCA confirm_appointment):\n")
+			for _, p := range groups {
+				sb.WriteString("- ")
+				sb.WriteString(formatPlanLine(p, loc))
+				sb.WriteString("\n")
+			}
+		}
+	}
+
+	sb.WriteString("\n🚨 Mensagem curta/ambígua do paciente DEVE ser interpretada contra os itens acima ANTES de pedir mais info. Ex: \"sim\" + tem appointment pendente Quarta 14h → confirmar aquele appointment, NÃO perguntar \"qual procedimento?\". \"vou amanhã 9h\" + tem matrícula com slot Seg 09:00 e amanhã é Segunda → confirm_class_attendance daquela aula. NUNCA invente agendamento que não está nesta lista.")
+
+	return sb.String()
+}
+
+// formatPlanLine renders one PatientActivePlan as a compact bullet:
+// "Pilates 1h: Seg 09:00, Qua 09:00 → próxima: Quarta 30/04 09:00"
+func formatPlanLine(p PatientActivePlan, loc *time.Location) string {
+	slots := make([]string, 0, len(p.Slots))
+	for _, s := range p.Slots {
+		slots = append(slots, fmt.Sprintf("%s %s", weekdayPTShort(time.Weekday(s.Weekday)), s.StartTime))
+	}
+	line := p.PlanTitle
+	if len(slots) > 0 {
+		line += ": " + strings.Join(slots, ", ")
+	}
+	if p.NextClass != nil {
+		nc := p.NextClass.In(loc)
+		line += fmt.Sprintf(" → próxima: %s %s %s",
+			weekdayPTLong(nc.Weekday()), nc.Format("02/01"), nc.Format("15:04"))
+	}
+	return line
+}
+
+// weekdayPTLong: "Domingo".."Sábado".
+func weekdayPTLong(w time.Weekday) string {
+	names := [7]string{"Domingo", "Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado"}
+	return names[w]
+}
+
+// weekdayPTShort: "Dom".."Sáb".
+func weekdayPTShort(w time.Weekday) string {
+	names := [7]string{"Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"}
+	return names[w]
+}
+
+// saoPauloLocation returns America/Sao_Paulo (UTC-3) so dates render in
+// patient-local time. Falls back to UTC when tzdata is missing — better
+// than crashing the prompt build.
+func saoPauloLocation() *time.Location {
+	loc, err := time.LoadLocation("America/Sao_Paulo")
+	if err != nil {
+		return time.UTC
+	}
+	return loc
 }
 
 func (b *SystemPromptBuilder) conversationStateDescription() string {
@@ -572,7 +714,11 @@ Quando NÃO é turma (mesmo se o nome contiver "Pilates"):
    - Convênio → list_partner_plans + match (rede + plano). Sem match: confirme nome com paciente ANTES de negar (ex: "Qual plano dentro do Gympass?"). Após confirmar e ainda sem match → handoff. NUNCA afirme "não aceitamos" sem confirmar.
    - Particular → mensalidade = valor do FAQ pela frequência escolhida. Sem FAQ com tabela → handoff em vez de inventar.
 
-   **(5) Dia de cobrança** — SOMENTE particular mensal. "Qual dia do mês prefere pra cobrança?" Convênio: não pergunte.
+   **(5) Dia de cobrança** — SOMENTE particular mensal.
+
+   🚨 **PROIBIDO perguntar dia de cobrança quando paciente disse convênio** (Gympass / Total Pass / Namu / Gogood) — convênio cuida da cobrança, não a clínica. Se você passou pelo passo (4) com convênio confirmado, PULE direto pro resumo (passo 6).
+
+   Pergunte apenas no caminho particular: "Qual dia do mês prefere pra cobrança?"
 
    c) **Resumo de confirmação — VOCÊ DEVE chamar a tool, NÃO escrever texto livre**
 

@@ -36,6 +36,13 @@ type AgentRequest struct {
 	// the LLM transfers the conversation to the human team. Plumbed on every
 	// request so the tool can render the right wording per clinic.
 	BlockedIntentReply string
+
+	// PatientContext is pre-fetched per-turn (next pending appointment +
+	// active group enrollments). Injected into the system prompt's
+	// dynamic tail so the LLM interprets short replies against real
+	// state. Nil = pre-fetch disabled or first-contact patient with no
+	// patient_id resolved yet.
+	PatientContext *PatientContext
 }
 
 // AgentResponse represents the agent's response
@@ -77,6 +84,65 @@ type Agent interface {
 // this — main.go uses a type assertion.
 type Flusher interface {
 	Flush()
+}
+
+// PatientContext is pre-fetched data injected into the system prompt so
+// the LLM can interpret short/ambiguous patient replies ("sim",
+// "imprevisto", "vou hoje") relative to the patient's actual state.
+//
+// Three data sources, each handling a distinct part of how
+// appointments live in the system:
+//
+//  1. appointments table — already-materialized 1-on-1 appointments
+//     (created via quick_schedule / create_appointment). Only the next
+//     pending one is included.
+//
+//  2. session_plans (type=individual) — recurring 1-on-1 plans where
+//     each weekly occurrence is virtual until materialized. Common case:
+//     fisio 1x/week. "Próxima sessão" comes from RRULE/WeekDays in code,
+//     not from a DB row.
+//
+//  3. session_plan_enrollments (active) — group classes (Pilates etc.)
+//     that NEVER materialize. Slots are weekly recurring (Seg 09:00,
+//     Qua 09:00...); next class computed in code.
+//
+// Empty fields ARE meaningful — patient with nothing in the system is
+// likely a new client or in transition from another system; the LLM
+// should not assume context for short replies.
+type PatientContext struct {
+	// NextAppointment is the next pending individual appointment
+	// already in the appointments table (limit 1 — weekly individual
+	// sessions otherwise show appointments 3 weeks out, useless noise).
+	NextAppointment *PatientNextAppointment
+
+	// ActivePlans lists active recurring plans the patient has —
+	// includes BOTH individual (fisio semanal recorrente) and group
+	// (Pilates matrícula). Each entry has a Type field so the LLM can
+	// route the right confirm/cancel tool (confirm_appointment for
+	// individual, confirm_class_attendance for group).
+	ActivePlans []PatientActivePlan
+}
+
+// PatientNextAppointment is one pending individual appointment.
+type PatientNextAppointment struct {
+	StartTime        time.Time
+	ProfessionalName string
+	ProcedureName    string
+}
+
+// PatientActivePlan covers both individual recurring plans and group
+// matrículas. Type tells the LLM which confirm/cancel flow to use.
+type PatientActivePlan struct {
+	Type      string // "individual" or "group"
+	PlanTitle string
+	Slots     []PlanSlotPreview // weekly grid; same shape for both types
+	NextClass *time.Time        // computed next future occurrence
+}
+
+// PlanSlotPreview is one weekly recurring slot.
+type PlanSlotPreview struct {
+	Weekday   int    // 0=Sun..6=Sat
+	StartTime string // HH:MM
 }
 
 // Config holds agent configuration

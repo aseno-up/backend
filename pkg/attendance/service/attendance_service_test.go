@@ -197,6 +197,10 @@ func (m *mockEnrollmentRepo) GetByPatientAndPlan(_ context.Context, _, _, _ uuid
 	return m.enrollment, nil
 }
 
+func (m *mockEnrollmentRepo) GetActiveByPatient(_ context.Context, _, _ uuid.UUID) ([]*enrollment_model.SessionPlanEnrollment, error) {
+	return nil, nil
+}
+
 func (m *mockEnrollmentRepo) IncrementSessionsDone(_ context.Context, _, _ uuid.UUID) error {
 	m.incrementCalled = true
 	if m.enrollment != nil {

@@ -104,6 +104,7 @@ type aiAgentService struct {
 	systemLogSvc                   systemlog_service.SystemLogService
 	usageMetrics                   TokenUsageRecorder
 	aiTokenUsage                   AITokenUsageRecorder
+	patientContextFetcher          PatientContextFetcher
 	defaultMinDelayBetweenMessages int
 	// promptHistoryTurns is how many past turns go into the LLM prompt.
 	// 0 means "use package default" (DefaultPromptHistoryTurns).
@@ -129,6 +130,15 @@ const (
 // SetPromptHistoryTurns configures the history window used when building
 // the LLM prompt. Wired from the worker config env var
 // CONVERSATION_PROMPT_HISTORY_TURNS in main.go.
+// SetPatientContextFetcher wires the per-turn pre-fetch of patient state.
+// Optional — when nil, prompt builder skips the patient context section
+// (and the LLM falls back to whatever context the conversation history
+// carries). main.go wires this in production with a real DB-backed
+// adapter; tests typically leave it nil.
+func (s *aiAgentService) SetPatientContextFetcher(f PatientContextFetcher) {
+	s.patientContextFetcher = f
+}
+
 // Flush drains any pending observability traces in the underlying agent
 // (e.g. LangFuse goroutines). Best-effort — no-op when the agent doesn't
 // implement Flusher. Call at graceful shutdown so the dashboard isn't
@@ -170,6 +180,17 @@ func (s *aiAgentService) resolvedTemperature(handoff bool) float32 {
 		return s.agentTemperature
 	}
 	return defaultAgentTemperature
+}
+
+// PatientContextFetcher resolves the per-turn pre-fetch of patient state
+// (next pending appointment, active recurring plans). Implementations
+// must return (nil, nil) when no patientID is resolved (first contact)
+// — the prompt builder treats nil as "skip the section". An empty but
+// non-nil PatientContext (no appts, no plans) is also valid and tells
+// the LLM "this patient has nothing in the system, treat short replies
+// as ambiguous".
+type PatientContextFetcher interface {
+	Fetch(ctx context.Context, clinicID, patientID uuid.UUID) (*PatientContext, error)
 }
 
 // FeatureFlags holds feature enablement flags (ops-level kill-switch).
@@ -387,6 +408,21 @@ func (s *aiAgentService) ProcessMessage(ctx context.Context, req *MessageRequest
 		}
 		agentReq.ClinicBusinessInfo = clinic.BusinessInfo
 		agentReq.ClinicFAQ = clinic.FAQ
+	}
+
+	// Pre-fetch patient context (next pending appointment + active
+	// recurring plans). This is what lets the LLM interpret short
+	// replies ("sim", "imprevisto", "vou hoje 9h") against real state
+	// instead of asking "qual procedimento?" every time. Best-effort:
+	// fetcher errors are logged and the LLM proceeds without context
+	// (degrades to current behavior, never blocks the response).
+	if s.patientContextFetcher != nil && conv.PatientID != nil {
+		pc, fetchErr := s.patientContextFetcher.Fetch(ctx, req.ClinicID, *conv.PatientID)
+		if fetchErr != nil {
+			logger.Printf("[AI Agent Service] patient context fetch failed (proceeding without): %v", fetchErr)
+		} else {
+			agentReq.PatientContext = pc
+		}
 	}
 
 	// Generate AI response

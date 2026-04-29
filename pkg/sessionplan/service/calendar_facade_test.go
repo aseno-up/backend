@@ -169,6 +169,9 @@ func (m *mockCalendarEnrollmentRepo) GetActiveByPlan(_ context.Context, _, _ uui
 func (m *mockCalendarEnrollmentRepo) GetByPatientAndPlan(_ context.Context, _, _, _ uuid.UUID) (*enrollment_model.SessionPlanEnrollment, error) {
 	return nil, nil
 }
+func (m *mockCalendarEnrollmentRepo) GetActiveByPatient(_ context.Context, _, _ uuid.UUID) ([]*enrollment_model.SessionPlanEnrollment, error) {
+	return nil, nil
+}
 func (m *mockCalendarEnrollmentRepo) IncrementSessionsDone(_ context.Context, _, _ uuid.UUID) error {
 	return nil
 }

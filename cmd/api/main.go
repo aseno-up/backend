@@ -602,6 +602,20 @@ func main() {
 				aiAgentForShutdown = aiAgentService
 				aiAgentService.SetPromptHistoryTurns(workerCfg.ConversationPromptHistoryTurns)
 				aiAgentService.SetTemperatures(workerCfg.AIAgentTemperature, workerCfg.AIAgentHandoffTemperature)
+				// Pre-fetch context: next pending appointment + active
+				// recurring plans (individual + group). Lets the LLM
+				// interpret short patient replies against real state.
+				if setter, ok := aiAgentService.(interface {
+					SetPatientContextFetcher(agent.PatientContextFetcher)
+				}); ok {
+					setter.SetPatientContextFetcher(&aiAgentPatientContextFetcherAdapter{
+						appointmentRepo:  appointmentRepo,
+						professionalRepo: professionalRepo,
+						sessionPlanRepo:  sessionPlanRepo,
+						slotRepo:         sessionPlanSlotRepo,
+						enrollmentRepo:   aiEnrollmentRepo,
+					})
+				}
 				whatsappService.SetAIAgentService(aiAgentService)
 				if conversationMgr != nil {
 					whatsappService.SetConversationManager(conversationMgr)
@@ -3728,6 +3742,194 @@ func (a *aiAgentEnrollmentSummaryPresenterAdapter) PresentSummary(
 	// see it on the WhatsApp message. Keeping it noise-free.
 	_ = billingDay
 	return out, nil
+}
+
+// aiAgentPatientContextFetcherAdapter pre-fetches what the LLM needs to
+// interpret short replies. Three sources:
+//
+//  1. Next pending individual appointment from the appointments table.
+//     Limit 1 — weekly individual plans otherwise show appointments 3
+//     weeks out as "next", which is noise.
+//
+//  2. Active SessionPlans owned by the patient with type=individual.
+//     Each weekly occurrence is virtual until materialized; the next
+//     class is computed in code from WeekDays + PreferredTime/DayTimes.
+//
+//  3. Active SessionPlanEnrollments (group classes — Pilates etc).
+//     Each enrollment carries its slot grid; next class computed from
+//     the slot's weekday + start_time.
+//
+// All three are best-effort: per-source errors are swallowed and the
+// other sources still surface in the prompt. A patient with absolutely
+// nothing returns an empty (but non-nil) PatientContext — that's the
+// signal for "treat short replies as ambiguous".
+type aiAgentPatientContextFetcherAdapter struct {
+	appointmentRepo  appointment_repository.AppointmentRepository
+	professionalRepo professional_repository.ProfessionalRepository
+	sessionPlanRepo  sessionplan_repository.SessionPlanRepository
+	slotRepo         sessionplan_repository.SessionPlanSlotRepository
+	enrollmentRepo   enrollment_repository.EnrollmentRepository
+}
+
+func (a *aiAgentPatientContextFetcherAdapter) Fetch(
+	ctx context.Context,
+	clinicID, patientID uuid.UUID,
+) (*agent.PatientContext, error) {
+	out := &agent.PatientContext{}
+	now := time.Now()
+
+	// 1) Next pending individual appointment (materialized in DB).
+	// GetByPatient is sorted by start_time ASC, so the first row in the
+	// future is the next one. Filter to pending/confirmed and future.
+	appts, _ := a.appointmentRepo.GetByPatient(ctx, patientID, clinicID, 10)
+	for _, appt := range appts {
+		if appt.StartTime.Before(now) {
+			continue
+		}
+		// Only "actionable" statuses — past patient may have appointments
+		// completed/canceled in the list. We want pending or confirmed.
+		st := string(appt.Status)
+		if st != "pending" && st != "confirmed" && st != "no_response" {
+			continue
+		}
+		profName := ""
+		if prof, err := a.professionalRepo.GetByID(ctx, appt.ProfessionalID, clinicID); err == nil && prof != nil {
+			profName = prof.Name
+		}
+		out.NextAppointment = &agent.PatientNextAppointment{
+			StartTime:        appt.StartTime,
+			ProfessionalName: profName,
+		}
+		break // first future actionable appointment wins
+	}
+
+	// 2) Active recurring plans owned by this patient (individual).
+	individualPlans, _ := a.sessionPlanRepo.GetByPatient(ctx, clinicID, patientID)
+	for _, plan := range individualPlans {
+		if plan.Status != sessionplan_model.PlanStatusActive {
+			continue
+		}
+		if plan.Type != sessionplan_model.PlanTypeIndividual {
+			continue
+		}
+		ap := agent.PatientActivePlan{
+			Type:      "individual",
+			PlanTitle: planDisplayTitle(plan),
+		}
+		// Weekday list: prefer DayTimes (legacy per-day-time map),
+		// otherwise fall back to plain WeekDays + PreferredTime.
+		ap.Slots = individualPlanSlots(plan)
+		ap.NextClass = nextOccurrenceFromSlots(now, ap.Slots)
+		out.ActivePlans = append(out.ActivePlans, ap)
+	}
+
+	// 3) Active group enrollments.
+	enrollments, _ := a.enrollmentRepo.GetActiveByPatient(ctx, clinicID, patientID)
+	for _, enr := range enrollments {
+		plan, err := a.sessionPlanRepo.GetByID(ctx, clinicID, enr.SessionPlanID)
+		if err != nil || plan == nil {
+			continue
+		}
+		ap := agent.PatientActivePlan{
+			Type:      "group",
+			PlanTitle: planDisplayTitle(plan),
+		}
+		// Resolve the enrollment's slots into the preview shape.
+		for _, junction := range enr.Slots {
+			slot, err := a.slotRepo.GetByID(ctx, junction.SessionPlanSlotID)
+			if err != nil || slot == nil || !slot.IsActive {
+				continue
+			}
+			ap.Slots = append(ap.Slots, agent.PlanSlotPreview{
+				Weekday:   slot.Weekday,
+				StartTime: slot.StartTime,
+			})
+		}
+		ap.NextClass = nextOccurrenceFromSlots(now, ap.Slots)
+		out.ActivePlans = append(out.ActivePlans, ap)
+	}
+
+	return out, nil
+}
+
+// planDisplayTitle picks the most useful title for a session plan. Falls
+// back to procedure name when title is empty (legacy data).
+func planDisplayTitle(plan *sessionplan_model.SessionPlan) string {
+	if plan.Title != "" {
+		return plan.Title
+	}
+	if plan.ProcedureName != "" {
+		return plan.ProcedureName
+	}
+	return "Plano"
+}
+
+// individualPlanSlots derives the weekly slot grid from an individual
+// SessionPlan. Tries DayTimes (most accurate — different times per day),
+// then WeekDays + PreferredTime.
+func individualPlanSlots(plan *sessionplan_model.SessionPlan) []agent.PlanSlotPreview {
+	out := []agent.PlanSlotPreview{}
+
+	// DayTimes is map "MO" -> "08:00".
+	if len(plan.DayTimes) > 0 {
+		for code, t := range plan.DayTimes {
+			wd := byDayCodeToWeekday(code)
+			if wd < 0 {
+				continue
+			}
+			out = append(out, agent.PlanSlotPreview{Weekday: wd, StartTime: t})
+		}
+		return out
+	}
+
+	// Legacy: WeekDays array + PreferredTime.
+	t := plan.PreferredTime
+	if t == "" {
+		t = "08:00"
+	}
+	for _, wd := range plan.WeekDays {
+		out = append(out, agent.PlanSlotPreview{Weekday: int(wd), StartTime: t})
+	}
+	return out
+}
+
+// byDayCodeToWeekday converts a RFC 5545 BYDAY code (MO, TU, etc) into
+// time.Weekday integer (0=Sun..6=Sat). Returns -1 on unknown.
+func byDayCodeToWeekday(code string) int {
+	switch strings.ToUpper(code) {
+	case "SU":
+		return 0
+	case "MO":
+		return 1
+	case "TU":
+		return 2
+	case "WE":
+		return 3
+	case "TH":
+		return 4
+	case "FR":
+		return 5
+	case "SA":
+		return 6
+	}
+	return -1
+}
+
+// nextOccurrenceFromSlots returns the soonest next occurrence across
+// all slots. Returns nil when slots is empty or all are unparseable.
+func nextOccurrenceFromSlots(now time.Time, slots []agent.PlanSlotPreview) *time.Time {
+	var best *time.Time
+	for _, s := range slots {
+		dt := nextOccurrence(now, s.Weekday, s.StartTime)
+		if dt.IsZero() {
+			continue
+		}
+		if best == nil || dt.Before(*best) {
+			d := dt
+			best = &d
+		}
+	}
+	return best
 }
 
 // formatBRL formats a float as Brazilian-style "1.234,56" (thousand

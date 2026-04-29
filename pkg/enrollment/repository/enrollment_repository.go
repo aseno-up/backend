@@ -18,6 +18,11 @@ type EnrollmentRepository interface {
 	GetByPlan(ctx context.Context, clinicID, sessionPlanID uuid.UUID) ([]*model.SessionPlanEnrollment, error)
 	GetActiveByPlan(ctx context.Context, clinicID, sessionPlanID uuid.UUID) ([]*model.SessionPlanEnrollment, error)
 	GetByPatientAndPlan(ctx context.Context, clinicID, patientID, sessionPlanID uuid.UUID) (*model.SessionPlanEnrollment, error)
+	// GetActiveByPatient returns every active enrollment for a patient
+	// across all session plans in the clinic. Used by the AI agent
+	// pre-fetch context so short patient replies ("sim", "imprevisto")
+	// can be interpreted against the patient's actual matrículas.
+	GetActiveByPatient(ctx context.Context, clinicID, patientID uuid.UUID) ([]*model.SessionPlanEnrollment, error)
 	CountActiveByPlan(ctx context.Context, clinicID, sessionPlanID uuid.UUID) (int64, error)
 	CountActiveByPlanAndWeekDay(ctx context.Context, clinicID, sessionPlanID uuid.UUID, weekDay int) (int64, error)
 	// CountActiveBySlot returns the number of active enrollments that include the given slot.
@@ -97,6 +102,25 @@ func (r *enrollmentRepository) GetActiveByPlan(ctx context.Context, clinicID, se
 		return nil, errors.ErrInternalInstance.WithError(err)
 	}
 
+	for _, e := range enrollments {
+		r.loadRelations(ctx, e)
+	}
+	return enrollments, nil
+}
+
+// GetActiveByPatient returns every active enrollment for a patient
+// across all session plans in the clinic. Loads slots so the AI agent
+// pre-fetch context can compute the next class occurrence per matrícula.
+func (r *enrollmentRepository) GetActiveByPatient(ctx context.Context, clinicID, patientID uuid.UUID) ([]*model.SessionPlanEnrollment, error) {
+	var enrollments []*model.SessionPlanEnrollment
+	err := r.db.WithContext(ctx).
+		Preload("Slots").
+		Where("clinic_id = ? AND patient_id = ? AND status = ?", clinicID, patientID, model.EnrollmentStatusActive).
+		Order("joined_at ASC").
+		Find(&enrollments).Error
+	if err != nil {
+		return nil, errors.ErrInternalInstance.WithError(err)
+	}
 	for _, e := range enrollments {
 		r.loadRelations(ctx, e)
 	}

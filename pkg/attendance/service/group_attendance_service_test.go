@@ -101,6 +101,10 @@ func (m *mockGroupEnrollmentRepo) GetByPatientAndPlan(_ context.Context, _, pati
 	return nil, nil
 }
 
+func (m *mockGroupEnrollmentRepo) GetActiveByPatient(_ context.Context, _, _ uuid.UUID) ([]*enrollment_model.SessionPlanEnrollment, error) {
+	return nil, nil
+}
+
 func (m *mockGroupEnrollmentRepo) IncrementSessionsDone(_ context.Context, _, enrollmentID uuid.UUID) error {
 	m.incrementCalled[enrollmentID.String()] = true
 	for _, e := range m.enrollments {
