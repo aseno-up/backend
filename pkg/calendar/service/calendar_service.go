@@ -107,13 +107,14 @@ func NewCalendarService(
 }
 
 // checkCalendarLimit validates that the account has not exceeded its Google Calendar integration limit.
-// Trial users bypass plan restrictions. Existing integrations for the same clinic are not counted (reconnecting).
+// Trial users bypass plan restrictions. Existing integrations always pass (reconnect flow), so
+// admin overrides survive plan downgrades. Gating is purely on MaxGoogleCalendars (not plan slug),
+// so a manual bump on a basic-plan account lets the user connect.
 func (s *calendarService) checkCalendarLimit(ctx context.Context, clinic *clinic_model.Clinic) error {
 	if clinic.Account == nil {
 		return nil
 	}
 
-	// Trial users have full access
 	if clinic.Account.SubscriptionStatus == account_model.SubscriptionStatusTrial {
 		return nil
 	}
@@ -123,18 +124,40 @@ func (s *calendarService) checkCalendarLimit(ctx context.Context, clinic *clinic
 		return nil
 	}
 
+	_, existingErr := s.integrationRepo.GetByClinicID(ctx, clinic.ID)
+	hasExisting := existingErr == nil
+
 	count, err := s.integrationRepo.CountByClinicID(ctx, clinic.ID)
 	if err != nil {
 		return err
 	}
 
-	// Allow if this clinic already has an integration (reconnecting)
-	_, existingErr := s.integrationRepo.GetByClinicID(ctx, clinic.ID)
-	if existingErr != nil && int(count) >= limit {
-		return errors.ErrValidationInstance.WithMessage(
-			fmt.Sprintf("Limite de %d integrações com Google Calendar por unidade atingido. Faça upgrade para adicionar mais.", limit))
-	}
+	return classifyCalendarLimitError(limit, count, hasExisting)
+}
 
+// classifyCalendarLimitError returns the user-facing error when a new Google Calendar
+// integration would exceed the account's allotment. Returns nil when the connection
+// should proceed.
+//
+// Why two distinct messages: limit==0 means the plan tier doesn't include the feature
+// (action: upgrade), while count>=limit on a paid plan means the user hit their
+// allotment (action: upgrade or disconnect an existing one). The previous version
+// collapsed both into a single VALIDATION error whose message the frontend's
+// errorMap swallowed and replaced with "Dados inválidos.". Both cases now surface
+// as UPGRADE_REQUIRED (403), which has no frontend translation override, so the
+// specific message reaches the toast.
+func classifyCalendarLimitError(limit int, count int64, hasExisting bool) error {
+	if hasExisting {
+		return nil
+	}
+	if limit == 0 {
+		return errors.ErrUpgradeRequiredInstance.WithMessage(
+			"Seu plano atual não inclui a integração com o Google Calendar. Faça upgrade para o plano Profissional ou superior para liberar.")
+	}
+	if int(count) >= limit {
+		return errors.ErrUpgradeRequiredInstance.WithMessage(fmt.Sprintf(
+			"Você já atingiu o limite de %d integração(ões) com Google Calendar do seu plano. Desconecte uma integração existente ou faça upgrade para adicionar outra.", limit))
+	}
 	return nil
 }
 
