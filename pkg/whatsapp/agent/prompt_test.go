@@ -50,6 +50,38 @@ func TestBuildUserPrompt_HistoryUsesInternalLabels(t *testing.T) {
 	}
 }
 
+// TestBuildUserPrompt_HumanAgentRoleIsDistinct guards the contract that
+// messages typed by a human attendant via the WhatsApp app are rendered with
+// a label distinct from [user] and [assistant], so the LLM doesn't mistake
+// them for the patient (and re-ask info the human already gathered) nor for
+// itself (and double-down on commitments it didn't make).
+func TestBuildUserPrompt_HumanAgentRoleIsDistinct(t *testing.T) {
+	ctx := &conversation.ConversationContext{
+		History: conversation.ConversationHistory{
+			{Role: "user", Content: "quero marcar"},
+			{Role: "assistant", Content: "Qual dia prefere?"},
+			{Role: "human_agent", Content: "consegui encaixar segunda 14h, tudo certo?"},
+		},
+	}
+
+	result := BuildUserPrompt(ctx, "sim pode confirmar")
+
+	if !strings.Contains(result, "consegui encaixar segunda 14h") {
+		t.Fatalf("human_agent content missing from prompt:\n%s", result)
+	}
+	if !strings.Contains(result, "[human_agent]") {
+		t.Errorf("human_agent turn should be rendered with a [human_agent] label so the LLM can tell it apart from [user]/[assistant]; got:\n%s", result)
+	}
+	// Defensive: make sure the human_agent line is NOT prefixed with [user] or [assistant].
+	for _, line := range strings.Split(result, "\n") {
+		if strings.Contains(line, "consegui encaixar segunda 14h") {
+			if strings.HasPrefix(strings.TrimSpace(line), "[user]") || strings.HasPrefix(strings.TrimSpace(line), "[assistant]") {
+				t.Errorf("human_agent turn was rendered with the wrong label: %q", line)
+			}
+		}
+	}
+}
+
 func TestCorePersonality_ContainsNoPrefixInstruction(t *testing.T) {
 	builder := NewSystemPromptBuilder("Clínica Teste", "João", nil)
 	systemPrompt := builder.Build()

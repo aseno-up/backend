@@ -1437,15 +1437,33 @@ func (e *Executor) getPatientInfo(execCtx *ExecutionContext, params map[string]i
 	return info, nil
 }
 
-// completeHandoffToHuman is the deterministic signal the LLM emits in handoff
-// mode. It marks the existing per-patient takeover (so subsequent patient
-// messages are silenced by the gate at the WhatsApp service layer) and
-// returns the clinic-resolved canned reply as the patient-facing message.
+// completeHandoffToHuman is the only way the LLM can decide NOT to reply to
+// the patient. Both modes suppress the AI's text response — the agent
+// service scans the result and skips the send/persist when status is
+// silenced or handoff_completed. The modes differ only in whether the
+// conversation gets paused:
 //
-// Failing loudly when the marker isn't wired is intentional: silently
-// succeeding would leave the team blind to follow-up messages because the
-// takeover gate would never fire.
-func (e *Executor) completeHandoffToHuman(execCtx *ExecutionContext, _ map[string]interface{}) (interface{}, error) {
+//   - mode="handoff" (default): marks the per-patient takeover so subsequent
+//     patient messages are silenced by the gate at the WhatsApp service
+//     layer for clinic.AIHumanTakeoverPauseHours. Failing loudly when the
+//     marker isn't wired is intentional — silently succeeding here would
+//     leave the team blind to follow-up messages because the takeover gate
+//     would never fire.
+//
+//   - mode="silent": pulls THIS single turn out of the AI's reply queue
+//     without pausing the conversation. The next patient message gets
+//     processed normally. Used when replying would confuse the patient
+//     (e.g. "sim" with no pending question) but pausing for hours would be
+//     destructive. Tolerant of nil marker because no marking happens.
+func (e *Executor) completeHandoffToHuman(execCtx *ExecutionContext, params map[string]interface{}) (interface{}, error) {
+	mode, _ := params["mode"].(string)
+
+	if mode == "silent" {
+		return map[string]interface{}{
+			"status": "silenced",
+		}, nil
+	}
+
 	if execCtx.HumanTakeoverMarker == nil {
 		return nil, fmt.Errorf("HumanTakeoverMarker not configured — handoff cannot be completed without marking the takeover")
 	}
@@ -1453,8 +1471,7 @@ func (e *Executor) completeHandoffToHuman(execCtx *ExecutionContext, _ map[strin
 		return nil, fmt.Errorf("failed to mark human takeover: %w", err)
 	}
 	return map[string]interface{}{
-		"status":  "handoff_completed",
-		"message": execCtx.BlockedIntentReply,
+		"status": "handoff_completed",
 	}, nil
 }
 

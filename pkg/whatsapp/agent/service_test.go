@@ -159,6 +159,7 @@ type fakeConvManager struct {
 	mu             sync.Mutex
 	userMessages   []string
 	assistantMsgs  []string
+	humanAgentMsgs []string
 	convID         uuid.UUID
 	updateStateErr error
 	preloadHistory []conversation.ConversationTurn
@@ -190,6 +191,12 @@ func (f *fakeConvManager) AddAssistantMessage(_ context.Context, _ uuid.UUID, co
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.assistantMsgs = append(f.assistantMsgs, content)
+	return nil
+}
+func (f *fakeConvManager) AddHumanAgentMessage(_ context.Context, _ uuid.UUID, content string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.humanAgentMsgs = append(f.humanAgentMsgs, content)
 	return nil
 }
 func (f *fakeConvManager) UpdateState(_ context.Context, _ uuid.UUID, _ conversation.ConversationState, _ model.MessageIntent) error {
@@ -322,6 +329,85 @@ func TestProcessMessage_BlockedIntent_PassesClinicConfiguredCannedReply(t *testi
 	require.NotNil(t, fa.lastRequest)
 	assert.Equal(t, custom, fa.lastRequest.BlockedIntentReply,
 		"clinic-configured canned reply must reach the agent so the handoff tool returns the right text")
+}
+
+// TestProcessMessage_SilentHandoff_SuppressesReplyAndPersistence covers the
+// "AI decides not to respond" feature: when complete_handoff_to_human is
+// invoked with mode=silent, the executor returns status=silenced. The agent
+// service must (a) NOT persist the AI's text reply to history (otherwise
+// future turns inherit a "ghost" message the patient never saw) and (b)
+// return a MessageResponse with no segments so the WhatsApp service layer
+// short-circuits the send path.
+func TestProcessMessage_SilentHandoff_SuppressesReplyAndPersistence(t *testing.T) {
+	clinic := &clinic_model.Clinic{
+		ID: uuid.New(),
+		Settings: clinic_model.ClinicSettings{
+			AIAgentEnabled: true,
+		},
+	}
+	silentToolCall := conversation.ToolCall{
+		Name:      "complete_handoff_to_human",
+		Arguments: map[string]interface{}{"mode": "silent"},
+		Result:    map[string]interface{}{"status": "silenced"},
+	}
+	fa := &fakeAgent{response: &AgentResponse{
+		Content:   "would have replied but staying silent",
+		ToolCalls: []conversation.ToolCall{silentToolCall},
+	}}
+	fcm := newFakeConvManager()
+	svc := buildSvcWithGate(clinic, allToolsGlobalOn(), fa, fcm)
+
+	resp, err := svc.ProcessMessage(context.Background(), &MessageRequest{
+		ClinicID:     clinic.ID,
+		PatientPhone: "+5511999990000",
+		MessageText:  "sim",
+		Intent:       model.MessageIntentUnknown,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, resp, "service must still return a response struct so callers can read tokens/latency")
+	assert.Empty(t, resp.Segments, "silent mode must produce zero segments — the WhatsApp service layer skips send when len(Segments)==0")
+	assert.Empty(t, fcm.assistantMsgs,
+		"silent mode must NOT persist the AI's draft text — that ghost message would mislead future turns")
+	assert.Equal(t, []string{"sim"}, fcm.userMessages,
+		"patient message is still persisted (separate path that runs before agent.Generate)")
+}
+
+// TestProcessMessage_HandoffMode_AlsoSuppresses pins the post-2026-05
+// behavior change: handoff mode no longer sends a canned reply (the
+// "aguarde, alguém te atende em breve" wording was tacky and broke flow
+// mid-conversation). Both handoff and silent now suppress the patient-facing
+// reply; handoff additionally pauses the conversation, silent doesn't.
+func TestProcessMessage_HandoffMode_AlsoSuppresses(t *testing.T) {
+	clinic := &clinic_model.Clinic{
+		ID: uuid.New(),
+		Settings: clinic_model.ClinicSettings{
+			AIAgentEnabled: true,
+		},
+	}
+	handoffToolCall := conversation.ToolCall{
+		Name:      "complete_handoff_to_human",
+		Arguments: map[string]interface{}{},
+		Result:    map[string]interface{}{"status": "handoff_completed"},
+	}
+	fa := &fakeAgent{response: &AgentResponse{
+		Content:   "Vou te transferir pro time, só um minuto.",
+		ToolCalls: []conversation.ToolCall{handoffToolCall},
+	}}
+	fcm := newFakeConvManager()
+	svc := buildSvcWithGate(clinic, allToolsGlobalOn(), fa, fcm)
+
+	resp, err := svc.ProcessMessage(context.Background(), &MessageRequest{
+		ClinicID:     clinic.ID,
+		PatientPhone: "+5511999990000",
+		MessageText:  "quero remarcar",
+		Intent:       model.MessageIntentReschedule,
+	})
+
+	require.NoError(t, err)
+	assert.Empty(t, resp.Segments, "handoff mode must produce zero segments — no canned reply goes to the patient anymore")
+	assert.Empty(t, fcm.assistantMsgs,
+		"handoff mode suppresses the assistant text the same way silent does — only difference is the takeover mark")
 }
 
 func TestProcessMessage_BlockedIntent_PersistsUserMessageBeforeHandoff(t *testing.T) {

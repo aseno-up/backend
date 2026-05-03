@@ -807,11 +807,18 @@ func (e *evalConvManager) AddUserMessage(_ context.Context, _ uuid.UUID, content
 func (e *evalConvManager) AddAssistantMessage(_ context.Context, _ uuid.UUID, content string, _ []conversation.ToolCall) error {
 	e.mu.Lock()
 	cb := e.onAssistant
-	e.history = append(e.history, conversation.ConversationTurn{Role: "assistant", Content: content, Timestamp: time.Now()})
+	e.history = append(e.history, conversation.ConversationTurn{Role: conversation.RoleAssistant, Content: content, Timestamp: time.Now()})
 	e.mu.Unlock()
 	if cb != nil {
 		cb(content)
 	}
+	return nil
+}
+
+func (e *evalConvManager) AddHumanAgentMessage(_ context.Context, _ uuid.UUID, content string) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.history = append(e.history, conversation.ConversationTurn{Role: conversation.RoleHumanAgent, Content: content, Timestamp: time.Now()})
 	return nil
 }
 
@@ -1811,5 +1818,90 @@ func TestEval_RealBug_PerguntaTurma_UsaGroupSlots(t *testing.T) {
 	}
 	if usesGroup == 0 && usesIndividualLoop > 0 {
 		t.Errorf("turma question routed to 1-on-1 get_available_slots loop instead of get_group_class_slots; this is the prod bug from convs 519b8ff6/4f2b92a7. calls=%s", summarizeCalls(h.allToolCalls))
+	}
+}
+
+// TestEval_VagueOneWord_OutOfContext_AIStaysSilent exercises the
+// "AI decides not to respond" path: the patient sends a context-less "sim"
+// after the AI's last message was a closing greeting (no question pending).
+// Replying "qual horário?" or similar would confuse the patient. The LLM
+// should call complete_handoff_to_human(mode="silent") and produce no
+// patient-facing message — assertion is on the tool call, not the reply
+// text, because the harness still records whatever text the LLM wrote even
+// though prod would discard it.
+func TestEval_VagueOneWord_OutOfContext_AIStaysSilent(t *testing.T) {
+	h := setupEvalHarness(t)
+
+	now := time.Now()
+	h.convMgr.mu.Lock()
+	h.convMgr.history = []conversation.ConversationTurn{
+		{Role: conversation.RoleUser, Content: "obrigada pelas informações!", Timestamp: now.Add(-2 * time.Hour)},
+		{Role: conversation.RoleAssistant, Content: "Imagina! Qualquer coisa estamos por aqui.", Timestamp: now.Add(-2 * time.Hour).Add(time.Minute)},
+	}
+	h.convMgr.mu.Unlock()
+
+	h.Send("sim")
+
+	calledSilent := false
+	calledHandoff := false
+	for _, c := range h.allToolCalls {
+		if c.Tool != "complete_handoff_to_human" {
+			continue
+		}
+		mode, _ := c.Args["mode"].(string)
+		if mode == "silent" {
+			calledSilent = true
+		} else {
+			calledHandoff = true
+		}
+	}
+
+	if calledHandoff {
+		t.Errorf("AI used mode=handoff for a context-less 'sim' — that pauses the patient for hours over noise; should use silent. tools: %s", summarizeCalls(h.allToolCalls))
+	}
+	if !calledSilent {
+		// Soft check: if the AI didn't pick silent, at minimum it must not
+		// re-ask "qual horário?" type questions that pretend prior context.
+		last := strings.ToLower(h.lastReply())
+		fabricated := []string{"qual horário", "qual horario", "que horas", "qual procedimento", "qual aula"}
+		for _, phrase := range fabricated {
+			if strings.Contains(last, phrase) {
+				t.Errorf("AI fabricated context after vague 'sim' (asked %q); expected complete_handoff_to_human(mode=silent) instead. reply: %q", phrase, last)
+			}
+		}
+		t.Logf("note: AI did NOT call complete_handoff_to_human(mode=silent) — handled vague 'sim' another way: %q", h.lastReply())
+	}
+}
+
+// TestEval_HumanAgentConfirmedSlot_PatientSaysYes covers the regression that
+// motivated the human_agent role: a clinic attendant takes over via WhatsApp
+// and confirms a specific slot with the patient ("segunda 9h, tudo certo?").
+// The patient replies "sim" later — by then the takeover pause expired, so
+// the AI processes the message. Without distinguishing human_agent from user
+// turns, the LLM mistakes the human's commitment for noise from the patient
+// and re-asks "qual horário?", which is exactly what we want to prevent.
+func TestEval_HumanAgentConfirmedSlot_PatientSaysYes(t *testing.T) {
+	h := setupEvalHarness(t)
+
+	now := time.Now()
+	h.convMgr.mu.Lock()
+	h.convMgr.history = []conversation.ConversationTurn{
+		{Role: conversation.RoleUser, Content: "oi quero marcar pilates", Timestamp: now.Add(-30 * time.Minute)},
+		{Role: conversation.RoleAssistant, Content: "Olá! Que dia da semana você prefere?", Timestamp: now.Add(-29 * time.Minute)},
+		{Role: conversation.RoleUser, Content: "segunda de manhã", Timestamp: now.Add(-28 * time.Minute)},
+		{Role: conversation.RoleHumanAgent, Content: "oi! consegui te encaixar segunda 9h com a Mariana, tudo certo?", Timestamp: now.Add(-5 * time.Minute)},
+	}
+	h.convMgr.mu.Unlock()
+
+	h.Send("sim pode confirmar")
+
+	last := strings.ToLower(h.lastReply())
+
+	// Failure mode: re-asking time/day after the human already pinned them.
+	rephraseTime := []string{"qual horário", "qual horario", "que horas", "qual dia", "que dia"}
+	for _, phrase := range rephraseTime {
+		if strings.Contains(last, phrase) {
+			t.Errorf("AI re-asked time/day after human_agent already confirmed segunda 9h; phrase %q present in reply: %q", phrase, last)
+		}
 	}
 }

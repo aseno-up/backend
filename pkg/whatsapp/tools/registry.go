@@ -501,11 +501,23 @@ func (r *Registry) registerInformationTools() {
 // after the LLM has gathered enough context for the human team to act.
 func (r *Registry) registerHandoffTools() {
 	r.register(&Tool{
-		Name:        "complete_handoff_to_human",
-		Description: "Sinaliza que a coleta de contexto terminou e o time humano deve assumir a conversa. Chame APENAS quando você tiver coletado tipo de atendimento + dia/horário + profissional (ou quando o paciente disse 'qualquer um' para algum). Esta tool registra a transferência no sistema (silenciando suas respostas até o time humano assumir) e retorna a mensagem que será enviada ao paciente. Sem argumentos.",
+		Name: "complete_handoff_to_human",
+		Description: "Para CALAR a IA. Tem dois usos, controlados pelo parâmetro mode. NENHUM dos dois envia mensagem ao paciente — sua resposta de texto neste turno será DESCARTADA pelo sistema. A única diferença entre os modos é se a conversa fica pausada por horas (handoff) ou se só este turno é pulado (silent).\n\n" +
+			"mode=\"handoff\" (padrão, omita o parâmetro): pausa o atendimento da IA por algumas horas (configurável por clínica). Toda mensagem que o paciente mandar enquanto pausado é registrada mas NÃO respondida pela IA — fica para o time humano assumir pelo WhatsApp. Use quando o paciente claramente terminou de conversar com você OU pediu pra falar com alguém da clínica OU você terminou de coletar contexto pra um agendamento que o humano vai fechar.\n\n" +
+			"mode=\"silent\": pula APENAS este turno, sem pausar nada. A próxima mensagem que o paciente mandar volta a ser respondida normalmente pela IA. Use quando a última mensagem do paciente NÃO é endereçada a você (não é uma pergunta, não responde a uma pergunta SUA pendente) e responder qualquer coisa seria confuso. Exemplos onde silent é OBRIGATÓRIO (não use handoff aqui — pausar a conversa por horas por causa de uma única mensagem ambígua é destrutivo):\n" +
+			"• paciente manda só \"sim\", \"não\", \"ok\", \"blz\", \"vlw\", emoji vazio, etc — E você NÃO tem nenhuma pergunta sua pendente no histórico recente (sua última mensagem foi uma despedida, agradecimento ou fechamento)\n" +
+			"• paciente confirma um horário, profissional ou procedimento específico que VOCÊ não propôs (provavelmente combinado pelo atendente humano antes — procure por linhas [human_agent] no histórico)\n" +
+			"• paciente manda mensagem que claramente continua uma conversa que ele teve com o time humano (linhas [human_agent] no histórico) e você não tem contexto pra ajudar\n\n" +
+			"NUNCA use silent se: (a) o paciente cumprimenta, (b) faz pergunta real, (c) compartilha informação que muda o contexto (\"meu nome é X\", \"meu telefone é Y\"), (d) sua última mensagem foi uma pergunta direta — nesses casos RESPONDA normalmente.",
 		Parameters: &genai.Schema{
-			Type:       genai.TypeObject,
-			Properties: map[string]*genai.Schema{},
+			Type: genai.TypeObject,
+			Properties: map[string]*genai.Schema{
+				"mode": {
+					Type:        genai.TypeString,
+					Enum:        []string{"handoff", "silent"},
+					Description: "\"handoff\" (padrão) pausa a IA por horas pro time humano assumir. \"silent\" pula só este turno sem pausar. Ambos NÃO enviam texto ao paciente. Para mensagens monossilábicas (\"sim\", \"não\", \"ok\") sem pergunta sua pendente, USE silent — handoff seria destrutivo (pausa horas por uma única mensagem ambígua).",
+				},
+			},
 		},
 	})
 }

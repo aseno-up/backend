@@ -643,6 +643,23 @@ func (s *whatsAppService) HandleOutgoingMessage(ctx context.Context, clinicID uu
 		return err
 	}
 	logger.Printf("[WhatsApp] Human takeover recorded for clinic %s phone %s", clinicID, msg.Phone)
+
+	// Persist the attendant's message to the conversation history under
+	// RoleHumanAgent. Without this the LLM, when the pause expires, sees a
+	// gap in the dialogue and re-asks information the human already
+	// gathered (e.g. patient says "sim" after the human confirmed a slot,
+	// and the AI replies "qual horário?"). Best-effort: a persistence error
+	// must not block the takeover detection — log and continue.
+	if s.conversationMgr != nil && msg.Content != "" {
+		if conv, cerr := s.conversationMgr.GetOrCreate(ctx, clinicID, msg.Phone, msg.SenderName); cerr == nil {
+			if addErr := s.conversationMgr.AddHumanAgentMessage(ctx, conv.ID, msg.Content); addErr != nil {
+				logger.Printf("[WhatsApp] Warning: failed to persist human-agent message for %s: %v", msg.Phone, addErr)
+			}
+		} else {
+			logger.Printf("[WhatsApp] Warning: failed to load conversation for human-agent message persistence (%s): %v", msg.Phone, cerr)
+		}
+	}
+
 	if s.systemLogSvc != nil {
 		_ = s.systemLogSvc.Log(ctx, systemlog_service.SystemLogEntry{
 			ClinicID: &clinicID,

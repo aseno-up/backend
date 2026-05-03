@@ -121,9 +121,10 @@ func (t *stubTakeoverTracker) preset(clinicID uuid.UUID, phone string, at time.T
 // tracks AddUserMessage calls (used to assert the takeover gate persists
 // messages even while paused).
 type stubConversationMgrNoTakeover struct {
-	mu              sync.Mutex
-	addUserMessages []string
-	conv            *conversation.ConversationContext
+	mu                 sync.Mutex
+	addUserMessages    []string
+	humanAgentMessages []string
+	conv               *conversation.ConversationContext
 }
 
 func newStubConversationMgrNoTakeover() *stubConversationMgrNoTakeover {
@@ -143,6 +144,12 @@ func (m *stubConversationMgrNoTakeover) AddUserMessage(_ context.Context, _ uuid
 	return nil
 }
 func (m *stubConversationMgrNoTakeover) AddAssistantMessage(_ context.Context, _ uuid.UUID, _ string, _ []conversation.ToolCall) error {
+	return nil
+}
+func (m *stubConversationMgrNoTakeover) AddHumanAgentMessage(_ context.Context, _ uuid.UUID, content string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.humanAgentMessages = append(m.humanAgentMessages, content)
 	return nil
 }
 func (m *stubConversationMgrNoTakeover) UpdateState(_ context.Context, _ uuid.UUID, _ conversation.ConversationState, _ model.MessageIntent) error {
@@ -200,6 +207,59 @@ func TestHandleOutgoingMessage_RedisMiss_MarksTakeover(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, tracker.markCalls, "unknown fromMe ID must mark takeover")
 	assert.Equal(t, "+5511988880000", tracker.lastPhone)
+}
+
+// TestHandleOutgoingMessage_HumanAgentMessage_PersistedInHistory verifies the
+// fix for the "AI asks 'qual horário?' after human confirmed" bug: when a
+// clinic attendant types directly to the patient, the message must land in
+// the conversation history under RoleHumanAgent so the AI has full context
+// when it eventually resumes after the takeover pause.
+func TestHandleOutgoingMessage_HumanAgentMessage_PersistedInHistory(t *testing.T) {
+	cache := newStubSentMessageCache(true)
+	tracker := newStubTakeoverTracker()
+	convMgr := newStubConversationMgrNoTakeover()
+
+	svc := &whatsAppService{
+		sentMessageCache: cache,
+		takeoverTracker:  tracker,
+		conversationMgr:  convMgr,
+	}
+	err := svc.HandleOutgoingMessage(context.Background(), uuid.New(), &model.ParsedIncomingMessage{
+		Phone:     "+5511977770001",
+		MessageID: "human-typed-msg",
+		Content:   "consegui encaixar segunda 14h, tudo certo?",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, tracker.markCalls, "human-typed message must trigger takeover")
+	assert.Equal(t, []string{"consegui encaixar segunda 14h, tudo certo?"}, convMgr.humanAgentMessages,
+		"attendant message must be persisted under RoleHumanAgent so AI has context when pause ends")
+	assert.Empty(t, convMgr.addUserMessages,
+		"attendant message must NOT land under RoleUser — that's the bug we're fixing")
+}
+
+// TestHandleOutgoingMessage_OurOwnEcho_DoesNotPersist guards against the
+// reverse failure: messages WE sent (the AI's own outbound) must not be
+// re-persisted under RoleHumanAgent. Detection short-circuits before the
+// persistence block — this test pins that ordering.
+func TestHandleOutgoingMessage_OurOwnEcho_DoesNotPersist(t *testing.T) {
+	cache := newStubSentMessageCache(true)
+	_ = cache.RecordSentMessageID(context.Background(), "ours", time.Minute)
+	tracker := newStubTakeoverTracker()
+	convMgr := newStubConversationMgrNoTakeover()
+
+	svc := &whatsAppService{
+		sentMessageCache: cache,
+		takeoverTracker:  tracker,
+		conversationMgr:  convMgr,
+	}
+	err := svc.HandleOutgoingMessage(context.Background(), uuid.New(), &model.ParsedIncomingMessage{
+		Phone:     "+5511977770002",
+		MessageID: "ours",
+		Content:   "Olá! Posso ajudar?",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 0, tracker.markCalls)
+	assert.Empty(t, convMgr.humanAgentMessages, "our own echo must not be persisted as human-agent")
 }
 
 func TestHandleOutgoingMessage_RedisUnavailable_UsesDBFallback_Hit(t *testing.T) {

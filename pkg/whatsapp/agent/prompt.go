@@ -478,7 +478,7 @@ Algumas clínicas delegam marcação / remarcação / cancelamento ao time human
 
     Posso confirmar?
 
-4. **Quando o paciente CONFIRMAR o resumo** (sim / pode / ok / confirmo / vai), aí sim chame complete_handoff_to_human. A tool registra a transferência e retorna a frase canned que vai pro paciente.
+4. **Quando o paciente CONFIRMAR o resumo** (sim / pode / ok / confirmo / vai), aí sim chame complete_handoff_to_human. A tool registra a transferência e o sistema pausa suas respostas para o time humano assumir — NENHUMA mensagem sua é enviada ao paciente neste turno (qualquer texto que você escrever junto da tool call é descartado).
 
 5. **Se o paciente NÃO confirmar** (quiser mudar algo), atualize o item correspondente, mostre o resumo de novo e espere a confirmação.
 
@@ -732,7 +732,7 @@ Quando NÃO é turma (mesmo se o nome contiver "Pilates"):
 
    d) **Quando o paciente CONFIRMAR o resumo:**
       - Se **enroll_patient_in_class** estiver no seu toolset: chame com plan_id, slot_ids (todos escolhidos), partner_plan_id (se for convênio) OU monthly_amount (se for particular) + billing_day (se particular mensal). Após sucesso, confirme em UMA frase com o nome da turma e os horários, e diga que a próxima aula é tal dia.
-      - Se **enroll_patient_in_class** NÃO estiver no toolset (clínica desativou): chame **complete_handoff_to_human** — o time humano vai criar a matrícula manualmente. Você NÃO afirma "matrícula feita" — a tool retorna a frase canned que você repassa.
+      - Se **enroll_patient_in_class** NÃO estiver no toolset (clínica desativou): chame **complete_handoff_to_human** direto — o time humano vai criar a matrícula manualmente. NÃO escreva "matrícula feita" nem qualquer outra mensagem; o sistema descarta seu texto neste turno e o time humano assume.
 
    e) **Se NÃO confirmar** (quiser mudar algo): atualize o item correspondente, mostre o resumo de novo, espere confirmação.
 
@@ -775,7 +775,7 @@ Quando NÃO é turma (mesmo se o nome contiver "Pilates"):
    - Se a tool retornar erro "no upcoming class found" — o paciente não tem matrícula ativa em turma. Diga isso e ofereça matricular (item 7) ou falar com a recepção.
 
    **Quando confirm_class_attendance NÃO estiver no toolset (clínica desativou):**
-   - Se o paciente quer confirmar presença, use complete_handoff_to_human (depois de uma frase curta tipo "Vou repassar pro time confirmar sua presença"). NÃO afirme "confirmado" — você não tem como registrar.
+   - Se o paciente quer confirmar presença, chame complete_handoff_to_human direto, sem texto adicional — o sistema pausa pra o time humano registrar. NÃO afirme "confirmado" nem escreva nada explicando: qualquer texto seu neste turno é descartado.
 
    ⚠️ NUNCA chame confirm_class_attendance especulativamente. Sempre tem que vir da intenção EXPLÍCITA do paciente (palavras: confirmo / vou / sim / pode / tô indo). "Talvez vou" não é confirmação.`
 }
@@ -984,7 +984,7 @@ func BuildUserPromptWithLimit(ctx *conversation.ConversationContext, currentMess
 	}
 
 	if len(ctx.History) > 0 {
-		prompt.WriteString("⚠️ HISTÓRICO RECENTE (apenas contexto geral — horários/IDs citados podem estar DESATUALIZADOS após agendamentos/cancelamentos/mudanças. Sempre re-valide dados específicos com as tools antes de prometer algo ao paciente):\n")
+		prompt.WriteString("⚠️ HISTÓRICO RECENTE (apenas contexto geral — horários/IDs citados podem estar DESATUALIZADOS após agendamentos/cancelamentos/mudanças. Sempre re-valide dados específicos com as tools antes de prometer algo ao paciente). Mensagens com [human_agent] são do atendente humano da clínica respondendo diretamente ao paciente — trate o que ele combinou como já decidido e NÃO repita perguntas que ele já fez:\n")
 
 		start := 0
 		if len(ctx.History) > maxHistoryTurns {
@@ -992,9 +992,14 @@ func BuildUserPromptWithLimit(ctx *conversation.ConversationContext, currentMess
 		}
 
 		for _, turn := range ctx.History[start:] {
-			role := "[user]"
-			if turn.Role == "assistant" {
+			var role string
+			switch turn.Role {
+			case conversation.RoleAssistant:
 				role = "[assistant]"
+			case conversation.RoleHumanAgent:
+				role = "[human_agent]"
+			default:
+				role = "[user]"
 			}
 			prompt.WriteString(fmt.Sprintf("%s %s\n", role, turn.Content))
 		}

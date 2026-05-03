@@ -461,9 +461,35 @@ func (s *aiAgentService) ProcessMessage(ctx context.Context, req *MessageRequest
 		}
 	}
 
-	// Add assistant message to conversation history
-	if err := s.conversationMgr.AddAssistantMessage(ctx, conv.ID, agentResp.Content, agentResp.ToolCalls); err != nil {
-		logger.Printf("[AI Agent Service] Warning: failed to add assistant message to history: %v", err)
+	// Reply suppression detection: complete_handoff_to_human is the only way
+	// the LLM can decide not to reply. Both modes (handoff = pause + skip,
+	// silent = single-turn skip) suppress the patient-facing send and the
+	// assistant-message persistence. Without this branch the AI's text reply
+	// (which the LLM still composes around the tool call) would either reach
+	// the patient as a confusing canned-style filler or pollute future turns
+	// of the conversation history.
+	suppressedMode := suppressedReplyMode(agentResp.ToolCalls)
+	suppressed := suppressedMode != ""
+
+	if !suppressed {
+		// Add assistant message to conversation history
+		if err := s.conversationMgr.AddAssistantMessage(ctx, conv.ID, agentResp.Content, agentResp.ToolCalls); err != nil {
+			logger.Printf("[AI Agent Service] Warning: failed to add assistant message to history: %v", err)
+		}
+	} else if s.systemLogSvc != nil {
+		clinicID := req.ClinicID
+		_ = s.systemLogSvc.Log(ctx, systemlog_service.SystemLogEntry{
+			ClinicID: &clinicID,
+			Service:  "ai_agent",
+			Event:    "ai_agent.reply_suppressed",
+			Status:   systemlog_model.LogStatusWarning,
+			Payload: map[string]interface{}{
+				"conversation_id": conv.ID.String(),
+				"patient_phone":   req.PatientPhone,
+				"trigger_message": req.MessageText,
+				"mode":            suppressedMode,
+			},
+		})
 	}
 
 	// Hallucination warning: when the assistant message includes
@@ -533,8 +559,14 @@ func (s *aiAgentService) ProcessMessage(ctx context.Context, req *MessageRequest
 		}
 	}
 
-	// Segment the response for natural message delivery
-	segments := s.segmentResponse(agentResp.Content, clinic)
+	// Segment the response for natural message delivery. When the AI chose
+	// to suppress its reply (handoff or silent mode), skip segmentation
+	// entirely so the response carries no text to send and the WhatsApp
+	// service layer short-circuits before queuing any message.
+	var segments []*model.MessageSegment
+	if !suppressed {
+		segments = s.segmentResponse(agentResp.Content, clinic)
+	}
 
 	// Build message response
 	msgResp := &MessageResponse{
@@ -847,4 +879,31 @@ func truncateForLog(s string, max int) string {
 		return s
 	}
 	return s[:max] + "…"
+}
+
+// suppressedReplyMode returns "silent" or "handoff" when the LLM invoked
+// complete_handoff_to_human this turn (and the executor confirmed it via the
+// status field), or empty string when no suppression was requested. Both
+// modes suppress the patient-facing reply; the returned label is forwarded
+// to system_logs so we can attribute suppressions later. The check is
+// structural — only a complete_handoff_to_human tool with the right status
+// can suppress, so an arbitrary tool returning "silenced"/"handoff_completed"
+// in some other field cannot accidentally swallow a reply.
+func suppressedReplyMode(toolCalls []conversation.ToolCall) string {
+	for _, tc := range toolCalls {
+		if tc.Name != "complete_handoff_to_human" {
+			continue
+		}
+		result, ok := tc.Result.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		switch result["status"] {
+		case "silenced":
+			return "silent"
+		case "handoff_completed":
+			return "handoff"
+		}
+	}
+	return ""
 }

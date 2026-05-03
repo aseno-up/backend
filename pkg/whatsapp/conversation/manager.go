@@ -26,6 +26,12 @@ type Manager interface {
 	// AddAssistantMessage adds an assistant message to the conversation
 	AddAssistantMessage(ctx context.Context, conversationID uuid.UUID, content string, toolCalls []ToolCall) error
 
+	// AddHumanAgentMessage adds a message that a clinic attendant typed
+	// directly to the patient via the WhatsApp app (recorded under
+	// RoleHumanAgent so the LLM can tell it apart from patient and AI turns
+	// when the AI eventually resumes the conversation).
+	AddHumanAgentMessage(ctx context.Context, conversationID uuid.UUID, content string) error
+
 	// UpdateState updates the conversation state
 	UpdateState(ctx context.Context, conversationID uuid.UUID, state ConversationState, intent model.MessageIntent) error
 
@@ -132,6 +138,20 @@ func (m *conversationManager) AddAssistantMessage(ctx context.Context, conversat
 	}
 
 	conversation.AddAssistantTurn(content, toolCalls, m.maxTurns)
+
+	return m.repo.Update(ctx, conversation)
+}
+
+// AddHumanAgentMessage records a message that a clinic attendant typed
+// directly to the patient via the WhatsApp app while the AI was paused. See
+// the interface comment for why this is a separate role from "user".
+func (m *conversationManager) AddHumanAgentMessage(ctx context.Context, conversationID uuid.UUID, content string) error {
+	conversation, err := m.repo.GetByID(ctx, conversationID)
+	if err != nil {
+		return err
+	}
+
+	conversation.AddHumanAgentTurn(content, m.maxTurns)
 
 	return m.repo.Update(ctx, conversation)
 }

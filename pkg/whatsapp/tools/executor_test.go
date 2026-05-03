@@ -839,14 +839,20 @@ func TestCompleteHandoff_MarksTakeoverWithExecutionContextValues(t *testing.T) {
 	assert.WithinDuration(t, time.Now(), marker.at, 2*time.Second, "Mark must receive a timestamp around now()")
 }
 
-func TestCompleteHandoff_ReturnsCannedReplyAsResult(t *testing.T) {
-	canned := "Pode aguardar um minutinho? Alguém do nosso time vai te atender em breve."
+// TestCompleteHandoff_ReturnsNoPatientFacingMessage pins the user-facing
+// contract: handoff mode is silent — no canned reply is sent to the patient.
+// The result carries only the status; the agent service uses that to
+// suppress the AI's text reply. (Until 2026-05 the result also carried a
+// "message" field with a clinic-configured canned line; we removed it
+// because dropping a robotic "aguarde, alguém te atende" mid-conversation
+// looked tacky and broke flow.)
+func TestCompleteHandoff_ReturnsNoPatientFacingMessage(t *testing.T) {
 	execCtx := &ExecutionContext{
 		Context:             context.Background(),
 		ClinicID:            uuid.New(),
 		PatientPhone:        "5551999990001",
 		HumanTakeoverMarker: &stubHumanTakeoverMarker{},
-		BlockedIntentReply:  canned,
+		BlockedIntentReply:  "this should NOT appear in the result",
 	}
 
 	result, err := NewExecutor(NewRegistry()).Execute(execCtx, "complete_handoff_to_human", map[string]interface{}{})
@@ -854,22 +860,8 @@ func TestCompleteHandoff_ReturnsCannedReplyAsResult(t *testing.T) {
 
 	m, ok := result.(map[string]interface{})
 	require.True(t, ok, "result must be a structured map so the LLM can act on it deterministically")
-	assert.Equal(t, canned, m["message"], "tool result message must be the clinic-resolved canned reply (not a hardcoded default)")
-}
-
-func TestCompleteHandoff_ReturnsClinicConfiguredCannedReply(t *testing.T) {
-	custom := "Te transfiro pro time agora, só um minuto."
-	execCtx := &ExecutionContext{
-		Context:             context.Background(),
-		ClinicID:            uuid.New(),
-		PatientPhone:        "5551999990001",
-		HumanTakeoverMarker: &stubHumanTakeoverMarker{},
-		BlockedIntentReply:  custom,
-	}
-
-	result, _ := NewExecutor(NewRegistry()).Execute(execCtx, "complete_handoff_to_human", map[string]interface{}{})
-	m, _ := result.(map[string]interface{})
-	assert.Equal(t, custom, m["message"], "tool must propagate clinic-configured canned reply, not a hardcoded one")
+	assert.Equal(t, "handoff_completed", m["status"])
+	assert.NotContains(t, m, "message", "handoff result must NOT carry a patient-facing message — the AI's reply is suppressed entirely")
 }
 
 func TestCompleteHandoff_FailsLoudlyWhenMarkerNotConfigured(t *testing.T) {
@@ -886,6 +878,98 @@ func TestCompleteHandoff_FailsLoudlyWhenMarkerNotConfigured(t *testing.T) {
 
 	_, err := NewExecutor(NewRegistry()).Execute(execCtx, "complete_handoff_to_human", map[string]interface{}{})
 	assert.Error(t, err, "missing marker must surface as an error so wiring bugs are caught early")
+}
+
+// TestCompleteHandoff_SilentMode_DoesNotMarkTakeover covers the "AI decides
+// not to respond" use case: when the LLM judges that replying would confuse
+// the patient (e.g. patient sends "sim" with no AI question to answer), it
+// invokes the tool with mode="silent". This must NOT mark the takeover
+// (otherwise we'd silence the patient for hours over a one-off message) —
+// just signal that this single turn produces no patient-facing reply.
+func TestCompleteHandoff_SilentMode_DoesNotMarkTakeover(t *testing.T) {
+	marker := &stubHumanTakeoverMarker{}
+	execCtx := &ExecutionContext{
+		Context:             context.Background(),
+		ClinicID:            uuid.New(),
+		PatientPhone:        "5551999990001",
+		HumanTakeoverMarker: marker,
+		BlockedIntentReply:  "aguarde",
+	}
+
+	result, err := NewExecutor(NewRegistry()).Execute(execCtx, "complete_handoff_to_human", map[string]interface{}{
+		"mode": "silent",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 0, marker.calls, "silent mode must not mark the human takeover — that would pause the patient for hours")
+
+	m, ok := result.(map[string]interface{})
+	require.True(t, ok, "result must be a structured map so the agent service can detect silent mode")
+	assert.Equal(t, "silenced", m["status"], "silent mode must return status=silenced so downstream skips the patient-facing send")
+	assert.NotContains(t, m, "message", "silent mode has no patient-facing message — there's nothing to send")
+}
+
+// TestCompleteHandoff_DefaultMode_StillMarksTakeover guards the existing
+// behavior: the tool predates the mode parameter, so calls without a mode
+// argument must keep working as before (mark takeover, return canned reply).
+// Without this regression test, every existing eval that exercises handoff
+// would silently flip semantics.
+func TestCompleteHandoff_DefaultMode_StillMarksTakeover(t *testing.T) {
+	marker := &stubHumanTakeoverMarker{}
+	execCtx := &ExecutionContext{
+		Context:             context.Background(),
+		ClinicID:            uuid.New(),
+		PatientPhone:        "5551999990001",
+		HumanTakeoverMarker: marker,
+		BlockedIntentReply:  "ignored",
+	}
+
+	result, err := NewExecutor(NewRegistry()).Execute(execCtx, "complete_handoff_to_human", map[string]interface{}{})
+	require.NoError(t, err)
+	assert.Equal(t, 1, marker.calls, "default mode must keep marking takeover")
+
+	m, _ := result.(map[string]interface{})
+	assert.Equal(t, "handoff_completed", m["status"])
+	assert.NotContains(t, m, "message", "handoff result must NOT carry a patient-facing message — reply is suppressed")
+}
+
+// TestCompleteHandoff_ExplicitHandoffMode_MarksTakeover verifies the
+// explicit "handoff" mode value behaves identically to the legacy
+// no-argument call — important because the LLM may start passing
+// mode="handoff" once it's aware of the parameter.
+func TestCompleteHandoff_ExplicitHandoffMode_MarksTakeover(t *testing.T) {
+	marker := &stubHumanTakeoverMarker{}
+	execCtx := &ExecutionContext{
+		Context:             context.Background(),
+		ClinicID:            uuid.New(),
+		PatientPhone:        "5551999990001",
+		HumanTakeoverMarker: marker,
+		BlockedIntentReply:  "aguarde",
+	}
+
+	_, err := NewExecutor(NewRegistry()).Execute(execCtx, "complete_handoff_to_human", map[string]interface{}{
+		"mode": "handoff",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, marker.calls, "explicit mode=handoff must keep marking takeover")
+}
+
+// TestCompleteHandoff_SilentMode_TolerantWhenMarkerNotConfigured: silent does
+// not need the marker (it never calls Mark), so a nil marker must NOT be a
+// hard failure here. This decouples the silent path from the wiring check
+// that protects the handoff path.
+func TestCompleteHandoff_SilentMode_TolerantWhenMarkerNotConfigured(t *testing.T) {
+	execCtx := &ExecutionContext{
+		Context:             context.Background(),
+		ClinicID:            uuid.New(),
+		PatientPhone:        "5551999990001",
+		HumanTakeoverMarker: nil,
+		BlockedIntentReply:  "",
+	}
+
+	_, err := NewExecutor(NewRegistry()).Execute(execCtx, "complete_handoff_to_human", map[string]interface{}{
+		"mode": "silent",
+	})
+	assert.NoError(t, err, "silent mode should not require the marker — it never marks anything")
 }
 
 // list_procedures with name_contains filter — robust path for "vocês têm X?"
