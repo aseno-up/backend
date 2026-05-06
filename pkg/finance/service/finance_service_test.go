@@ -67,6 +67,18 @@ func (m *mockTransactionRepo) DeleteBySessionPlanPaymentID(ctx context.Context, 
 	return m.Called(ctx, sessionPlanPaymentID, clinicID).Error(0)
 }
 
+func (m *mockTransactionRepo) GetBySalesPackagePaymentID(ctx context.Context, salesPackagePaymentID, clinicID uuid.UUID) (*model.FinancialTransaction, error) {
+	args := m.Called(ctx, salesPackagePaymentID, clinicID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*model.FinancialTransaction), args.Error(1)
+}
+
+func (m *mockTransactionRepo) DeleteBySalesPackagePaymentID(ctx context.Context, salesPackagePaymentID, clinicID uuid.UUID) error {
+	return m.Called(ctx, salesPackagePaymentID, clinicID).Error(0)
+}
+
 func (m *mockTransactionRepo) SumByPeriod(ctx context.Context, clinicID uuid.UUID, from, to time.Time) (income, expense float64, err error) {
 	args := m.Called(ctx, clinicID, from, to)
 	return args.Get(0).(float64), args.Get(1).(float64), args.Error(2)

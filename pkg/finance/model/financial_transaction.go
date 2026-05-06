@@ -20,10 +20,11 @@ const (
 type TransactionSource string
 
 const (
-	SourceManual      TransactionSource = "manual"
-	SourceAppointment TransactionSource = "appointment"
-	SourceSessionPlan TransactionSource = "session_plan"
-	SourceCommission  TransactionSource = "commission"
+	SourceManual       TransactionSource = "manual"
+	SourceAppointment  TransactionSource = "appointment"
+	SourceSessionPlan  TransactionSource = "session_plan"
+	SourceCommission   TransactionSource = "commission"
+	SourceSalesPackage TransactionSource = "sales_package"
 )
 
 // FinancialTransaction represents a single cash-flow event (entrada ou saída)
@@ -37,11 +38,13 @@ type FinancialTransaction struct {
 	Description string            `json:"description" gorm:"not null"`
 	Source      TransactionSource `json:"source" gorm:"type:varchar(20);not null;default:'manual';index"`
 
-	AppointmentID        *uuid.UUID `json:"appointment_id,omitempty" gorm:"type:uuid;index"`
-	AppointmentPaymentID *uuid.UUID `json:"appointment_payment_id,omitempty" gorm:"type:uuid;index"` // one finance row per appointment_payment event
-	SessionPlanID        *uuid.UUID `json:"session_plan_id,omitempty" gorm:"type:uuid;index"`
-	SessionPlanPaymentID *uuid.UUID `json:"session_plan_payment_id,omitempty" gorm:"type:uuid;index"` // one finance row per session_plan_payment event
-	ProfessionalID       *uuid.UUID `json:"professional_id,omitempty" gorm:"type:uuid;index"`         // set for source='commission'
+	AppointmentID         *uuid.UUID `json:"appointment_id,omitempty" gorm:"type:uuid;index"`
+	AppointmentPaymentID  *uuid.UUID `json:"appointment_payment_id,omitempty" gorm:"type:uuid;index"` // one finance row per appointment_payment event
+	SessionPlanID         *uuid.UUID `json:"session_plan_id,omitempty" gorm:"type:uuid;index"`
+	SessionPlanPaymentID  *uuid.UUID `json:"session_plan_payment_id,omitempty" gorm:"type:uuid;index"` // one finance row per session_plan_payment event
+	SalesPackageID        *uuid.UUID `json:"sales_package_id,omitempty" gorm:"type:uuid;index"`
+	SalesPackagePaymentID *uuid.UUID `json:"sales_package_payment_id,omitempty" gorm:"type:uuid;index"` // one finance row per sales_package_payment event
+	ProfessionalID        *uuid.UUID `json:"professional_id,omitempty" gorm:"type:uuid;index"`          // set for source='commission'
 
 	CompetenceDate  time.Time  `json:"competence_date" gorm:"type:date;not null;index"`
 	DueDate         *time.Time `json:"due_date,omitempty" gorm:"type:date"`
@@ -96,24 +99,26 @@ type UpdateTransactionRequest struct {
 
 // TransactionResponse is the serialized view of a financial transaction.
 type TransactionResponse struct {
-	ID                   uuid.UUID         `json:"id"`
-	Type                 TransactionType   `json:"type"`
-	CategoryID           *uuid.UUID        `json:"category_id,omitempty"`
-	CategoryName         string            `json:"category_name,omitempty"`
-	CategoryColor        string            `json:"category_color,omitempty"`
-	Amount               float64           `json:"amount"`
-	Description          string            `json:"description"`
-	Source               TransactionSource `json:"source"`
-	AppointmentID        *uuid.UUID        `json:"appointment_id,omitempty"`
-	AppointmentPaymentID *uuid.UUID        `json:"appointment_payment_id,omitempty"`
-	SessionPlanID        *uuid.UUID        `json:"session_plan_id,omitempty"`
-	SessionPlanPaymentID *uuid.UUID        `json:"session_plan_payment_id,omitempty"`
-	ProfessionalID       *uuid.UUID        `json:"professional_id,omitempty"`
-	CompetenceDate       time.Time         `json:"competence_date"`
-	DueDate              *time.Time        `json:"due_date,omitempty"`
-	PaidAt               *time.Time        `json:"paid_at,omitempty"`
-	PaymentMethodID      *uuid.UUID        `json:"payment_method_id,omitempty"`
-	CreatedAt            time.Time         `json:"created_at"`
+	ID                    uuid.UUID         `json:"id"`
+	Type                  TransactionType   `json:"type"`
+	CategoryID            *uuid.UUID        `json:"category_id,omitempty"`
+	CategoryName          string            `json:"category_name,omitempty"`
+	CategoryColor         string            `json:"category_color,omitempty"`
+	Amount                float64           `json:"amount"`
+	Description           string            `json:"description"`
+	Source                TransactionSource `json:"source"`
+	AppointmentID         *uuid.UUID        `json:"appointment_id,omitempty"`
+	AppointmentPaymentID  *uuid.UUID        `json:"appointment_payment_id,omitempty"`
+	SessionPlanID         *uuid.UUID        `json:"session_plan_id,omitempty"`
+	SessionPlanPaymentID  *uuid.UUID        `json:"session_plan_payment_id,omitempty"`
+	SalesPackageID        *uuid.UUID        `json:"sales_package_id,omitempty"`
+	SalesPackagePaymentID *uuid.UUID        `json:"sales_package_payment_id,omitempty"`
+	ProfessionalID        *uuid.UUID        `json:"professional_id,omitempty"`
+	CompetenceDate        time.Time         `json:"competence_date"`
+	DueDate               *time.Time        `json:"due_date,omitempty"`
+	PaidAt                *time.Time        `json:"paid_at,omitempty"`
+	PaymentMethodID       *uuid.UUID        `json:"payment_method_id,omitempty"`
+	CreatedAt             time.Time         `json:"created_at"`
 }
 
 // TransactionFilter narrows down listing queries.
@@ -137,22 +142,24 @@ type CashFlowSummary struct {
 
 func (t *FinancialTransaction) ToResponse() *TransactionResponse {
 	resp := &TransactionResponse{
-		ID:                   t.ID,
-		Type:                 t.Type,
-		CategoryID:           t.CategoryID,
-		Amount:               t.Amount,
-		Description:          t.Description,
-		Source:               t.Source,
-		AppointmentID:        t.AppointmentID,
-		AppointmentPaymentID: t.AppointmentPaymentID,
-		SessionPlanID:        t.SessionPlanID,
-		SessionPlanPaymentID: t.SessionPlanPaymentID,
-		ProfessionalID:       t.ProfessionalID,
-		CompetenceDate:       t.CompetenceDate,
-		DueDate:              t.DueDate,
-		PaidAt:               t.PaidAt,
-		PaymentMethodID:      t.PaymentMethodID,
-		CreatedAt:            t.CreatedAt,
+		ID:                    t.ID,
+		Type:                  t.Type,
+		CategoryID:            t.CategoryID,
+		Amount:                t.Amount,
+		Description:           t.Description,
+		Source:                t.Source,
+		AppointmentID:         t.AppointmentID,
+		AppointmentPaymentID:  t.AppointmentPaymentID,
+		SessionPlanID:         t.SessionPlanID,
+		SessionPlanPaymentID:  t.SessionPlanPaymentID,
+		SalesPackageID:        t.SalesPackageID,
+		SalesPackagePaymentID: t.SalesPackagePaymentID,
+		ProfessionalID:        t.ProfessionalID,
+		CompetenceDate:        t.CompetenceDate,
+		DueDate:               t.DueDate,
+		PaidAt:                t.PaidAt,
+		PaymentMethodID:       t.PaymentMethodID,
+		CreatedAt:             t.CreatedAt,
 	}
 	if t.Category != nil {
 		resp.CategoryName = t.Category.Name

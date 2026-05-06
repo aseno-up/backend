@@ -27,6 +27,9 @@ type TransactionRepository interface {
 	GetBySessionPlanPaymentID(ctx context.Context, sessionPlanPaymentID, clinicID uuid.UUID) (*model.FinancialTransaction, error)
 	DeleteBySessionPlanPaymentID(ctx context.Context, sessionPlanPaymentID, clinicID uuid.UUID) error
 
+	GetBySalesPackagePaymentID(ctx context.Context, salesPackagePaymentID, clinicID uuid.UUID) (*model.FinancialTransaction, error)
+	DeleteBySalesPackagePaymentID(ctx context.Context, salesPackagePaymentID, clinicID uuid.UUID) error
+
 	SumByPeriod(ctx context.Context, clinicID uuid.UUID, from, to time.Time) (income, expense float64, err error)
 }
 
@@ -166,6 +169,31 @@ func (r *transactionRepository) GetBySessionPlanPaymentID(ctx context.Context, s
 func (r *transactionRepository) DeleteBySessionPlanPaymentID(ctx context.Context, sessionPlanPaymentID, clinicID uuid.UUID) error {
 	res := r.db.WithContext(ctx).
 		Where("session_plan_payment_id = ? AND clinic_id = ?", sessionPlanPaymentID, clinicID).
+		Delete(&model.FinancialTransaction{})
+	if res.Error != nil {
+		return errors.ErrInternalInstance.WithError(res.Error)
+	}
+	return nil
+}
+
+func (r *transactionRepository) GetBySalesPackagePaymentID(ctx context.Context, salesPackagePaymentID, clinicID uuid.UUID) (*model.FinancialTransaction, error) {
+	var tx model.FinancialTransaction
+	err := r.db.WithContext(ctx).
+		Preload("Category").
+		Where("sales_package_payment_id = ? AND clinic_id = ? AND deleted_at IS NULL", salesPackagePaymentID, clinicID).
+		First(&tx).Error
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil, nil
+		}
+		return nil, errors.ErrInternalInstance.WithError(err)
+	}
+	return &tx, nil
+}
+
+func (r *transactionRepository) DeleteBySalesPackagePaymentID(ctx context.Context, salesPackagePaymentID, clinicID uuid.UUID) error {
+	res := r.db.WithContext(ctx).
+		Where("sales_package_payment_id = ? AND clinic_id = ?", salesPackagePaymentID, clinicID).
 		Delete(&model.FinancialTransaction{})
 	if res.Error != nil {
 		return errors.ErrInternalInstance.WithError(res.Error)

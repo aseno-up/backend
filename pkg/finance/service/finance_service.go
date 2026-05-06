@@ -42,6 +42,12 @@ type FinanceService interface {
 	UpsertFromSessionPlanPayment(ctx context.Context, payment *sessionplanModel.SessionPlanPayment, clinicID uuid.UUID, planTitle, patientName string) error
 	DeleteFromSessionPlanPayment(ctx context.Context, sessionPlanPaymentID, clinicID uuid.UUID) error
 
+	// Sales package payment (one row per installment of a sale; first call
+	// creates the financial_transaction, subsequent calls update it on edits).
+	// Description is composed from packageCode + patientName + installment.
+	UpsertFromSalesPackagePayment(ctx context.Context, args UpsertSalesPackagePaymentArgs) error
+	DeleteFromSalesPackagePayment(ctx context.Context, salesPackagePaymentID, clinicID uuid.UUID) error
+
 	// Commission batch — one expense row per pay event (not aggregated).
 	// The caller just marked `paidIDs` as paid in this action; `totalPaid`
 	// is the sum of those commissions, `sessionCount` is len(paidIDs).
@@ -358,6 +364,106 @@ func (s *financeService) UpsertFromSessionPlanPayment(ctx context.Context, payme
 
 func (s *financeService) DeleteFromSessionPlanPayment(ctx context.Context, sessionPlanPaymentID, clinicID uuid.UUID) error {
 	return s.txRepo.DeleteBySessionPlanPaymentID(ctx, sessionPlanPaymentID, clinicID)
+}
+
+// --- Auto-generation from sales package payment --------------------------
+
+// UpsertSalesPackagePaymentArgs is a primitive payload so the finance package
+// stays free of a salespackage import (avoids cycles).
+type UpsertSalesPackagePaymentArgs struct {
+	ClinicID              uuid.UUID
+	SalesPackageID        uuid.UUID
+	SalesPackagePaymentID uuid.UUID
+	// Nullable — open receivables (unpaid sales) carry no method until the
+	// patient actually pays.
+	PaymentMethodID   *uuid.UUID
+	Amount            float64
+	Discount          float64
+	DueDate           time.Time
+	PaidAt            *time.Time
+	Installment       int
+	TotalInstallments int
+	PackageCode       string
+	PatientName       string
+	IsCanceled        bool
+}
+
+func (s *financeService) UpsertFromSalesPackagePayment(ctx context.Context, args UpsertSalesPackagePaymentArgs) error {
+	existing, err := s.txRepo.GetBySalesPackagePaymentID(ctx, args.SalesPackagePaymentID, args.ClinicID)
+	if err != nil {
+		return err
+	}
+
+	effective := args.Amount - args.Discount
+	if effective <= 0 || args.IsCanceled {
+		if existing == nil {
+			return nil
+		}
+		return s.txRepo.DeleteBySalesPackagePaymentID(ctx, args.SalesPackagePaymentID, args.ClinicID)
+	}
+
+	description := buildSalesPackageDescription(args)
+
+	competence := args.DueDate
+	if args.PaidAt != nil {
+		competence = *args.PaidAt
+	}
+
+	pkgID := args.SalesPackageID
+	paymentID := args.SalesPackagePaymentID
+
+	if existing == nil {
+		tx := &model.FinancialTransaction{
+			ClinicID:              args.ClinicID,
+			Type:                  model.TransactionTypeIncome,
+			Amount:                effective,
+			Description:           description,
+			Source:                model.SourceSalesPackage,
+			SalesPackageID:        &pkgID,
+			SalesPackagePaymentID: &paymentID,
+			CompetenceDate:        competence,
+			DueDate:               &args.DueDate,
+			PaidAt:                args.PaidAt,
+			PaymentMethodID:       args.PaymentMethodID, // nil for open receivables
+		}
+		return s.txRepo.Create(ctx, tx)
+	}
+
+	// Idempotent path — only write when something material changed.
+	samePM := (existing.PaymentMethodID == nil && args.PaymentMethodID == nil) ||
+		(existing.PaymentMethodID != nil && args.PaymentMethodID != nil && *existing.PaymentMethodID == *args.PaymentMethodID)
+	samePaid := (existing.PaidAt == nil && args.PaidAt == nil) ||
+		(existing.PaidAt != nil && args.PaidAt != nil && existing.PaidAt.Equal(*args.PaidAt))
+	sameDue := existing.DueDate != nil && existing.DueDate.Equal(args.DueDate)
+	if existing.Amount == effective && samePM && samePaid && sameDue && existing.Description == description {
+		return nil
+	}
+
+	existing.Amount = effective
+	existing.PaymentMethodID = args.PaymentMethodID
+	existing.PaidAt = args.PaidAt
+	existing.DueDate = &args.DueDate
+	existing.CompetenceDate = competence
+	existing.Description = description
+	return s.txRepo.Update(ctx, existing)
+}
+
+func (s *financeService) DeleteFromSalesPackagePayment(ctx context.Context, salesPackagePaymentID, clinicID uuid.UUID) error {
+	return s.txRepo.DeleteBySalesPackagePaymentID(ctx, salesPackagePaymentID, clinicID)
+}
+
+func buildSalesPackageDescription(args UpsertSalesPackagePaymentArgs) string {
+	base := "Venda"
+	if args.PackageCode != "" {
+		base = fmt.Sprintf("Venda %s", args.PackageCode)
+	}
+	if args.PatientName != "" {
+		base = fmt.Sprintf("%s - %s", base, args.PatientName)
+	}
+	if args.TotalInstallments > 1 {
+		base = fmt.Sprintf("%s (%d/%d)", base, args.Installment, args.TotalInstallments)
+	}
+	return base
 }
 
 // --- Auto-generation from commission payment ------------------------------

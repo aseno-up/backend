@@ -43,6 +43,7 @@ const (
 	AuditEntityFinancialCategory     AuditEntityType = "FINANCIAL_CATEGORY"
 	AuditEntityPartnerNetwork        AuditEntityType = "PARTNER_NETWORK"
 	AuditEntityPartnerPlan           AuditEntityType = "PARTNER_PLAN"
+	AuditEntitySalesPackage          AuditEntityType = "SALES_PACKAGE"
 )
 
 // AuditLog represents an audit trail entry.

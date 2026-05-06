@@ -141,6 +141,10 @@ import (
 	professional_repository "github.com/aseno/backend/pkg/professional/repository"
 	professional_service "github.com/aseno/backend/pkg/professional/service"
 	public_handler "github.com/aseno/backend/pkg/public/handler"
+	salespackage_handler "github.com/aseno/backend/pkg/salespackage/handler"
+	salespackage_model "github.com/aseno/backend/pkg/salespackage/model"
+	salespackage_repository "github.com/aseno/backend/pkg/salespackage/repository"
+	salespackage_service "github.com/aseno/backend/pkg/salespackage/service"
 	sessionplan_handler "github.com/aseno/backend/pkg/sessionplan/handler"
 	sessionplan_migration "github.com/aseno/backend/pkg/sessionplan/migration"
 	sessionplan_model "github.com/aseno/backend/pkg/sessionplan/model"
@@ -934,6 +938,23 @@ func main() {
 	appointmentPaymentHandler := appointment_handler.NewAppointmentPaymentHandler(appointmentPaymentService, auditSvc)
 	financeHandler := finance_handler.NewFinanceHandler(financeSvc, auditSvc)
 
+	// Sales Package (vendas avulsas com saldo flutuante)
+	salesPackageRepo := salespackage_repository.NewSalesPackageRepository(db.GetDB())
+	salesPackageSvc := salespackage_service.NewSalesPackageService(
+		salesPackageRepo,
+		salespackage_service.NewPaymentMethodLookup(paymentMethodRepo),
+		salespackage_service.NewFinanceHook(financeSvc),
+		salespackage_service.NewPatientLookup(patientRepo),
+		salespackage_service.NewAuditLogger(auditSvc),
+		salespackage_service.NewSystemLogger(systemLogSvc),
+	)
+	salesPackageHandler := salespackage_handler.NewSalesPackageHandler(salesPackageSvc)
+
+	// Wire FIFO consumption + balance lookup into the appointment service so
+	// creating/canceling an appointment automatically charges or releases the
+	// patient's package balance.
+	appointmentService.SetSalesPackagePicker(salesPackageSvc)
+
 	// Public receipt (share link) — token issuance is authenticated,
 	// reading is public. Uses narrow interfaces so tests don't touch the
 	// full repositories.
@@ -1140,6 +1161,7 @@ func main() {
 		partnerPlanHandler,
 		commissionHandler,
 		financeHandler,
+		salesPackageHandler,
 		portalHdlr,
 		marketplaceHdlr,
 		attendanceHdlr,
@@ -1257,6 +1279,7 @@ func setupRouter(
 	partnerPlanHandler *partnernetwork_handler.PartnerPlanHandler,
 	commissionHandler commission_handler.CommissionHandler,
 	financeHandler finance_handler.FinanceHandler,
+	salesPackageHandler salespackage_handler.SalesPackageHandler,
 	portalHandler *portalaccount_handler.PortalHandler,
 	marketplaceHandler marketplace_handler.MarketplaceHandler,
 	attendanceHandler attendance_handler.AttendanceHandler,
@@ -1407,6 +1430,9 @@ func setupRouter(
 
 			// Finance routes (manual income/expense + auto-generated from appointments)
 			financeHandler.RegisterRoutes(protected)
+
+			// Sales packages (vendas avulsas com saldo flutuante para procedimentos)
+			salesPackageHandler.RegisterRoutes(protected)
 
 			// Plan routes (protected endpoints inside PlanHandler/OfferHandler for admins)
 			planHandler.RegisterRoutes(protected, authMiddleware)
@@ -1664,6 +1690,10 @@ func runMigrations(db *database.Database) error {
 		// Finance (contas a pagar/receber + fluxo de caixa)
 		&finance_model.FinancialCategory{},
 		&finance_model.FinancialTransaction{},
+		// Sales packages (vendas avulsas com saldo flutuante)
+		&salespackage_model.SalesPackage{},
+		&salespackage_model.SalesPackageItem{},
+		&salespackage_model.SalesPackagePayment{},
 		// Group class reminder dedup log — written by the class reminder
 		// worker so the same (clinic, plan, patient, date, threshold) tuple
 		// is never enqueued twice.
@@ -1696,6 +1726,27 @@ func runMigrations(db *database.Database) error {
 		CREATE UNIQUE INDEX IF NOT EXISTS idx_financial_tx_session_plan_payment_unique
 		ON financial_transactions (session_plan_payment_id)
 		WHERE session_plan_payment_id IS NOT NULL AND deleted_at IS NULL
+	`)
+	db.GetDB().Exec(`
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_financial_tx_sales_package_payment_unique
+		ON financial_transactions (sales_package_payment_id)
+		WHERE sales_package_payment_id IS NOT NULL AND deleted_at IS NULL
+	`)
+	// payment_method_id became nullable when open receivables were introduced
+	// (a sale that hasn't been paid yet has no method until the patient settles).
+	// AutoMigrate doesn't relax NOT NULL on existing columns, so do it by hand.
+	db.GetDB().Exec(`ALTER TABLE sales_package_payments ALTER COLUMN payment_method_id DROP NOT NULL`)
+
+	// Backfill payment_methods settlement parameters for clinics that already
+	// have methods registered before this column was introduced. Credit cards
+	// default to 30-day settlement with installments enabled (12x); all other
+	// types default to immediate, single-payment.
+	db.GetDB().Exec(`
+		UPDATE payment_methods
+		SET settlement_days = 30, installments_allowed = TRUE, max_installments = 12
+		WHERE type = 'credit'
+		  AND settlement_days = 0
+		  AND installments_allowed = FALSE
 	`)
 
 	// Drop legacy unique index on commissions.appointment_id (now nullable for group sessions)
@@ -3688,7 +3739,7 @@ func (a *aiAgentEnrollmentSummaryPresenterAdapter) PresentSummary(
 	if partnerPlanID != nil {
 		networks, err := a.partnerNetworkRepo.ListActiveByClinic(clinicID)
 		if err == nil {
-			outer:
+		outer:
 			for _, n := range networks {
 				for _, p := range n.Plans {
 					if p.ID == *partnerPlanID {

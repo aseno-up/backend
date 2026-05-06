@@ -75,8 +75,20 @@ type AppointmentService interface {
 	// cascade with the appointment.
 	SetFinanceUpserter(u FinanceUpserter)
 
+	// SetSalesPackagePicker wires the salespackage FIFO picker used during
+	// appointment creation: when the patient has package balance for a
+	// procedure, the join row is bound to the oldest available item.
+	SetSalesPackagePicker(picker SalesPackagePicker)
+
 	// SuggestSmartSlots suggests best time slots based on historical data
 	SuggestSmartSlots(ctx context.Context, clinicID, professionalID uuid.UUID, date time.Time, days int, durationMinutes int) ([]*model.SmartSlotSuggestion, error)
+}
+
+// SalesPackagePicker resolves the oldest active sales_package_item for a
+// (patient, procedure) pair so the appointment can charge against it.
+// Implemented by the salespackage service; nil when not wired (ad-hoc only).
+type SalesPackagePicker interface {
+	PickFIFOItemID(ctx context.Context, clinicID, patientID, procedureID uuid.UUID) (*uuid.UUID, error)
 }
 
 // PaymentLister exposes just the "list payments for an appointment" capability
@@ -114,6 +126,7 @@ type appointmentService struct {
 	sessionPlanHandler   SessionPlanCompletionHandler
 	paymentLister        PaymentLister
 	financeUpserter      FinanceUpserter
+	salesPackagePicker   SalesPackagePicker
 }
 
 // NewAppointmentService creates a new appointment service
@@ -184,6 +197,11 @@ func (s *appointmentService) SetSessionPlanHandler(handler SessionPlanCompletion
 // SetPaymentLister wires the payment list source used during delete cascade.
 func (s *appointmentService) SetPaymentLister(lister PaymentLister) {
 	s.paymentLister = lister
+}
+
+// SetSalesPackagePicker wires the FIFO sales-package picker.
+func (s *appointmentService) SetSalesPackagePicker(picker SalesPackagePicker) {
+	s.salesPackagePicker = picker
 }
 
 // SetFinanceUpserter wires the finance sink used during delete cascade.
@@ -450,14 +468,26 @@ func (s *appointmentService) Create(ctx context.Context, clinicID uuid.UUID, req
 		appointmentType = model.AppointmentTypeRegular
 	}
 
-	// Map procedures
+	// Map procedures. When a sales_package picker is wired and the patient has
+	// remaining package balance for the procedure, the join row gets bound to
+	// the FIFO item — which lets the booking consume one session of that
+	// package without the user choosing manually.
 	var appointmentProcedures []model.AppointmentProcedure
 	var calculatedProceduresPriceCents int64
 	for _, p := range req.Procedures {
-		appointmentProcedures = append(appointmentProcedures, model.AppointmentProcedure{
+		ap := model.AppointmentProcedure{
 			ProcedureID: p.ProcedureID,
 			Price:       *p.Price, // assuming input defaults are handled by handler or we take pointer value
-		})
+		}
+		if s.salesPackagePicker != nil {
+			itemID, pickErr := s.salesPackagePicker.PickFIFOItemID(ctx, clinicID, req.PatientID, p.ProcedureID)
+			if pickErr != nil {
+				logger.Printf("[Appointment] sales package FIFO lookup failed (procedure=%s): %v", p.ProcedureID, pickErr)
+			} else if itemID != nil {
+				ap.SalesPackageItemID = itemID
+			}
+		}
+		appointmentProcedures = append(appointmentProcedures, ap)
 		calculatedProceduresPriceCents += int64(math.Round(*p.Price * 100))
 	}
 
