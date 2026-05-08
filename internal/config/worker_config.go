@@ -58,21 +58,21 @@ type WorkerConfig struct {
 	RabbitMQDLQ   string
 
 	// AI Agent Configuration
-	AIAgentEnabled          bool
-	AIAgentProvider         string // openrouter, gemini, claude, openai
-	AIAgentModel            string
-	AIAgentFallbackModels   []string // List of fallback models to try in order
-	AIAgentMaxTokens        int
-	AIAgentTemperature      float32
+	AIAgentEnabled        bool
+	AIAgentProvider       string // openrouter, gemini, claude, openai
+	AIAgentModel          string
+	AIAgentFallbackModels []string // List of fallback models to try in order
+	AIAgentMaxTokens      int
+	AIAgentTemperature    float32
 	// AIAgentHandoffTemperature is the stricter temperature used only when
 	// the AI runs in handoff mode (clinic with action tool disabled, AI
 	// gathering context for the human team). Lower than AIAgentTemperature
 	// because handoff requires strict rule-following.
 	AIAgentHandoffTemperature float32
 	AIAgentTimeout            time.Duration
-	ConversationMaxTurns    int
-	ConversationRedisTTL    time.Duration
-	ConversationPostgresTTL time.Duration
+	ConversationMaxTurns      int
+	ConversationRedisTTL      time.Duration
+	ConversationPostgresTTL   time.Duration
 	// ConversationPromptHistoryTurns = how many past turns (user+assistant
 	// mixed) are injected into the LLM prompt. Different from MaxTurns, which
 	// is the storage cap. Lower values reduce "memory-faulty" hallucination

@@ -25,8 +25,8 @@ func (r *stubProcedureRepoForPagination) GetByID(_, _ uuid.UUID) (*model.Procedu
 func (r *stubProcedureRepoForPagination) GetByIDs(_ []uuid.UUID, _ uuid.UUID) ([]*model.Procedure, error) {
 	return nil, nil
 }
-func (r *stubProcedureRepoForPagination) Update(_ *model.Procedure) error            { return nil }
-func (r *stubProcedureRepoForPagination) Delete(_, _ uuid.UUID) error                { return nil }
+func (r *stubProcedureRepoForPagination) Update(_ *model.Procedure) error             { return nil }
+func (r *stubProcedureRepoForPagination) Delete(_, _ uuid.UUID) error                 { return nil }
 func (r *stubProcedureRepoForPagination) BulkDelete(_ []uuid.UUID, _ uuid.UUID) error { return nil }
 func (r *stubProcedureRepoForPagination) Restore(_, _ uuid.UUID) error                { return nil }
 func (r *stubProcedureRepoForPagination) List(_ context.Context, _ uuid.UUID, filter pagination.Filter) ([]*model.Procedure, int64, error) {

@@ -21,7 +21,7 @@ import (
 type SessionPlanSlot struct {
 	ID             uuid.UUID  `json:"id" gorm:"type:uuid;primaryKey;default:gen_random_uuid()"`
 	SessionPlanID  uuid.UUID  `json:"session_plan_id" gorm:"type:uuid;not null;index;uniqueIndex:idx_session_plan_slot_unique"`
-	Weekday        int        `json:"weekday" gorm:"not null;uniqueIndex:idx_session_plan_slot_unique"`    // 0=Sunday ... 6=Saturday
+	Weekday        int        `json:"weekday" gorm:"not null;uniqueIndex:idx_session_plan_slot_unique"`           // 0=Sunday ... 6=Saturday
 	StartTime      string     `json:"start_time" gorm:"size:5;not null;uniqueIndex:idx_session_plan_slot_unique"` // HH:MM
 	Capacity       int        `json:"capacity" gorm:"not null;default:1"`
 	ProfessionalID *uuid.UUID `json:"professional_id" gorm:"type:uuid;index"`

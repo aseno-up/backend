@@ -25,13 +25,13 @@ import (
 // volume is small enough (clinic count × ~10 plans × ~50 slots × ~30
 // enrollments per plan).
 type GroupClassReminderSource struct {
-	clinicRepo          clinic_repository.ClinicRepository
-	sessionPlanRepo     repository.SessionPlanRepository
-	slotRepo            repository.SessionPlanSlotRepository
-	enrollmentRepo      enrollment_repository.EnrollmentRepository
-	patientRepo         patient_repository.PatientRepository
-	whatsappConnRepo    whatsapp_repository.WhatsAppConnectionRepository
-	clinicPageSize      int
+	clinicRepo       clinic_repository.ClinicRepository
+	sessionPlanRepo  repository.SessionPlanRepository
+	slotRepo         repository.SessionPlanSlotRepository
+	enrollmentRepo   enrollment_repository.EnrollmentRepository
+	patientRepo      patient_repository.PatientRepository
+	whatsappConnRepo whatsapp_repository.WhatsAppConnectionRepository
+	clinicPageSize   int
 }
 
 // NewGroupClassReminderSource wires the source. clinicPageSize controls how

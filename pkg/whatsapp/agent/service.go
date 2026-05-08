@@ -36,7 +36,7 @@ type AITokenUsageEvent struct {
 	Provider       string // "openrouter", "gemini", ...
 	Model          string // e.g. "openai/gpt-4o-mini"
 	InputTokens    int    // prompt tokens (best-effort; 0 if provider does not report)
-	OutputTokens  int     // completion tokens (best-effort; 0 if provider does not report)
+	OutputTokens   int    // completion tokens (best-effort; 0 if provider does not report)
 	TotalTokens    int    // full billable token count
 }
 
@@ -441,12 +441,12 @@ func (s *aiAgentService) ProcessMessage(ctx context.Context, req *MessageRequest
 				Status:   systemlog_model.LogStatusFailed,
 				Error:    err.Error(),
 				Payload: map[string]interface{}{
-					"intent":          string(req.Intent),
-					"patient_phone":   req.PatientPhone,
-					"conversation_id": conv.ID.String(),
-					"provider":        s.agent.Provider(),
-					"model":           s.agent.Model(),
-					"history_turns":   len(conv.History),
+					"intent":           string(req.Intent),
+					"patient_phone":    req.PatientPhone,
+					"conversation_id":  conv.ID.String(),
+					"provider":         s.agent.Provider(),
+					"model":            s.agent.Model(),
+					"history_turns":    len(conv.History),
 					"disallowed_tools": disallowed,
 				},
 			})

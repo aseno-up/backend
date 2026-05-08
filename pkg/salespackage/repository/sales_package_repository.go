@@ -34,12 +34,18 @@ type SalesPackageRepository interface {
 
 	// Code generator
 	NextCodeForYear(ctx context.Context, clinicID uuid.UUID, year int) (int, error)
+	// AcquireCodeLock takes a postgres advisory lock keyed by (clinic, year)
+	// so concurrent Create calls serialize when picking the next sale code.
+	// The lock is transaction-scoped — auto-released at commit/rollback.
+	// Must be called inside WithTx.
+	AcquireCodeLock(ctx context.Context, clinicID uuid.UUID, year int) error
 
 	// Payments
 	CreatePayments(ctx context.Context, payments []model.SalesPackagePayment) error
 	GetPaymentByID(ctx context.Context, id, clinicID uuid.UUID) (*model.SalesPackagePayment, error)
 	UpdatePayment(ctx context.Context, payment *model.SalesPackagePayment) error
 	ListPaymentsByPackage(ctx context.Context, packageID, clinicID uuid.UUID) ([]model.SalesPackagePayment, error)
+	DeletePayment(ctx context.Context, id, clinicID uuid.UUID) error
 	DeletePaymentsByPackage(ctx context.Context, packageID, clinicID uuid.UUID) error
 
 	// Transaction wrapper used by the service layer to keep create-with-items-and-payments atomic.
@@ -138,6 +144,9 @@ func (r *salesPackageRepository) List(ctx context.Context, clinicID uuid.UUID, f
 
 	if filter.Status != nil {
 		q = q.Where("sales_packages.status = ?", *filter.Status)
+	}
+	if filter.PatientID != nil {
+		q = q.Where("sales_packages.patient_id = ?", *filter.PatientID)
 	}
 	if filter.From != nil {
 		q = q.Where("sales_packages.sale_date >= ?", *filter.From)
@@ -333,6 +342,20 @@ func (r *salesPackageRepository) PickFIFOItem(ctx context.Context, clinicID, pat
 
 // --- Code generator -------------------------------------------------------
 
+// AcquireCodeLock takes a transaction-scoped postgres advisory lock keyed
+// by (clinic, year). Concurrent Create calls for the same clinic+year wait
+// here, so the MAX(code)+1 read can't race with another insert. Lock auto-
+// releases at commit/rollback.
+func (r *salesPackageRepository) AcquireCodeLock(ctx context.Context, clinicID uuid.UUID, year int) error {
+	if err := r.db.WithContext(ctx).Exec(
+		"SELECT pg_advisory_xact_lock(hashtextextended(?, 0), ?::bigint)",
+		clinicID.String(), year,
+	).Error; err != nil {
+		return errors.ErrInternalInstance.WithError(err)
+	}
+	return nil
+}
+
 // NextCodeForYear returns the next sequential number for a clinic within a
 // given year, based on existing codes that match V-{year}-NNN.
 func (r *salesPackageRepository) NextCodeForYear(ctx context.Context, clinicID uuid.UUID, year int) (int, error) {
@@ -409,6 +432,18 @@ func (r *salesPackageRepository) ListPaymentsByPackage(ctx context.Context, pack
 		return nil, errors.ErrInternalInstance.WithError(err)
 	}
 	return out, nil
+}
+
+// DeletePayment soft-deletes a single SalesPackagePayment row. Used by
+// AddPayment when an open receivable is fully consumed by the new payment.
+func (r *salesPackageRepository) DeletePayment(ctx context.Context, id, clinicID uuid.UUID) error {
+	res := r.db.WithContext(ctx).
+		Where("id = ? AND clinic_id = ?", id, clinicID).
+		Delete(&model.SalesPackagePayment{})
+	if res.Error != nil {
+		return errors.ErrInternalInstance.WithError(res.Error)
+	}
+	return nil
 }
 
 func (r *salesPackageRepository) DeletePaymentsByPackage(ctx context.Context, packageID, clinicID uuid.UUID) error {

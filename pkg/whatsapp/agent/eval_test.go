@@ -859,8 +859,8 @@ func (e *evalConvManager) SetPatientID(_ context.Context, _ uuid.UUID, patientID
 	return nil
 }
 
-func (e *evalConvManager) ExpireConversation(_ context.Context, _ uuid.UUID) error      { return nil }
-func (e *evalConvManager) CompleteConversation(_ context.Context, _ uuid.UUID) error    { return nil }
+func (e *evalConvManager) ExpireConversation(_ context.Context, _ uuid.UUID) error   { return nil }
+func (e *evalConvManager) CompleteConversation(_ context.Context, _ uuid.UUID) error { return nil }
 
 func (e *evalConvManager) LogToolCall(_ context.Context, _ uuid.UUID, name string, args map[string]interface{}, _ interface{}, _ error, _ time.Duration) error {
 	cb := e.onToolCall

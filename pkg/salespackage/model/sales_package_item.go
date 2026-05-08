@@ -28,10 +28,15 @@ func (SalesPackageItem) TableName() string {
 }
 
 // CreateSalesPackageItemInput is the payload to add an item to a sale.
+//
+// UnitPrice and Quantity drop the `required` tag because go-playground's
+// validator considers a numeric zero as "missing" — and we explicitly want to
+// allow `unit_price = 0` for free / promotional procedures. `min=0` keeps the
+// negative-price guard, and Quantity ≥ 1 is enforced via `min=1` alone.
 type CreateSalesPackageItemInput struct {
 	ProcedureID uuid.UUID `json:"procedure_id" binding:"required"`
-	UnitPrice   float64   `json:"unit_price" binding:"required,min=0"`
-	Quantity    int       `json:"quantity" binding:"required,min=1"`
+	UnitPrice   float64   `json:"unit_price" binding:"min=0"`
+	Quantity    int       `json:"quantity" binding:"min=1"`
 }
 
 // SalesPackageItemResponse is the serialized view of an item.

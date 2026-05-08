@@ -116,7 +116,9 @@ func (r *transactionRepository) List(ctx context.Context, clinicID uuid.UUID, fi
 		q = q.Where("source = ?", *filter.Source)
 	}
 	if filter.OnlyPaid {
-		q = q.Where("paid_at IS NOT NULL")
+		// Same rule as the period summary — future paid_at means scheduled,
+		// not yet realized.
+		q = q.Where("paid_at IS NOT NULL AND paid_at <= NOW()")
 	}
 
 	var out []model.FinancialTransaction
@@ -215,7 +217,10 @@ func (r *transactionRepository) SumByPeriod(ctx context.Context, clinicID uuid.U
 			COALESCE(SUM(CASE WHEN type = 'income'  THEN amount ELSE 0 END), 0) AS total_income,
 			COALESCE(SUM(CASE WHEN type = 'expense' THEN amount ELSE 0 END), 0) AS total_expense
 		`).
-		Where("clinic_id = ? AND deleted_at IS NULL AND paid_at IS NOT NULL AND competence_date >= ? AND competence_date < ?",
+		// Future paid_at (e.g. installment sales scheduled to settle later)
+		// shouldn't count as already-received in the period total — the money
+		// hasn't actually landed yet. Cap at NOW to keep the figure honest.
+		Where("clinic_id = ? AND deleted_at IS NULL AND paid_at IS NOT NULL AND paid_at <= NOW() AND competence_date >= ? AND competence_date < ?",
 			clinicID, from, to).
 		Scan(&row).Error
 	if err != nil {

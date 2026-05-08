@@ -46,27 +46,27 @@ type ExecutionContext struct {
 	ConversationID uuid.UUID
 
 	// Service dependencies (injected from WhatsApp service)
-	ProfessionalLister       ProfessionalLister
-	ProcedureLister          ProcedureLister
-	SpecialtyLister          SpecialtyLister
-	SlotFinder               SlotFinder
-	AppointmentCreator       AppointmentCreator
-	AppointmentFinder        AppointmentFinder
-	AppointmentConfirmer     AppointmentConfirmer
-	AppointmentCanceller     AppointmentCanceller
-	AppointmentRescheduler   AppointmentRescheduler
-	ClinicInfoProvider       ClinicInfoProvider
-	ProfessionalInfoProvider ProfessionalInfoProvider
-	PatientInfoProvider      PatientInfoProvider
-	PatientFinderCreator     PatientFinderCreator
-	PatientNameUpdater       PatientNameUpdater
-	HumanTakeoverMarker      HumanTakeoverMarker
-	ConversationMetadata     ConversationMetadataWriter
-	GroupSlotLister             GroupSlotLister
-	PartnerPlanLister           PartnerPlanLister
-	ClassEnroller               ClassEnroller
-	ClassConfirmer              ClassConfirmer
-	EnrollmentSummaryPresenter  EnrollmentSummaryPresenter
+	ProfessionalLister         ProfessionalLister
+	ProcedureLister            ProcedureLister
+	SpecialtyLister            SpecialtyLister
+	SlotFinder                 SlotFinder
+	AppointmentCreator         AppointmentCreator
+	AppointmentFinder          AppointmentFinder
+	AppointmentConfirmer       AppointmentConfirmer
+	AppointmentCanceller       AppointmentCanceller
+	AppointmentRescheduler     AppointmentRescheduler
+	ClinicInfoProvider         ClinicInfoProvider
+	ProfessionalInfoProvider   ProfessionalInfoProvider
+	PatientInfoProvider        PatientInfoProvider
+	PatientFinderCreator       PatientFinderCreator
+	PatientNameUpdater         PatientNameUpdater
+	HumanTakeoverMarker        HumanTakeoverMarker
+	ConversationMetadata       ConversationMetadataWriter
+	GroupSlotLister            GroupSlotLister
+	PartnerPlanLister          PartnerPlanLister
+	ClassEnroller              ClassEnroller
+	ClassConfirmer             ClassConfirmer
+	EnrollmentSummaryPresenter EnrollmentSummaryPresenter
 
 	// BlockedIntentReply is the resolved per-clinic canned reply, set per
 	// request when running in handoff mode. complete_handoff_to_human reads

@@ -940,6 +940,7 @@ func main() {
 
 	// Sales Package (vendas avulsas com saldo flutuante)
 	salesPackageRepo := salespackage_repository.NewSalesPackageRepository(db.GetDB())
+	salesPackageReceiptTokenRepo := salespackage_repository.NewSalesPackageReceiptTokenRepository(db.GetDB())
 	salesPackageSvc := salespackage_service.NewSalesPackageService(
 		salesPackageRepo,
 		salespackage_service.NewPaymentMethodLookup(paymentMethodRepo),
@@ -948,7 +949,14 @@ func main() {
 		salespackage_service.NewAuditLogger(auditSvc),
 		salespackage_service.NewSystemLogger(systemLogSvc),
 	)
-	salesPackageHandler := salespackage_handler.NewSalesPackageHandler(salesPackageSvc)
+	salesPackageReceiptSvc := salespackage_service.NewSalesPackageReceiptService(
+		salesPackageReceiptTokenRepo,
+		salesPackageRepo,
+		clinicRepo,
+		paymentMethodRepo,
+		cfg.GetFrontendURL(),
+	)
+	salesPackageHandler := salespackage_handler.NewSalesPackageHandler(salesPackageSvc, salesPackageReceiptSvc)
 
 	// Wire FIFO consumption + balance lookup into the appointment service so
 	// creating/canceling an appointment automatically charges or releases the
@@ -1327,6 +1335,9 @@ func setupRouter(
 		// Public appointment receipt (share link) — no auth required
 		publicReceiptHandler.RegisterRoutes(v1)
 
+		// Public sales package receipt (share link) — no auth required
+		salesPackageHandler.RegisterPublicRoutes(v1)
+
 		// Public lead isca routes (no auth required - lead capture)
 		leadIscaHandler.RegisterRoutes(v1)
 
@@ -1694,6 +1705,7 @@ func runMigrations(db *database.Database) error {
 		&salespackage_model.SalesPackage{},
 		&salespackage_model.SalesPackageItem{},
 		&salespackage_model.SalesPackagePayment{},
+		&salespackage_model.SalesPackageReceiptToken{},
 		// Group class reminder dedup log — written by the class reminder
 		// worker so the same (clinic, plan, patient, date, threshold) tuple
 		// is never enqueued twice.

@@ -286,14 +286,14 @@ var modelPricing = map[string]modelRate{
 	"qwen/qwen-2.5-72b-instruct":       {0.13, 0.39},
 
 	// Common alternates we may switch to without redeploying this code
-	"openai/gpt-4o":                {2.50, 10.00},
-	"openai/gpt-4-turbo":           {10.00, 30.00},
-	"openai/gpt-3.5-turbo":         {0.50, 1.50},
-	"anthropic/claude-3.5-sonnet":  {3.00, 15.00},
-	"anthropic/claude-3.5-haiku":   {0.80, 4.00},
-	"anthropic/claude-3-opus":      {15.00, 75.00},
-	"google/gemini-1.5-flash":      {0.075, 0.30},
-	"google/gemini-1.5-pro":        {1.25, 5.00},
+	"openai/gpt-4o":                     {2.50, 10.00},
+	"openai/gpt-4-turbo":                {10.00, 30.00},
+	"openai/gpt-3.5-turbo":              {0.50, 1.50},
+	"anthropic/claude-3.5-sonnet":       {3.00, 15.00},
+	"anthropic/claude-3.5-haiku":        {0.80, 4.00},
+	"anthropic/claude-3-opus":           {15.00, 75.00},
+	"google/gemini-1.5-flash":           {0.075, 0.30},
+	"google/gemini-1.5-pro":             {1.25, 5.00},
 	"meta-llama/llama-3.1-70b-instruct": {0.30, 0.30},
 	"mistralai/mistral-7b-instruct":     {0.06, 0.06},
 

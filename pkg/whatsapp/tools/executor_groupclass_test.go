@@ -572,8 +572,8 @@ func TestPresentEnrollmentSummary_Registered(t *testing.T) {
 
 func TestPresentEnrollmentSummary_RequiresPlanID(t *testing.T) {
 	execCtx := &ExecutionContext{
-		Context:                     context.Background(),
-		ClinicID:                    uuid.New(),
+		Context:                    context.Background(),
+		ClinicID:                   uuid.New(),
 		EnrollmentSummaryPresenter: &stubEnrollmentSummaryPresenter{},
 	}
 	_, err := NewExecutor(NewRegistry()).Execute(execCtx, "present_enrollment_summary", map[string]interface{}{
@@ -584,8 +584,8 @@ func TestPresentEnrollmentSummary_RequiresPlanID(t *testing.T) {
 
 func TestPresentEnrollmentSummary_RequiresSlotIDs(t *testing.T) {
 	execCtx := &ExecutionContext{
-		Context:                     context.Background(),
-		ClinicID:                    uuid.New(),
+		Context:                    context.Background(),
+		ClinicID:                   uuid.New(),
 		EnrollmentSummaryPresenter: &stubEnrollmentSummaryPresenter{},
 	}
 	_, err := NewExecutor(NewRegistry()).Execute(execCtx, "present_enrollment_summary", map[string]interface{}{
@@ -610,8 +610,8 @@ func TestPresentEnrollmentSummary_DelegatesAllParamsToPresenter(t *testing.T) {
 		},
 	}
 	execCtx := &ExecutionContext{
-		Context:                     context.Background(),
-		ClinicID:                    clinicID,
+		Context:                    context.Background(),
+		ClinicID:                   clinicID,
 		EnrollmentSummaryPresenter: presenter,
 	}
 
@@ -654,8 +654,8 @@ func TestPresentEnrollmentSummary_PropagatesValidatorError(t *testing.T) {
 	// goes back and re-asks the patient.
 	presenter := &stubEnrollmentSummaryPresenter{err: assertSomeServiceError{}}
 	execCtx := &ExecutionContext{
-		Context:                     context.Background(),
-		ClinicID:                    uuid.New(),
+		Context:                    context.Background(),
+		ClinicID:                   uuid.New(),
 		EnrollmentSummaryPresenter: presenter,
 	}
 	_, err := NewExecutor(NewRegistry()).Execute(execCtx, "present_enrollment_summary", map[string]interface{}{

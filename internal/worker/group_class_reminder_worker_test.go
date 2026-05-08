@@ -223,9 +223,9 @@ func TestGroupClassReminderWorker_PerThresholdFlagsAreIndependent(t *testing.T) 
 	// fire only the 2h one. The flags are independent peers.
 	clinicID := uuid.New()
 	settings := clinic_model.ClinicSettings{
-		WhatsAppRemindersEnabled:        true,
-		GroupClassReminder24hEnabled:    boolPtrLocal(false),
-		GroupClassReminder2hEnabled:     boolPtrLocal(true),
+		WhatsAppRemindersEnabled:     true,
+		GroupClassReminder24hEnabled: boolPtrLocal(false),
+		GroupClassReminder2hEnabled:  boolPtrLocal(true),
 	}
 
 	w := NewGroupClassReminderWorker(newClassReminderConfig(),

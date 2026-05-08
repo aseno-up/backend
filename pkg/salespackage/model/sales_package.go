@@ -138,14 +138,16 @@ type SalesPackageListResponse struct {
 
 // SalesPackageFilter narrows down listing queries.
 // Query is a free-text search applied to: patient name, patient phone, code,
-// and any item's procedure name.
+// and any item's procedure name. PatientID, when set, restricts the result
+// to that patient — used by the agenda's "Ver pacotes" dialog.
 type SalesPackageFilter struct {
-	Page    int                 `form:"page"`
-	PerPage int                 `form:"per_page"`
-	Status  *SalesPackageStatus `form:"status"`
-	Query   string              `form:"q"`
-	From    *time.Time          `form:"from"`
-	To      *time.Time          `form:"to"`
+	Page      int                 `form:"page"`
+	PerPage   int                 `form:"per_page"`
+	Status    *SalesPackageStatus `form:"status"`
+	Query     string              `form:"q"`
+	From      *time.Time          `form:"from"`
+	To        *time.Time          `form:"to"`
+	PatientID *uuid.UUID          `form:"patient_id"`
 }
 
 // ToResponse builds a SalesPackageResponse without computed balances.

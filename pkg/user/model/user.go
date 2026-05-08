@@ -39,8 +39,8 @@ type User struct {
 	// not per browser (localStorage was previously shared across users of the same device).
 	TutorialsCompleted pq.StringArray `json:"tutorials_completed" gorm:"type:text[];default:'{}'"`
 	CreatedAt          time.Time      `json:"created_at"`
-	UpdatedAt      time.Time  `json:"updated_at"`
-	DeletedAt      *time.Time `json:"deleted_at,omitempty" gorm:"index"`
+	UpdatedAt          time.Time      `json:"updated_at"`
+	DeletedAt          *time.Time     `json:"deleted_at,omitempty" gorm:"index"`
 }
 
 // TableName returns the table name for GORM

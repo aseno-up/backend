@@ -546,9 +546,9 @@ func slotInBRT(profID uuid.UUID, y, m, d, h, min int) *AvailableSlot {
 // has that association in professional_procedures.
 
 func TestGetAvailableSlots_ProcedureFilter_ExcludesUnqualifiedProfessional(t *testing.T) {
-	hamilton := uuid.New()  // qualified
-	mariana := uuid.New()   // NOT qualified
-	procID := uuid.New()    // RPG — Avaliação
+	hamilton := uuid.New() // qualified
+	mariana := uuid.New()  // NOT qualified
+	procID := uuid.New()   // RPG — Avaliação
 
 	// ProfessionalLister returns ONLY hamilton when filtering by procedure_id.
 	lister := &stubProfessionalLister{

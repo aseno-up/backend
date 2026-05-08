@@ -18,6 +18,32 @@ const (
 	PaymentMethodTypeOther    PaymentMethodType = "other"
 )
 
+// SettlementMode determines how the bank pays the clinic for an installment
+// sale.
+//
+// "upfront": the acquirer pays the entire sale as a single payout on
+// saleDate + settlement_days, regardless of how many installments the
+// customer chose. Produces ONE receivable row.
+//
+// "monthly": parcel 1 lands on saleDate + settlement_days; each subsequent
+// parcel falls one calendar month after the previous one. Calendar-aligned
+// so a small settlement_days (e.g. 3) doesn't accidentally schedule 12
+// parcels inside one month.
+//
+// Defaults to "monthly". Single-payment methods (PIX, cash) ignore this
+// field entirely.
+//
+// "fixed_days" is a legacy value: rows persisted before the settlement-mode
+// rework may still carry it. The service treats it identically to
+// "monthly" — the API no longer accepts it on create/update.
+type SettlementMode string
+
+const (
+	SettlementModeUpfront   SettlementMode = "upfront"
+	SettlementModeMonthly   SettlementMode = "monthly"
+	SettlementModeFixedDays SettlementMode = "fixed_days" // legacy — see comment above
+)
+
 // PaymentMethod represents a clinic's payment method (e.g., "Maquininha Stone", "PIX Banco Inter")
 type PaymentMethod struct {
 	ID                  uuid.UUID         `json:"id" gorm:"type:uuid;primary_key;default:gen_random_uuid()"`
@@ -28,6 +54,7 @@ type PaymentMethod struct {
 	SettlementDays      int               `json:"settlement_days" gorm:"not null;default:0"`
 	InstallmentsAllowed bool              `json:"installments_allowed" gorm:"not null;default:false"`
 	MaxInstallments     int               `json:"max_installments" gorm:"not null;default:1"`
+	SettlementMode      SettlementMode    `json:"settlement_mode" gorm:"type:varchar(20);not null;default:'monthly'"`
 	CreatedAt           time.Time         `json:"created_at"`
 	UpdatedAt           time.Time         `json:"updated_at"`
 	DeletedAt           *time.Time        `json:"deleted_at,omitempty" gorm:"index"`
@@ -47,10 +74,18 @@ type PaymentMethodResponse struct {
 	SettlementDays      int               `json:"settlement_days"`
 	InstallmentsAllowed bool              `json:"installments_allowed"`
 	MaxInstallments     int               `json:"max_installments"`
+	SettlementMode      SettlementMode    `json:"settlement_mode"`
 	CreatedAt           time.Time         `json:"created_at"`
 }
 
 func (p *PaymentMethod) ToResponse() *PaymentMethodResponse {
+	// Surface legacy "fixed_days" rows as "monthly" — the API only accepts
+	// "upfront" or "monthly" now, and behavior-wise fixed_days collapsed
+	// into monthly during the settlement-mode rework.
+	mode := p.SettlementMode
+	if mode == "" || mode == SettlementModeFixedDays {
+		mode = SettlementModeMonthly
+	}
 	return &PaymentMethodResponse{
 		ID:                  p.ID,
 		ClinicID:            p.ClinicID,
@@ -60,6 +95,7 @@ func (p *PaymentMethod) ToResponse() *PaymentMethodResponse {
 		SettlementDays:      p.SettlementDays,
 		InstallmentsAllowed: p.InstallmentsAllowed,
 		MaxInstallments:     p.MaxInstallments,
+		SettlementMode:      mode,
 		CreatedAt:           p.CreatedAt,
 	}
 }
@@ -71,6 +107,7 @@ type CreatePaymentMethodRequest struct {
 	SettlementDays      *int              `json:"settlement_days" binding:"omitempty,min=0"`
 	InstallmentsAllowed *bool             `json:"installments_allowed"`
 	MaxInstallments     *int              `json:"max_installments" binding:"omitempty,min=1"`
+	SettlementMode      *SettlementMode   `json:"settlement_mode" binding:"omitempty,oneof=upfront monthly"`
 }
 
 // UpdatePaymentMethodRequest represents the request to update a payment method
@@ -81,4 +118,5 @@ type UpdatePaymentMethodRequest struct {
 	SettlementDays      *int               `json:"settlement_days" binding:"omitempty,min=0"`
 	InstallmentsAllowed *bool              `json:"installments_allowed"`
 	MaxInstallments     *int               `json:"max_installments" binding:"omitempty,min=1"`
+	SettlementMode      *SettlementMode    `json:"settlement_mode" binding:"omitempty,oneof=upfront monthly"`
 }

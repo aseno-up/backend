@@ -54,11 +54,36 @@ type CreateSalesPackagePaymentInput struct {
 	PaidAt          *time.Time `json:"paid_at"`                                // optional: filled when received already
 }
 
+// UpdatePaymentRowRequest covers in-place edits of a single payment row on
+// an existing sale: change method, change amount, toggle paid/unpaid. Any
+// amount delta rebalances the sale's open receivables (consume on increase,
+// grow/create on decrease) so sum(payments) == pkg.total stays true.
+type UpdatePaymentRowRequest struct {
+	PaymentMethodID *uuid.UUID `json:"payment_method_id"`
+	Amount          *float64   `json:"amount" binding:"omitempty,gt=0"`
+	// Paid is a flag: true → row marked paid (paid_at = sale_date +
+	// settlement_days, computed); false → unmarked, becomes a receivable.
+	Paid *bool `json:"paid"`
+}
+
 // RegisterPaymentRequest covers settling an existing scheduled payment.
+//
+// When Installments > 1 is supplied, the original row is repurposed as
+// parcel 1 and N−1 new rows are inserted for parcels 2..N — same shape
+// expandPayments produces at sale creation, but driven from the
+// register-payment flow so the user can split an open receivable into
+// installments after the fact.
+//
+// When Discount > 0 is supplied, the receivable's effective amount is
+// reduced by the discount (e.g., R$1000 receivable + R$50 discount → R$950
+// settled). The R$50 is absorbed; no new receivable is opened for the
+// difference.
 type RegisterPaymentRequest struct {
 	PaidAt          time.Time  `json:"paid_at" binding:"required"`
 	PaymentMethodID *uuid.UUID `json:"payment_method_id"` // optional override
 	Amount          *float64   `json:"amount" binding:"omitempty,gt=0"`
+	Discount        *float64   `json:"discount" binding:"omitempty,gte=0"`
+	Installments    *int       `json:"installments" binding:"omitempty,min=1"`
 }
 
 // SalesPackagePaymentResponse is the serialized view of one payment row.

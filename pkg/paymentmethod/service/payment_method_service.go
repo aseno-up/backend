@@ -32,10 +32,26 @@ func NewPaymentMethodService(repo repository.PaymentMethodRepository) PaymentMet
 
 func (s *paymentMethodService) Create(clinicID uuid.UUID, req *model.CreatePaymentMethodRequest) (*model.PaymentMethodResponse, error) {
 	method := &model.PaymentMethod{
-		ClinicID: clinicID,
-		Name:     req.Name,
-		Type:     req.Type,
-		Active:   true,
+		ClinicID:       clinicID,
+		Name:           req.Name,
+		Type:           req.Type,
+		Active:         true,
+		SettlementMode: model.SettlementModeMonthly,
+	}
+	if req.SettlementDays != nil {
+		method.SettlementDays = *req.SettlementDays
+	}
+	if req.InstallmentsAllowed != nil {
+		method.InstallmentsAllowed = *req.InstallmentsAllowed
+	}
+	if req.MaxInstallments != nil {
+		method.MaxInstallments = *req.MaxInstallments
+	}
+	if method.MaxInstallments < 1 {
+		method.MaxInstallments = 1
+	}
+	if req.SettlementMode != nil {
+		method.SettlementMode = *req.SettlementMode
 	}
 
 	if err := s.repo.Create(method); err != nil {
@@ -67,6 +83,21 @@ func (s *paymentMethodService) Update(clinicID, id uuid.UUID, req *model.UpdateP
 	}
 	if req.Active != nil {
 		method.Active = *req.Active
+	}
+	if req.SettlementDays != nil {
+		method.SettlementDays = *req.SettlementDays
+	}
+	if req.InstallmentsAllowed != nil {
+		method.InstallmentsAllowed = *req.InstallmentsAllowed
+	}
+	if req.MaxInstallments != nil {
+		method.MaxInstallments = *req.MaxInstallments
+	}
+	if req.SettlementMode != nil {
+		method.SettlementMode = *req.SettlementMode
+	}
+	if !method.InstallmentsAllowed {
+		method.MaxInstallments = 1
 	}
 
 	if err := s.repo.Update(method); err != nil {
