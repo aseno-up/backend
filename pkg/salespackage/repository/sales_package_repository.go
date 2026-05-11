@@ -342,13 +342,21 @@ func (r *salesPackageRepository) PickFIFOItem(ctx context.Context, clinicID, pat
 
 // --- Code generator -------------------------------------------------------
 
+// acquireCodeLockSQL uses the single-argument form of pg_advisory_xact_lock,
+// which takes a bigint. The two-argument form requires (integer, integer),
+// not (bigint, bigint) — passing two bigints (e.g. from hashtextextended +
+// ?::bigint) raises "function pg_advisory_xact_lock(bigint, bigint) does not
+// exist (SQLSTATE 42883)" at runtime. To keep keying by (clinic, year), we
+// concatenate them into one text key and hash it to a single bigint.
+const acquireCodeLockSQL = "SELECT pg_advisory_xact_lock(hashtextextended(? || ':' || ?::text, 0))"
+
 // AcquireCodeLock takes a transaction-scoped postgres advisory lock keyed
 // by (clinic, year). Concurrent Create calls for the same clinic+year wait
 // here, so the MAX(code)+1 read can't race with another insert. Lock auto-
 // releases at commit/rollback.
 func (r *salesPackageRepository) AcquireCodeLock(ctx context.Context, clinicID uuid.UUID, year int) error {
 	if err := r.db.WithContext(ctx).Exec(
-		"SELECT pg_advisory_xact_lock(hashtextextended(?, 0), ?::bigint)",
+		acquireCodeLockSQL,
 		clinicID.String(), year,
 	).Error; err != nil {
 		return errors.ErrInternalInstance.WithError(err)
