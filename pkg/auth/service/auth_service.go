@@ -1141,7 +1141,30 @@ func (s *authService) VerifyEmail(ctx context.Context, token string) error {
 	}
 
 	// Mark token as used
-	return s.emailVerificationRepo.MarkAsUsed(ctx, verification.ID)
+	if err := s.emailVerificationRepo.MarkAsUsed(ctx, verification.ID); err != nil {
+		return err
+	}
+
+	// Send owner welcome email (non-blocking, errors are logged but not returned).
+	// We deliberately use SendOwnerWelcome (not SendWelcome) because the owner
+	// has not gone through onboarding yet and the stored name/clinic are
+	// auto-derived from the email — a personalized greeting would be off.
+	go func() {
+		bgCtx := context.Background()
+		frontendURL := s.frontendURL
+		if frontendURL == "" {
+			frontendURL = "http://localhost:3000"
+		}
+		loginLink := fmt.Sprintf("%s/pt-BR/login", frontendURL)
+		if err := s.emailService.SendOwnerWelcome(bgCtx, &email_service.OwnerWelcomeEmailData{
+			RecipientEmail: user.Email,
+			LoginLink:      loginLink,
+		}); err != nil {
+			fmt.Printf("[AUTH] Failed to send owner welcome email to %s: %v\n", user.Email, err)
+		}
+	}()
+
+	return nil
 }
 
 // ResendVerificationEmail resends the verification email to a user

@@ -16,6 +16,7 @@ type EmailService interface {
 	SendWelcome(ctx context.Context, data *WelcomeEmailData) error
 	SendPasswordReset(ctx context.Context, data *ResetPasswordEmailData) error
 	SendEmailVerification(ctx context.Context, data *EmailVerificationData) error
+	SendOwnerWelcome(ctx context.Context, data *OwnerWelcomeEmailData) error
 	SendContactForm(ctx context.Context, data *ContactFormData) error
 	SendBookingConfirmation(ctx context.Context, data *BookingConfirmationEmailData) error
 	SendPortalEmailVerification(ctx context.Context, data *PortalEmailVerificationData) error
@@ -64,6 +65,15 @@ type EmailVerificationData struct {
 	RecipientEmail   string
 	RecipientName    string
 	VerificationLink string
+}
+
+// OwnerWelcomeEmailData contains data for the welcome email sent to a new
+// account owner right after email verification. The owner has not seen the
+// onboarding screen yet, so we deliberately avoid any derived name or
+// clinic-context greeting.
+type OwnerWelcomeEmailData struct {
+	RecipientEmail string
+	LoginLink      string
 }
 
 // ContactFormData contains data for contact form submissions
@@ -157,6 +167,20 @@ func (s *smtpEmailService) SendPasswordReset(ctx context.Context, data *ResetPas
 	body, err := s.renderPasswordResetTemplate(data)
 	if err != nil {
 		return fmt.Errorf("failed to render password reset template: %w", err)
+	}
+
+	return s.sendEmail(data.RecipientEmail, subject, body)
+}
+
+// SendOwnerWelcome sends a welcome email to a new account owner after they
+// verify their email. No personalized name or clinic-context greeting because
+// the owner has not gone through onboarding yet.
+func (s *smtpEmailService) SendOwnerWelcome(ctx context.Context, data *OwnerWelcomeEmailData) error {
+	subject := "Bem-vindo(a) ao Aseno!"
+
+	body, err := s.renderOwnerWelcomeTemplate(data)
+	if err != nil {
+		return fmt.Errorf("failed to render owner welcome template: %w", err)
 	}
 
 	return s.sendEmail(data.RecipientEmail, subject, body)
@@ -318,6 +342,9 @@ func (s *smtpEmailService) renderWelcomeTemplate(data *WelcomeEmailData) (string
             <p style="text-align: center;">
                 <a href="{{.LoginLink}}" class="button">Acessar Sistema</a>
             </p>
+            <p style="margin-top: 24px;">Precisa de ajuda? Fale com a gente no WhatsApp:
+                <a href="https://wa.me/5575982947172">(75) 9 8294-7172</a>.
+            </p>
         </div>
         <div class="footer">
             <p>Este email foi enviado automaticamente. Por favor, nao responda.</p>
@@ -327,6 +354,56 @@ func (s *smtpEmailService) renderWelcomeTemplate(data *WelcomeEmailData) (string
 </html>
 `
 	t, err := template.New("welcome").Parse(tmpl)
+	if err != nil {
+		return "", err
+	}
+
+	var buf bytes.Buffer
+	if err := t.Execute(&buf, data); err != nil {
+		return "", err
+	}
+
+	return buf.String(), nil
+}
+
+func (s *smtpEmailService) renderOwnerWelcomeTemplate(data *OwnerWelcomeEmailData) (string, error) {
+	tmpl := `
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <style>
+        body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+        .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+        .header { background: #4F46E5; color: white; padding: 20px; text-align: center; border-radius: 8px 8px 0 0; }
+        .content { background: #f9fafb; padding: 30px; border-radius: 0 0 8px 8px; }
+        .button { display: inline-block; background: #4F46E5; color: white; padding: 12px 30px; text-decoration: none; border-radius: 6px; margin: 20px 0; }
+        .footer { text-align: center; color: #666; font-size: 12px; margin-top: 20px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Bem-vindo(a) ao Aseno!</h1>
+        </div>
+        <div class="content">
+            <p>Seu email foi confirmado e sua conta esta pronta para uso.</p>
+            <p>Faca login para terminar de configurar sua clinica e comecar a receber agendamentos.</p>
+            <p style="text-align: center;">
+                <a href="{{.LoginLink}}" class="button">Acessar o Aseno</a>
+            </p>
+            <p style="margin-top: 24px;">Precisa de ajuda? Fale com a gente no WhatsApp:
+                <a href="https://wa.me/5575982947172">(75) 9 8294-7172</a>.
+            </p>
+        </div>
+        <div class="footer">
+            <p>Este email foi enviado automaticamente. Por favor, nao responda.</p>
+        </div>
+    </div>
+</body>
+</html>
+`
+	t, err := template.New("owner_welcome").Parse(tmpl)
 	if err != nil {
 		return "", err
 	}
@@ -410,11 +487,14 @@ func (s *smtpEmailService) renderEmailVerificationTemplate(data *EmailVerificati
             <h1>Verifique seu Email</h1>
         </div>
         <div class="content">
-            <p>Ola {{.RecipientName}},</p>
-            <p>Obrigado por se cadastrar! Para completar seu registro, por favor verifique seu endereco de email.</p>
+            <p>Obrigado por se cadastrar no Aseno!</p>
+            <p>Para completar seu registro, por favor verifique seu endereco de email.</p>
             <p>Clique no botao abaixo para verificar:</p>
             <p style="text-align: center;">
                 <a href="{{.VerificationLink}}" class="button">Verificar Email</a>
+            </p>
+            <p style="margin-top: 16px;">Problemas para confirmar? Fale com a gente no WhatsApp:
+                <a href="https://wa.me/5575982947172">(75) 9 8294-7172</a>.
             </p>
             <p><small>Este link expira em 24 horas.</small></p>
             <p><small>Se voce nao criou uma conta, ignore este email.</small></p>
@@ -676,6 +756,11 @@ func (s *noOpEmailService) SendPasswordReset(ctx context.Context, data *ResetPas
 
 func (s *noOpEmailService) SendEmailVerification(ctx context.Context, data *EmailVerificationData) error {
 	fmt.Printf("[EMAIL] NoOp: verification email to %s\n", data.RecipientEmail)
+	return nil
+}
+
+func (s *noOpEmailService) SendOwnerWelcome(ctx context.Context, data *OwnerWelcomeEmailData) error {
+	fmt.Printf("[EMAIL] NoOp: owner welcome email to %s\n", data.RecipientEmail)
 	return nil
 }
 

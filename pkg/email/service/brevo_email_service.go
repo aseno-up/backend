@@ -139,12 +139,60 @@ func (s *brevoEmailService) SendWelcome(ctx context.Context, data *WelcomeEmailD
 						Acessar o Sistema
 					</a>
 				</p>
+				<p style="color:#607d94;font-size:14px;line-height:1.6;margin-top:32px;">
+					Precisa de ajuda? Fale com a gente no WhatsApp:
+					<a href="https://wa.me/5575982947172" style="color:#38b6ff;font-weight:600;text-decoration:none;">(75) 9 8294-7172</a>.
+				</p>
 			</div>
 		`, data.RecipientName, data.ClinicName, data.LoginLink),
 	})
 
 	if err != nil {
 		return fmt.Errorf("failed to send welcome email via Brevo: %w", err)
+	}
+	return nil
+}
+
+// SendOwnerWelcome sends a welcome email to a new account owner after they
+// verify their email. Uses Brevo. No name, no clinic-context greeting.
+func (s *brevoEmailService) SendOwnerWelcome(ctx context.Context, data *OwnerWelcomeEmailData) error {
+	_, _, err := s.client.TransactionalEmailsApi.SendTransacEmail(ctx, lib.SendSmtpEmail{
+		Sender: &lib.SendSmtpEmailSender{
+			Name:  s.senderName,
+			Email: s.senderEmail,
+		},
+		To: []lib.SendSmtpEmailTo{
+			{Email: data.RecipientEmail},
+		},
+		Subject: "Bem-vindo(a) ao Aseno!",
+		HtmlContent: fmt.Sprintf(`
+			<div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto;padding:32px 24px;">
+				<h2 style="color:#0d1b2a;margin-bottom:8px;">Bem-vindo(a) ao Aseno!</h2>
+				<p style="color:#607d94;font-size:15px;line-height:1.6;">
+					Seu email foi confirmado e sua conta está pronta para uso.
+				</p>
+				<p style="color:#607d94;font-size:15px;line-height:1.6;">
+					Faça login para terminar de configurar sua clínica e começar a receber agendamentos.
+				</p>
+				<p style="text-align:center;margin:32px 0;">
+					<a href="%s"
+					   style="background:#38b6ff;color:#fff;text-decoration:none;padding:12px 32px;border-radius:8px;font-weight:600;font-size:15px;display:inline-block;">
+						Acessar o Aseno
+					</a>
+				</p>
+				<p style="color:#607d94;font-size:14px;line-height:1.6;margin-top:32px;">
+					Precisa de ajuda? Fale com a gente no WhatsApp:
+					<a href="https://wa.me/5575982947172" style="color:#38b6ff;font-weight:600;text-decoration:none;">(75) 9 8294-7172</a>.
+				</p>
+				<p style="color:#a0aec0;font-size:12px;text-align:center;margin-top:24px;">
+					Enviado por <strong>Aseno</strong> — Software de gestão para clínicas
+				</p>
+			</div>
+		`, data.LoginLink),
+	})
+
+	if err != nil {
+		return fmt.Errorf("failed to send owner welcome email via Brevo: %w", err)
 	}
 	return nil
 }
@@ -167,7 +215,7 @@ func (s *brevoEmailService) SendEmailVerification(ctx context.Context, data *Ema
 			<div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto;padding:32px 24px;">
 				<h2 style="color:#0d1b2a;margin-bottom:8px;">Confirme seu e-mail</h2>
 				<p style="color:#607d94;font-size:15px;line-height:1.6;">
-					Olá, <strong>%s</strong>! Obrigado por se cadastrar no Aseno.
+					Obrigado por se cadastrar no Aseno!
 				</p>
 				<p style="color:#607d94;font-size:15px;line-height:1.6;">
 					Clique no botão abaixo para confirmar seu endereço de e-mail e ativar sua conta:
@@ -182,11 +230,15 @@ func (s *brevoEmailService) SendEmailVerification(ctx context.Context, data *Ema
 					Se o botão não funcionar, copie e cole este link no navegador:<br/>
 					<a href="%s" style="color:#38b6ff;word-break:break-all;">%s</a>
 				</p>
+				<p style="color:#607d94;font-size:14px;line-height:1.6;margin-top:24px;">
+					Problemas para confirmar? Fale com a gente no WhatsApp:
+					<a href="https://wa.me/5575982947172" style="color:#38b6ff;font-weight:600;text-decoration:none;">(75) 9 8294-7172</a>.
+				</p>
 				<p style="color:#a0aec0;font-size:12px;margin-top:32px;">
 					Este link expira em 24 horas. Se você não criou uma conta no Aseno, ignore este e-mail.
 				</p>
 			</div>
-		`, data.RecipientName, data.VerificationLink, data.VerificationLink, data.VerificationLink),
+		`, data.VerificationLink, data.VerificationLink, data.VerificationLink),
 	})
 
 	if err != nil {
