@@ -78,6 +78,10 @@ import (
 	featureflag_model "github.com/aseno/backend/pkg/featureflag/model"
 	featureflag_repository "github.com/aseno/backend/pkg/featureflag/repository"
 	featureflag_service "github.com/aseno/backend/pkg/featureflag/service"
+	promotion_handler "github.com/aseno/backend/pkg/promotion/handler"
+	promotion_model "github.com/aseno/backend/pkg/promotion/model"
+	promotion_repository "github.com/aseno/backend/pkg/promotion/repository"
+	promotion_service "github.com/aseno/backend/pkg/promotion/service"
 	finance_handler "github.com/aseno/backend/pkg/finance/handler"
 	finance_model "github.com/aseno/backend/pkg/finance/model"
 	finance_repository "github.com/aseno/backend/pkg/finance/repository"
@@ -257,6 +261,7 @@ func main() {
 	auditRepo := audit_repository.NewAuditRepository(db.GetDB())
 	systemLogRepo := systemlog_repository.NewSystemLogRepository(db.GetDB())
 	featureFlagRepo := featureflag_repository.NewFeatureFlagRepository(db.GetDB())
+	promotionRepo := promotion_repository.NewPromotionRepository(db.GetDB())
 	usageMetricRepo := usagemetric_repository.NewUsageMetricRepository(db.GetDB())
 	aiTokenUsageRepo := aitokenusage_repository.NewRepository(db.GetDB())
 	leadRepo := lead_repository.NewLeadRepository(db.GetDB())
@@ -286,6 +291,8 @@ func main() {
 	auditSvc := audit_service.NewAuditService(auditRepo)
 	systemLogSvc := systemlog_service.NewSystemLogService(systemLogRepo)
 	featureFlagSvc := featureflag_service.NewFeatureFlagService(featureFlagRepo)
+	promotionSvc := promotion_service.NewPromotionService(promotionRepo)
+	// Wired after paymentService is created (see SetPromotionService call below).
 	usageMetricSvc := usagemetric_service.NewUsageMetricService(usageMetricRepo)
 	aiTokenUsageSvc := aitokenusage_service.NewService(aiTokenUsageRepo)
 
@@ -653,6 +660,8 @@ func main() {
 	var paymentService payment_service.PaymentService
 	if asaasClient != nil {
 		paymentService = payment_service.NewPaymentService(asaasClient, customerRepo, subscriptionRepo, paymentRepo, clinicRepo, accountRepo, planService)
+		// Wire optional promotion discount into the checkout path.
+		paymentService.SetPromotionService(promotionSvc)
 
 		// Inject payment service into auth service for subscription creation during registration
 		authService.SetPaymentService(paymentService)
@@ -1098,6 +1107,7 @@ func main() {
 	auditHdlr := audit_handler.NewAuditHandler(auditSvc)
 	systemLogHdlr := systemlog_handler.NewSystemLogHandler(systemLogSvc)
 	featureFlagHdlr := featureflag_handler.NewFeatureFlagHandler(featureFlagSvc)
+	promotionHdlr := promotion_handler.NewPromotionHandler(promotionSvc)
 	usageMetricHdlr := usagemetric_handler.NewUsageMetricHandler(usageMetricSvc)
 	aiTokenUsageHdlr := aitokenusage_handler.NewHandler(aiTokenUsageSvc)
 
@@ -1156,6 +1166,7 @@ func main() {
 		auditHdlr,
 		systemLogHdlr,
 		featureFlagHdlr,
+		promotionHdlr,
 		usageMetricHdlr,
 		aiTokenUsageHdlr,
 		leadHdlr,
@@ -1274,6 +1285,7 @@ func setupRouter(
 	auditHandler audit_handler.AuditHandler,
 	systemLogHandler systemlog_handler.SystemLogHandler,
 	featureFlagHandler featureflag_handler.FeatureFlagHandler,
+	promotionHandler promotion_handler.PromotionHandler,
 	usageMetricHandler usagemetric_handler.UsageMetricHandler,
 	aiTokenUsageHandler aitokenusage_handler.Handler,
 	leadHandler lead_handler.LeadHandler,
@@ -1349,6 +1361,9 @@ func setupRouter(
 
 		// Public plan routes (no auth required)
 		planHandler.RegisterPublicRoutes(v1)
+
+		// Public promotion routes (no auth required - landing page banner)
+		promotionHandler.RegisterPublicRoutes(v1)
 
 		// Public SSE stream route (uses token in query param for auth)
 		notificationHandler.RegisterPublicRoutes(v1)
@@ -1527,6 +1542,7 @@ func setupRouter(
 				auditHandler.RegisterRoutes(adminPanel)
 				systemLogHandler.RegisterRoutes(adminPanel)
 				featureFlagHandler.RegisterRoutes(adminPanel)
+				promotionHandler.RegisterAdminRoutes(adminPanel)
 				usageMetricHandler.RegisterRoutes(adminPanel)
 				aiTokenUsageHandler.RegisterRoutes(adminPanel)
 				clinicHandler.RegisterAdminLookupRoutes(adminPanel)
@@ -1673,6 +1689,7 @@ func runMigrations(db *database.Database) error {
 		&audit_model.AuditLog{},
 		&systemlog_model.SystemLog{},
 		&featureflag_model.FeatureFlag{},
+		&promotion_model.Promotion{},
 		&usagemetric_model.UsageMetric{},
 		&aitokenusage_model.AITokenUsage{},
 		// Multi-clinic membership

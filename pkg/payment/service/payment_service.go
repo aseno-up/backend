@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 	"github.com/aseno/backend/pkg/payment/model"
 	plan_model "github.com/aseno/backend/pkg/plan/model"
 	plan_service "github.com/aseno/backend/pkg/plan/service"
+	promotion_service "github.com/aseno/backend/pkg/promotion/service"
 )
 
 // PaymentClient defines the interface for payment gateway operations
@@ -94,6 +96,11 @@ type PaymentService interface {
 	CancelSubscription(ctx context.Context, clinicID uuid.UUID) error
 	SwitchPlan(ctx context.Context, clinicID uuid.UUID, newPlan string, billingType string, cycle string, variant string, offerToken *string, creditCard *model.CreditCardInfo, creditCardHolder *model.CreditCardHolderInfo, units int) (*model.Subscription, error)
 	GetSubscriptionPayments(ctx context.Context, clinicID uuid.UUID) (*model.PaymentListResponse, error)
+	// SetPromotionService wires the optional promotion service. When unset,
+	// SwitchPlan skips the promotion lookup entirely (no extra discount).
+	// When set, SwitchPlan auto-applies the single active promotion that
+	// covers the chosen plan — server is the source of truth.
+	SetPromotionService(svc promotion_service.PromotionService)
 
 	// Helper methods for registration flow
 	CreateCustomerForClinic(ctx context.Context, clinicID uuid.UUID, req *model.CreateCustomerRequest) error
@@ -144,6 +151,10 @@ type paymentService struct {
 	clinicRepo       clinic_repository.ClinicRepository
 	accountRepo      account_repository.AccountRepository
 	planService      plan_service.PlanService
+	// promotionService is optional — when nil, SwitchPlan ignores promotionID
+	// (promo handling becomes a no-op). Set via SetPromotionService after
+	// construction so the existing constructor signature stays stable for tests.
+	promotionService promotion_service.PromotionService
 }
 
 // NewPaymentService creates a new payment service
@@ -165,6 +176,12 @@ func NewPaymentService(
 		accountRepo:      accountRepo,
 		planService:      planService,
 	}
+}
+
+// SetPromotionService wires the promotion service. Called from main.go after
+// both services are constructed (avoids a cyclic init in the wiring graph).
+func (s *paymentService) SetPromotionService(svc promotion_service.PromotionService) {
+	s.promotionService = svc
 }
 func (s *paymentService) CreateOrGetCustomer(ctx context.Context, clinicID uuid.UUID, req *CreateCustomerInput) (*model.Customer, error) {
 	clinic, err := s.clinicRepo.GetByID(ctx, clinicID)
@@ -1015,6 +1032,26 @@ func (s *paymentService) SwitchPlan(ctx context.Context, clinicID uuid.UUID, new
 			return nil, errors.ErrValidationInstance.WithMessage("O plano Avançado exige contratação mínima de 2 unidades")
 		}
 		value = value * float64(units)
+	}
+
+	// Auto-apply the active promotion (if any) when it covers this plan.
+	// Server-side detection means no client param is needed and we can't be
+	// tricked by stale URLs — GetActive already filters by is_active + window.
+	// Runs AFTER the per-unit multiplier so the discount applies to the
+	// full per-billing-cycle amount. No-op when promotionService isn't wired
+	// (test setups skip it).
+	if s.promotionService != nil {
+		promo, err := s.promotionService.GetActive(ctx)
+		if err == nil && promo != nil && promo.AppliesToPlan(plan.Slug) {
+			// Round to integer reais so the charge matches what the frontend
+			// shows in the price card and in the checkout summary.
+			discounted := math.Round(value * float64(100-promo.DiscountPercent) / 100.0)
+			if discounted < 1 {
+				discounted = 1
+			}
+			logger.Infof("[PAYMENT] Applying active promotion %s (-%d%%) to plan %s: R$ %.2f -> R$ %.2f", promo.ID, promo.DiscountPercent, plan.Slug, value, discounted)
+			value = discounted
+		}
 	}
 
 	// Check for existing active subscription
