@@ -102,6 +102,12 @@ type Config struct {
 	marketplaceWebhookSecret     string
 	bookingPaymentTimeoutMinutes int
 	marketplaceWebhookURL        string
+
+	// Meta Conversions API (server-side pixel mirror)
+	metaPixelID            string
+	metaCAPIAccessToken    string
+	metaCAPIAPIVersion     string
+	metaCAPITestEventCode  string
 }
 
 // NewConfig creates a new configuration from environment variables
@@ -170,6 +176,12 @@ func NewConfig() *Config {
 		marketplaceWebhookSecret:     getEnv("MARKETPLACE_WEBHOOK_SECRET", ""),
 		bookingPaymentTimeoutMinutes: getEnvAsInt("BOOKING_PAYMENT_TIMEOUT_MINUTES", 15),
 		marketplaceWebhookURL:        getEnv("MARKETPLACE_WEBHOOK_URL", ""),
+
+		// Meta Conversions API
+		metaPixelID:           getEnv("META_PIXEL_ID", ""),
+		metaCAPIAccessToken:   getEnv("META_CAPI_ACCESS_TOKEN", ""),
+		metaCAPIAPIVersion:    getEnv("META_CAPI_API_VERSION", "v21.0"),
+		metaCAPITestEventCode: getEnv("META_CAPI_TEST_EVENT_CODE", ""),
 	}
 }
 
@@ -429,6 +441,29 @@ func (c *Config) GetBookingPaymentTimeoutMinutes() int {
 
 func (c *Config) GetMarketplaceWebhookURL() string {
 	return c.marketplaceWebhookURL
+}
+
+// GetMetaPixelID returns the Meta Pixel / dataset ID (same ID used by the
+// browser fbq init). Empty when the integration is not configured.
+func (c *Config) GetMetaPixelID() string {
+	return c.metaPixelID
+}
+
+// GetMetaCAPIAccessToken returns the system-user / dataset access token from
+// Meta Events Manager. Empty when the integration is not configured.
+func (c *Config) GetMetaCAPIAccessToken() string {
+	return c.metaCAPIAccessToken
+}
+
+// GetMetaCAPIAPIVersion returns the Graph API version (e.g. "v21.0").
+func (c *Config) GetMetaCAPIAPIVersion() string {
+	return c.metaCAPIAPIVersion
+}
+
+// GetMetaCAPITestEventCode returns the Test Events code; empty in production.
+// When set, events route to "Test Events" without affecting attribution.
+func (c *Config) GetMetaCAPITestEventCode() string {
+	return c.metaCAPITestEventCode
 }
 
 func getEnv(key, defaultValue string) string {

@@ -101,6 +101,9 @@ import (
 	marketplace_model "github.com/aseno/backend/pkg/marketplace/model"
 	marketplace_repository "github.com/aseno/backend/pkg/marketplace/repository"
 	marketplace_service "github.com/aseno/backend/pkg/marketplace/service"
+	meta_capi "github.com/aseno/backend/pkg/meta/capi"
+	meta_handler "github.com/aseno/backend/pkg/meta/handler"
+	meta_service "github.com/aseno/backend/pkg/meta/service"
 	notification_handler "github.com/aseno/backend/pkg/notification/handler"
 	notification_model "github.com/aseno/backend/pkg/notification/model"
 	notification_repository "github.com/aseno/backend/pkg/notification/repository"
@@ -1114,6 +1117,24 @@ func main() {
 	// Initialize Public handler (no auth required - landing page config)
 	publicHdlr := public_handler.NewPublicHandler(settingsSvc, planService, emailSvc)
 
+	// Initialize Meta Conversions API (CAPI) mirror — server-side pixel
+	// dedup. Only register the handler when credentials are present; with
+	// none, the browser pixel still works on its own.
+	var metaHdlr *meta_handler.MetaHandler
+	if cfg.GetMetaPixelID() != "" && cfg.GetMetaCAPIAccessToken() != "" {
+		metaClient := meta_capi.NewClient(meta_capi.Config{
+			PixelID:       cfg.GetMetaPixelID(),
+			AccessToken:   cfg.GetMetaCAPIAccessToken(),
+			APIVersion:    cfg.GetMetaCAPIAPIVersion(),
+			TestEventCode: cfg.GetMetaCAPITestEventCode(),
+		})
+		metaSvc := meta_service.NewService(metaClient)
+		metaHdlr = meta_handler.NewMetaHandler(metaSvc)
+		logger.Println("Meta CAPI mirror initialized")
+	} else {
+		logger.Println("Meta CAPI disabled (META_PIXEL_ID/META_CAPI_ACCESS_TOKEN not set)")
+	}
+
 	// Booking service already initialized earlier (for AI Agent)
 	// bookingSvc already exists
 	bookingHdlr := booking_handler.NewBookingHandler(bookingSvc)
@@ -1189,6 +1210,7 @@ func main() {
 		enrollmentHdlr,
 		planPaymentHdlr,
 		patientWhatsAppConnHandler,
+		metaHdlr,
 		authMiddleware,
 		tenantMiddleware,
 		systemLogSvc,
@@ -1308,6 +1330,7 @@ func setupRouter(
 	enrollmentHandler enrollment_handler.EnrollmentHandler,
 	planPaymentHandler sessionplan_handler.PlanPaymentHandler,
 	patientWhatsAppConnHandler patient_handler.PatientWhatsAppConnectionHandler,
+	metaHandler *meta_handler.MetaHandler,
 	authMiddleware auth_middleware.AuthMiddleware,
 	tenantMiddleware auth_middleware.TenantMiddleware,
 	systemLogSvc systemlog_service.SystemLogService,
@@ -1343,6 +1366,14 @@ func setupRouter(
 
 		// Public config routes (no auth required - landing page)
 		publicHandler.RegisterRoutes(v1)
+
+		// Meta Conversions API mirror (no auth required - browser pixel
+		// calls this in parallel with fbq for deduplication). Only registered
+		// when credentials are configured; otherwise the route 404s and the
+		// browser pixel still works on its own.
+		if metaHandler != nil {
+			metaHandler.RegisterRoutes(v1)
+		}
 
 		// Public appointment receipt (share link) — no auth required
 		publicReceiptHandler.RegisterRoutes(v1)
