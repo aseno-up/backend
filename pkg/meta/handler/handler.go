@@ -78,12 +78,19 @@ func (h *MetaHandler) TrackEvent(c *gin.Context) {
 		CustomData: req.CustomData,
 	}
 
-	if err := h.svc.TrackEvent(c.Request.Context(), svcReq); err != nil {
+	resp, err := h.svc.TrackEvent(c.Request.Context(), svcReq)
+	if err != nil {
 		// Don't crash analytics if Meta is misbehaving — log + 502 so frontend
 		// can swallow the response without retrying.
-		log.Printf("[meta-capi] forward failed: %v", err)
+		log.Printf("[meta-capi] forward failed event=%s id=%s err=%v", req.EventName, req.EventID, err)
 		c.JSON(http.StatusBadGateway, gin.H{"error": "meta capi upstream"})
 		return
+	}
+	// Log success so we can correlate the request with Meta's fbtrace_id when
+	// debugging missing events in the Test Events / Overview panels.
+	if resp != nil {
+		log.Printf("[meta-capi] ok event=%s id=%s events_received=%d fbtrace=%s",
+			req.EventName, req.EventID, resp.EventsReceived, resp.FBTraceID)
 	}
 
 	c.JSON(http.StatusAccepted, gin.H{"ok": true})

@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/aseno/backend/pkg/meta/capi"
 	meta_service "github.com/aseno/backend/pkg/meta/service"
 )
 
@@ -32,9 +33,12 @@ type stubService struct {
 // service type into their assertions.
 type TrackedReq = meta_service.TrackEventRequest
 
-func (s *stubService) TrackEvent(_ context.Context, req meta_service.TrackEventRequest) error {
+func (s *stubService) TrackEvent(_ context.Context, req meta_service.TrackEventRequest) (*capi.Response, error) {
 	s.got = req
-	return s.err
+	if s.err != nil {
+		return nil, s.err
+	}
+	return &capi.Response{EventsReceived: 1, FBTraceID: "stub-trace"}, nil
 }
 
 func performRequest(h *MetaHandler, body string, headers map[string]string) *httptest.ResponseRecorder {

@@ -42,7 +42,7 @@ type Client interface {
 
 // Service is the public API of this package.
 type Service interface {
-	TrackEvent(ctx context.Context, req TrackEventRequest) error
+	TrackEvent(ctx context.Context, req TrackEventRequest) (*capi.Response, error)
 }
 
 type service struct {
@@ -54,12 +54,12 @@ func NewService(client Client) Service {
 	return &service{client: client}
 }
 
-func (s *service) TrackEvent(ctx context.Context, req TrackEventRequest) error {
+func (s *service) TrackEvent(ctx context.Context, req TrackEventRequest) (*capi.Response, error) {
 	if req.EventName == "" {
-		return errors.New("meta: event_name is required")
+		return nil, errors.New("meta: event_name is required")
 	}
 	if req.EventTime == 0 {
-		return errors.New("meta: event_time is required")
+		return nil, errors.New("meta: event_time is required")
 	}
 
 	event := capi.Event{
@@ -80,6 +80,5 @@ func (s *service) TrackEvent(ctx context.Context, req TrackEventRequest) error {
 		CustomData: req.CustomData,
 	}
 
-	_, err := s.client.SendEvents(ctx, []capi.Event{event})
-	return err
+	return s.client.SendEvents(ctx, []capi.Event{event})
 }

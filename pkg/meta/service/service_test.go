@@ -33,7 +33,7 @@ func TestService_TrackEvent_TranslatesAndForwards(t *testing.T) {
 	client := &recordingClient{sendOk: true, resp: &capi.Response{EventsReceived: 1, FBTraceID: "tr-1"}}
 	svc := NewService(client)
 
-	err := svc.TrackEvent(context.Background(), TrackEventRequest{
+	_, err := svc.TrackEvent(context.Background(), TrackEventRequest{
 		EventName:       "Lead",
 		EventID:         "evt-1",
 		EventTime:       1715800000,
@@ -91,7 +91,7 @@ func TestService_TrackEvent_RejectsMissingFields(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			err := svc.TrackEvent(context.Background(), tc.req)
+			_, err := svc.TrackEvent(context.Background(), tc.req)
 			require.Error(t, err)
 			assert.Nil(t, client.got, "client must not be called for invalid input")
 			client.got = nil
@@ -103,7 +103,7 @@ func TestService_TrackEvent_SurfacesClientError(t *testing.T) {
 	client := &recordingClient{sendOk: false, err: errors.New("capi: 502 Bad Gateway")}
 	svc := NewService(client)
 
-	err := svc.TrackEvent(context.Background(), TrackEventRequest{
+	_, err := svc.TrackEvent(context.Background(), TrackEventRequest{
 		EventName: "Lead",
 		EventTime: 1715800000,
 		EventID:   "evt-x",
