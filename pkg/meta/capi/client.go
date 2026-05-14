@@ -7,10 +7,17 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 )
+
+// metaCAPIDebug toggles a one-shot log of the outgoing payload (access_token
+// redacted) so we can confirm the wire format Meta is receiving. Enable by
+// setting META_CAPI_DEBUG=1.
+var metaCAPIDebug = os.Getenv("META_CAPI_DEBUG") == "1"
 
 const defaultBaseURL = "https://graph.facebook.com"
 
@@ -120,6 +127,20 @@ func (c *Client) SendEvents(ctx context.Context, events []Event) (*Response, err
 		return nil, fmt.Errorf("capi: marshal payload: %w", err)
 	}
 
+	if metaCAPIDebug {
+		// Re-marshal with access_token stripped so we never log it.
+		safe := make(map[string]interface{}, len(payload))
+		for k, v := range payload {
+			if k == "access_token" {
+				continue
+			}
+			safe[k] = v
+		}
+		if dbg, e := json.Marshal(safe); e == nil {
+			log.Printf("[meta-capi] outgoing payload: %s", string(dbg))
+		}
+	}
+
 	url := fmt.Sprintf("%s/%s/%s/events",
 		strings.TrimRight(c.cfg.BaseURL, "/"),
 		c.cfg.APIVersion,
@@ -141,6 +162,10 @@ func (c *Client) SendEvents(ctx context.Context, events []Event) (*Response, err
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("capi: read response: %w", err)
+	}
+
+	if metaCAPIDebug {
+		log.Printf("[meta-capi] response %d body: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
