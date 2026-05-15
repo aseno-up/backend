@@ -97,6 +97,10 @@ import (
 	lead_model "github.com/aseno/backend/pkg/lead/model"
 	lead_repository "github.com/aseno/backend/pkg/lead/repository"
 	lead_service "github.com/aseno/backend/pkg/lead/service"
+	onboarding_handler "github.com/aseno/backend/pkg/onboarding/handler"
+	onboarding_model "github.com/aseno/backend/pkg/onboarding/model"
+	onboarding_repository "github.com/aseno/backend/pkg/onboarding/repository"
+	onboarding_service "github.com/aseno/backend/pkg/onboarding/service"
 	marketplace_handler "github.com/aseno/backend/pkg/marketplace/handler"
 	marketplace_model "github.com/aseno/backend/pkg/marketplace/model"
 	marketplace_repository "github.com/aseno/backend/pkg/marketplace/repository"
@@ -1106,6 +1110,20 @@ func main() {
 	leadHdlr := lead_handler.NewLeadHandler(leadSvc, accountRepo, db.GetDB())
 	leadIscaHdlr := lead_handler.NewLeadIscaHandler(leadRepo, emailSvc, "sheets")
 
+	// Landing-link onboarding (magic-link signup from landing-page lead capture).
+	// Wraps auth.Register with EmailVerified=true once the visitor clicks the
+	// link e-mailed to them. Naming differs from the dashboard "onboarding
+	// checklist" (clinic_onboarding_service) which is an unrelated feature.
+	landingLinkRepo := onboarding_repository.NewOnboardingTokenRepository(db.GetDB())
+	landingLinkSvc := onboarding_service.NewOnboardingService(
+		landingLinkRepo,
+		authService,
+		emailSvc,
+		cfg.GetFrontendURL(),
+		time.Duration(cfg.GetOnboardingTokenTTLHours())*time.Hour,
+	)
+	landingLinkHdlr := onboarding_handler.NewOnboardingHandler(landingLinkSvc, leadRepo)
+
 	// Initialize Sprint 6 handlers (admin only)
 	auditHdlr := audit_handler.NewAuditHandler(auditSvc)
 	systemLogHdlr := systemlog_handler.NewSystemLogHandler(systemLogSvc)
@@ -1192,6 +1210,7 @@ func main() {
 		aiTokenUsageHdlr,
 		leadHdlr,
 		leadIscaHdlr,
+		landingLinkHdlr,
 		paymentMethodHandler,
 		appointmentPaymentHandler,
 		appointmentReceiptHandler,
@@ -1312,6 +1331,7 @@ func setupRouter(
 	aiTokenUsageHandler aitokenusage_handler.Handler,
 	leadHandler lead_handler.LeadHandler,
 	leadIscaHandler lead_handler.LeadIscaHandler,
+	landingLinkHandler onboarding_handler.OnboardingHandler,
 	paymentMethodHandler *paymentmethod_handler.PaymentMethodHandler,
 	appointmentPaymentHandler appointment_handler.AppointmentPaymentHandler,
 	appointmentReceiptHandler appointment_handler.AppointmentReceiptHandler,
@@ -1383,6 +1403,11 @@ func setupRouter(
 
 		// Public lead isca routes (no auth required - lead capture)
 		leadIscaHandler.RegisterRoutes(v1)
+
+		// Public landing-link onboarding routes (no auth required) —
+		// magic-link signup flow. Visitors POST e-mail to /leads/landing-link,
+		// click the link sent to their inbox, finish signup at /onboarding/<token>.
+		landingLinkHandler.RegisterRoutes(v1)
 
 		// Public booking routes (no auth required - online booking)
 		bookingHandler.RegisterRoutes(v1)
@@ -1758,6 +1783,9 @@ func runMigrations(db *database.Database) error {
 		// worker so the same (clinic, plan, patient, date, threshold) tuple
 		// is never enqueued twice.
 		&sessionplan_model.GroupClassReminderLog{},
+		// Landing-page magic-link tokens (one-time signup links e-mailed to
+		// visitors who fill "Receba seu link de acesso").
+		&onboarding_model.OnboardingToken{},
 	}
 
 	if err := db.AutoMigrate(models...); err != nil {

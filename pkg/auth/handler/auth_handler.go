@@ -2,6 +2,7 @@ package handler
 
 import (
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -38,6 +39,14 @@ type authHandler struct {
 	authService  service.AuthService
 	auditSvc     audit_service.AuditService
 	systemLogSvc systemlog_service.SystemLogService
+}
+
+// secureCookie returns true when the backend is running in production so
+// access/refresh-token cookies are restricted to HTTPS transport. In dev
+// (ENVIRONMENT unset or "development") it stays false so localhost over HTTP
+// keeps working.
+func secureCookie() bool {
+	return os.Getenv("ENVIRONMENT") == "production"
 }
 
 // NewAuthHandler creates a new auth handler
@@ -175,8 +184,8 @@ func (h *authHandler) Register(c *gin.Context) {
 	// Set HttpOnly cookies
 	// MaxAge: 15 minutes for access token, 7 days for refresh token
 	// Secure: false (dev), HttpOnly: true
-	c.SetCookie("access_token", response.AccessToken, 900, "/", "", false, true)
-	c.SetCookie("refresh_token", response.RefreshToken, 604800, "/", "", false, true)
+	c.SetCookie("access_token", response.AccessToken, 900, "/", "", secureCookie(), true)
+	c.SetCookie("refresh_token", response.RefreshToken, 604800, "/", "", secureCookie(), true)
 
 	c.JSON(http.StatusCreated, response)
 }
@@ -245,8 +254,8 @@ func (h *authHandler) Login(c *gin.Context) {
 	// Set HttpOnly cookies
 	// MaxAge: 15 minutes for access token, 7 days for refresh token
 	// Secure: false (dev), HttpOnly: true
-	c.SetCookie("access_token", response.AccessToken, 900, "/", "", false, true)
-	c.SetCookie("refresh_token", response.RefreshToken, 604800, "/", "", false, true)
+	c.SetCookie("access_token", response.AccessToken, 900, "/", "", secureCookie(), true)
+	c.SetCookie("refresh_token", response.RefreshToken, 604800, "/", "", secureCookie(), true)
 
 	c.JSON(http.StatusOK, response)
 }
@@ -313,8 +322,8 @@ func (h *authHandler) GoogleLogin(c *gin.Context) {
 	h.recordAuthEvent(c, audit_model.AuditActionLogin, response)
 
 	// Set HttpOnly cookies
-	c.SetCookie("access_token", response.AccessToken, 900, "/", "", false, true)
-	c.SetCookie("refresh_token", response.RefreshToken, 604800, "/", "", false, true)
+	c.SetCookie("access_token", response.AccessToken, 900, "/", "", secureCookie(), true)
+	c.SetCookie("refresh_token", response.RefreshToken, 604800, "/", "", secureCookie(), true)
 
 	c.JSON(http.StatusOK, response)
 }
@@ -352,8 +361,8 @@ func (h *authHandler) RefreshToken(c *gin.Context) {
 	}
 
 	// Set HttpOnly cookies
-	c.SetCookie("access_token", response.AccessToken, 900, "/", "", false, true)
-	c.SetCookie("refresh_token", response.RefreshToken, 604800, "/", "", false, true)
+	c.SetCookie("access_token", response.AccessToken, 900, "/", "", secureCookie(), true)
+	c.SetCookie("refresh_token", response.RefreshToken, 604800, "/", "", secureCookie(), true)
 
 	c.JSON(http.StatusOK, response)
 }
@@ -386,8 +395,8 @@ func (h *authHandler) Logout(c *gin.Context) {
 	}
 
 	// Clear cookies
-	c.SetCookie("access_token", "", -1, "/", "", false, true)
-	c.SetCookie("refresh_token", "", -1, "/", "", false, true)
+	c.SetCookie("access_token", "", -1, "/", "", secureCookie(), true)
+	c.SetCookie("refresh_token", "", -1, "/", "", secureCookie(), true)
 
 	c.JSON(http.StatusOK, gin.H{"message": "Successfully logged out"})
 }
@@ -449,8 +458,8 @@ func (h *authHandler) SwitchClinic(c *gin.Context) {
 	}
 
 	// Set new cookies
-	c.SetCookie("access_token", response.AccessToken, 900, "/", "", false, true)
-	c.SetCookie("refresh_token", response.RefreshToken, 604800, "/", "", false, true)
+	c.SetCookie("access_token", response.AccessToken, 900, "/", "", secureCookie(), true)
+	c.SetCookie("refresh_token", response.RefreshToken, 604800, "/", "", secureCookie(), true)
 
 	c.JSON(http.StatusOK, response)
 }

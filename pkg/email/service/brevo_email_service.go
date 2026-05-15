@@ -489,3 +489,53 @@ func (s *brevoEmailService) SendPortalEmailVerification(ctx context.Context, dat
 	}
 	return nil
 }
+
+// SendOnboardingLink sends the magic-link e-mail that completes signup from
+// the landing-page "Receba seu link de acesso" capture forms.
+func (s *brevoEmailService) SendOnboardingLink(ctx context.Context, data *OnboardingLinkEmailData) error {
+	greeting := "Olá"
+	if data.RecipientName != "" {
+		greeting = "Olá, " + data.RecipientName
+	}
+	expires := data.ExpiresAt.Format("02/01/2006 15:04")
+
+	html := fmt.Sprintf(`
+		<div style="font-family:Arial,sans-serif;max-width:560px;margin:0 auto;padding:32px 24px;background:#ffffff;">
+			<h2 style="color:#0B1D2E;margin:0 0 12px;font-size:22px;letter-spacing:-.02em;">%s,</h2>
+			<p style="color:#3d5a73;font-size:15px;line-height:1.6;margin:0 0 16px;">
+				Aqui está seu link de acesso ao Aseno. Clique no botão abaixo para criar sua conta —
+				é só preencher seu nome, senha e o nome da sua clínica. Você ganha <strong>14 dias de teste</strong>,
+				sem cartão de crédito.
+			</p>
+			<p style="margin:24px 0;">
+				<a href="%s" style="display:inline-block;background:#006BFF;color:#ffffff;padding:14px 24px;border-radius:10px;text-decoration:none;font-weight:600;font-size:15px;">
+					Criar minha conta
+				</a>
+			</p>
+			<p style="color:#6b8299;font-size:13px;line-height:1.6;margin:16px 0 0;">
+				Se o botão não funcionar, copie e cole este endereço no navegador:<br>
+				<span style="color:#0055d4;word-break:break-all;">%s</span>
+			</p>
+			<p style="color:#9db3c4;font-size:12px;margin:32px 0 0;">
+				Este link é único e expira em %s. Se você não solicitou este e-mail, pode ignorá-lo.
+			</p>
+			<p style="color:#a0aec0;font-size:12px;text-align:center;margin:24px 0 0;">
+				Enviado por <strong>Aseno</strong> — Software de gestão para clínicas
+			</p>
+		</div>
+	`, greeting, data.OnboardingLink, data.OnboardingLink, expires)
+
+	_, _, err := s.client.TransactionalEmailsApi.SendTransacEmail(ctx, lib.SendSmtpEmail{
+		Sender: &lib.SendSmtpEmailSender{Name: s.senderName, Email: s.senderEmail},
+		To: []lib.SendSmtpEmailTo{
+			{Email: data.RecipientEmail, Name: data.RecipientName},
+		},
+		Subject:     "Seu link de acesso ao Aseno",
+		HtmlContent: html,
+	})
+
+	if err != nil {
+		return fmt.Errorf("failed to send onboarding link email via Brevo: %w", err)
+	}
+	return nil
+}

@@ -108,6 +108,9 @@ type Config struct {
 	metaCAPIAccessToken    string
 	metaCAPIAPIVersion     string
 	metaCAPITestEventCode  string
+
+	// Landing-page magic-link onboarding
+	onboardingTokenTTLHours int
 }
 
 // NewConfig creates a new configuration from environment variables
@@ -182,6 +185,10 @@ func NewConfig() *Config {
 		metaCAPIAccessToken:   getEnv("META_CAPI_ACCESS_TOKEN", ""),
 		metaCAPIAPIVersion:    getEnv("META_CAPI_API_VERSION", "v21.0"),
 		metaCAPITestEventCode: getEnv("META_CAPI_TEST_EVENT_CODE", ""),
+
+		// Landing-page magic-link onboarding — controls how long the e-mailed
+		// link stays usable. 168h = 7 days.
+		onboardingTokenTTLHours: getEnvAsInt("ONBOARDING_TOKEN_TTL_HOURS", 168),
 	}
 }
 
@@ -464,6 +471,15 @@ func (c *Config) GetMetaCAPIAPIVersion() string {
 // When set, events route to "Test Events" without affecting attribution.
 func (c *Config) GetMetaCAPITestEventCode() string {
 	return c.metaCAPITestEventCode
+}
+
+// GetOnboardingTokenTTLHours returns how long a magic-link onboarding token
+// stays usable. Tuned via ONBOARDING_TOKEN_TTL_HOURS (default 168 = 7 days).
+func (c *Config) GetOnboardingTokenTTLHours() int {
+	if c.onboardingTokenTTLHours <= 0 {
+		return 168
+	}
+	return c.onboardingTokenTTLHours
 }
 
 func getEnv(key, defaultValue string) string {

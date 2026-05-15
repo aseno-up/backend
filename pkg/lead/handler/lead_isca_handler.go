@@ -60,9 +60,12 @@ func (h *leadIscaHandler) CreateIsca(c *gin.Context) {
 
 	now := time.Now()
 
+	// All public lead-capture origens come from a landing page. Prefix the
+	// ClinicName with "Landing Page — " so the team can spot them at a glance
+	// in the leads table without having to inspect the source field.
 	lead := &model.Lead{
 		ClinicID:       uuid.Nil,
-		ClinicName:     "Isca — " + req.Origem,
+		ClinicName:     "Landing Page — " + req.Origem,
 		ContactName:    req.Nome,
 		Email:          req.Email,
 		Phone:          req.WhatsApp,
@@ -70,7 +73,7 @@ func (h *leadIscaHandler) CreateIsca(c *gin.Context) {
 		Source:         model.LeadSource(req.Origem),
 		Status:         model.LeadStatusIsca,
 		FirstContactAt: &now,
-		Notes:          "Lead capturado via isca, sem vínculo com clínica específica",
+		Notes:          "Lead capturado via landing page (sem vínculo com clínica específica)",
 	}
 
 	if err := h.repo.Create(c.Request.Context(), lead); err != nil {
@@ -79,9 +82,16 @@ func (h *leadIscaHandler) CreateIsca(c *gin.Context) {
 		return
 	}
 
-	go h.sendIscaEmail(req.Nome, req.Email)
+	// Only the kit_planilhas origem triggers the spreadsheet email. Other isca
+	// origens (inline landing capture, engagement modal) save the lead so the
+	// sales team can follow up — they don't auto-fulfill a downloadable asset.
+	if req.Origem == "isca_kit_planilhas" {
+		go h.sendIscaEmail(req.Nome, req.Email)
+		c.JSON(http.StatusCreated, gin.H{"message": "Kit enviado com sucesso"})
+		return
+	}
 
-	c.JSON(http.StatusCreated, gin.H{"message": "Kit enviado com sucesso"})
+	c.JSON(http.StatusCreated, gin.H{"message": "Recebido"})
 }
 
 func (h *leadIscaHandler) sendIscaEmail(name, email string) {

@@ -348,7 +348,7 @@ func (s *authService) Register(ctx context.Context, req *model.RegisterRequest) 
 		Name:          req.Name,
 		Phone:         req.Phone,
 		Role:          user_model.UserRoleOwner,
-		EmailVerified: false,
+		EmailVerified: req.EmailVerified,
 		IsActive:      true,
 	}
 

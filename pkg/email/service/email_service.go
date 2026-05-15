@@ -22,6 +22,18 @@ type EmailService interface {
 	SendPortalEmailVerification(ctx context.Context, data *PortalEmailVerificationData) error
 	SendLeadIsca(ctx context.Context, data *LeadIscaEmailData) error
 	SendPaymentReminder(ctx context.Context, data *PaymentReminderEmailData) error
+	SendOnboardingLink(ctx context.Context, data *OnboardingLinkEmailData) error
+}
+
+// OnboardingLinkEmailData carries the data for the magic-link e-mail sent
+// from the landing page "Receba seu link de acesso" capture forms. Clicking
+// the link takes the visitor to /onboarding/<token> where they finish
+// signing up — the click itself counts as e-mail verification.
+type OnboardingLinkEmailData struct {
+	RecipientEmail string
+	RecipientName  string
+	OnboardingLink string
+	ExpiresAt      time.Time
 }
 
 // PaymentReminderEmailData carries the information needed to render the
@@ -791,6 +803,38 @@ func (s *noOpEmailService) SendPaymentReminder(ctx context.Context, data *Paymen
 	fmt.Printf("[EMAIL] NoOp: payment reminder to %s (%s) for plan %s due %s\n",
 		data.RecipientName, data.RecipientEmail, data.PlanTitle, data.DueDate.Format("02/01/2006"))
 	return nil
+}
+
+func (s *noOpEmailService) SendOnboardingLink(ctx context.Context, data *OnboardingLinkEmailData) error {
+	fmt.Printf("[EMAIL] NoOp: onboarding link to %s (%s) -> %s (expires %s)\n",
+		data.RecipientName, data.RecipientEmail, data.OnboardingLink, data.ExpiresAt.Format(time.RFC3339))
+	return nil
+}
+
+// SendOnboardingLink (SMTP) — fallback path used when Brevo isn't configured.
+// We send a minimal HTML body with the magic link so the flow keeps working.
+func (s *smtpEmailService) SendOnboardingLink(ctx context.Context, data *OnboardingLinkEmailData) error {
+	subject := "Seu link de acesso ao Aseno"
+	body := fmt.Sprintf(`<!doctype html><html><body style="font-family:Arial,sans-serif;color:#0B1D2E;">
+<p>Olá%s,</p>
+<p>Clique no link abaixo para criar sua conta e começar seu teste de 14 dias:</p>
+<p><a href="%s" style="display:inline-block;background:#006BFF;color:#fff;padding:12px 20px;border-radius:8px;text-decoration:none;font-weight:600;">Criar minha conta</a></p>
+<p style="font-size:13px;color:#607d94;">Ou copie o endereço: %s</p>
+<p style="font-size:12px;color:#a0aec0;">Este link expira em %s.</p>
+</body></html>`,
+		nameSuffix(data.RecipientName),
+		data.OnboardingLink,
+		data.OnboardingLink,
+		data.ExpiresAt.Format("02/01/2006 15:04"),
+	)
+	return s.sendEmail(data.RecipientEmail, subject, body)
+}
+
+func nameSuffix(name string) string {
+	if name == "" {
+		return ""
+	}
+	return ", " + name
 }
 
 // SendPaymentReminder sends a monthly payment due-date reminder via SMTP.

@@ -33,7 +33,16 @@ func (m *mockEmailService) SendPasswordReset(ctx context.Context, data *email_se
 func (m *mockEmailService) SendEmailVerification(ctx context.Context, data *email_service.EmailVerificationData) error {
 	return m.Called(ctx, data).Error(0)
 }
+func (m *mockEmailService) SendOwnerWelcome(ctx context.Context, data *email_service.OwnerWelcomeEmailData) error {
+	return m.Called(ctx, data).Error(0)
+}
 func (m *mockEmailService) SendContactForm(ctx context.Context, data *email_service.ContactFormData) error {
+	return m.Called(ctx, data).Error(0)
+}
+func (m *mockEmailService) SendPaymentReminder(ctx context.Context, data *email_service.PaymentReminderEmailData) error {
+	return m.Called(ctx, data).Error(0)
+}
+func (m *mockEmailService) SendOnboardingLink(ctx context.Context, data *email_service.OnboardingLinkEmailData) error {
 	return m.Called(ctx, data).Error(0)
 }
 func (m *mockEmailService) SendBookingConfirmation(ctx context.Context, data *email_service.BookingConfirmationEmailData) error {
@@ -180,7 +189,7 @@ func TestIsca_LeadSavedWithIscaStatus(t *testing.T) {
 	repo.On("Create", mock.Anything, mock.MatchedBy(func(l *model.Lead) bool {
 		return l.Status == model.LeadStatusIsca &&
 			l.Channel == model.LeadChannelInbound &&
-			l.ClinicName == "Isca — isca_kit_planilhas"
+			l.ClinicName == "Landing Page — isca_kit_planilhas"
 	})).Return(nil)
 
 	body, _ := json.Marshal(map[string]string{
@@ -196,6 +205,59 @@ func TestIsca_LeadSavedWithIscaStatus(t *testing.T) {
 
 	assert.Equal(t, http.StatusCreated, w.Code)
 	repo.AssertExpectations(t)
+}
+
+func TestIsca_NonKitOrigemDoesNotSendKitEmail(t *testing.T) {
+	repo := new(mockLeadRepo)
+	emailSvc := new(mockEmailService)
+	router := setupIscaRouter(repo, emailSvc)
+
+	repo.On("Create", mock.Anything, mock.MatchedBy(func(l *model.Lead) bool {
+		return l.Status == model.LeadStatusIsca &&
+			l.ClinicName == "Landing Page — landing_inline_hero"
+	})).Return(nil)
+
+	body, _ := json.Marshal(map[string]string{
+		"nome":   "Carla",
+		"email":  "carla@test.com",
+		"origem": "landing_inline_hero",
+	})
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("POST", "/leads/isca", bytes.NewBuffer(body))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusCreated, w.Code)
+	repo.AssertExpectations(t)
+	// The handler must not try to read the kit_planilhas spreadsheets for
+	// non-kit origens. We assert SendLeadIsca was never invoked.
+	emailSvc.AssertNotCalled(t, "SendLeadIsca", mock.Anything, mock.Anything)
+}
+
+func TestIsca_EngagementModalOrigemDoesNotSendKitEmail(t *testing.T) {
+	repo := new(mockLeadRepo)
+	emailSvc := new(mockEmailService)
+	router := setupIscaRouter(repo, emailSvc)
+
+	repo.On("Create", mock.Anything, mock.MatchedBy(func(l *model.Lead) bool {
+		return l.ClinicName == "Landing Page — landing_modal"
+	})).Return(nil)
+
+	body, _ := json.Marshal(map[string]string{
+		"nome":   "Pedro",
+		"email":  "pedro@test.com",
+		"origem": "landing_modal",
+	})
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("POST", "/leads/isca", bytes.NewBuffer(body))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusCreated, w.Code)
+	repo.AssertExpectations(t)
+	emailSvc.AssertNotCalled(t, "SendLeadIsca", mock.Anything, mock.Anything)
 }
 
 func TestIsca_RepoErrorReturns500(t *testing.T) {
