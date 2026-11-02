@@ -26,6 +26,7 @@ type openRouterAgent struct {
 	toolRegistry   *tools.Registry
 	toolExecutor   *tools.Executor
 	execContext    *tools.ExecutionContext
+	tracer         *LangfuseTracer // optional — no-op when env keys absent
 }
 
 // NewOpenRouterAgent creates a new OpenRouter-based agent
@@ -73,6 +74,7 @@ func NewOpenRouterAgent(cfg Config, toolRegistry *tools.Registry, toolExecutor *
 		toolRegistry:   toolRegistry,
 		toolExecutor:   toolExecutor,
 		execContext:    execContext,
+		tracer:         NewLangfuseTracer(),
 	}, nil
 }
 
@@ -82,6 +84,15 @@ func (a *openRouterAgent) Provider() string {
 
 func (a *openRouterAgent) Model() string {
 	return a.model
+}
+
+// Flush implements agent.Flusher: drains pending LangFuse traces so
+// graceful shutdown doesn't drop the last few events. No-op when the
+// tracer is in disabled mode (env keys absent).
+func (a *openRouterAgent) Flush() {
+	if a.tracer != nil {
+		a.tracer.Flush()
+	}
 }
 
 // Generate generates a response for the given request
@@ -95,15 +106,20 @@ func (a *openRouterAgent) Generate(ctx context.Context, req *AgentRequest) (*Age
 	// Try with primary model first
 	resp, err := a.generateWithModel(ctx, req, a.model)
 	if err != nil {
-		logger.Printf("[OpenRouter Agent] Primary model (%s) failed: %v", a.model, err)
+		primaryErr := err
+		logger.Printf("[OpenRouter Agent] Primary model (%s) failed: %v", a.model, primaryErr)
 
 		// Try each fallback model in sequence
 		for i, fallbackModel := range a.fallbackModels {
 			logger.Printf("[OpenRouter Agent] Trying fallback model %d/%d: %s", i+1, len(a.fallbackModels), fallbackModel)
 			resp, err = a.generateWithModel(ctx, req, fallbackModel)
 			if err == nil {
-				// Success with fallback
+				// Success with fallback — mark the response so the agent service
+				// can emit a system_log warning for observability.
 				logger.Printf("[OpenRouter Agent] Success with fallback model: %s", fallbackModel)
+				resp.PrimaryModelFailed = true
+				resp.PrimaryModel = a.model
+				resp.PrimaryModelError = primaryErr.Error()
 				resp.Latency = time.Since(start)
 				return resp, nil
 			}
@@ -178,11 +194,14 @@ func (a *openRouterAgent) generateWithModel(ctx context.Context, req *AgentReque
 		req.ClinicName,
 		req.ConversationContext.PatientName,
 		req.ConversationContext,
-	)
+	).
+		WithBusinessInfo(req.ClinicBusinessInfo).
+		WithFAQ(req.ClinicFAQ).
+		WithPatientContext(req.PatientContext)
 	systemPrompt := promptBuilder.Build()
 
 	// Build user prompt with conversation history
-	userPrompt := BuildUserPrompt(req.ConversationContext, req.UserMessage)
+	userPrompt := BuildUserPromptWithLimit(req.ConversationContext, req.UserMessage, req.HistoryTurns)
 
 	// Initialize messages with system prompt
 	messages := []openRouterMessage{
@@ -199,11 +218,21 @@ func (a *openRouterAgent) generateWithModel(ctx context.Context, req *AgentReque
 	// Track tool calls made during this turn
 	var allToolCalls []conversation.ToolCall
 
-	// Get tools in OpenRouter format
-	toolDeclarations := a.toolRegistry.GetOpenRouterFunctionDeclarations()
+	// Get tools in OpenRouter format. AllowedTools whitelist (e.g. handoff
+	// mode) restricts the LLM physically — the schedule/cancel tools are
+	// not even visible, so the LLM cannot violate the clinic's policy by
+	// hallucinating a tool call.
+	toolDeclarations := a.toolRegistry.FilteredOpenRouterFunctionDeclarations(req.AllowedTools, req.DisallowedTools)
 
 	// Handle multi-turn function calling
-	maxIterations := 5
+	// 5 iterations was too low for the unified handoff flow: gather usually
+	// needs list_procedures + get_available_professionals(procedure_id) +
+	// get_available_slots, plus re-validations when the patient changes
+	// preference mid-flow. gpt-4o-mini hit the cap with finish_reason=
+	// "tool_calls" and returned empty content, falling back to a weaker
+	// model that produced "Vou verificar..." dead-ends. 10 covers the
+	// typical worst case while still preventing genuine infinite loops.
+	maxIterations := 10
 	var finalResponse *openRouterResponse
 
 	for i := 0; i < maxIterations; i++ {
@@ -229,7 +258,14 @@ func (a *openRouterAgent) generateWithModel(ctx context.Context, req *AgentReque
 		}
 
 		// Call OpenRouter API
+		callStart := time.Now()
 		resp, err := a.callAPI(ctx, apiReq)
+		callEnd := time.Now()
+
+		// Fire-and-forget LangFuse trace for this LLM call (no-op when
+		// keys absent). Goroutine inside Trace, so this never blocks.
+		a.traceLLMCall(ctx, req, apiReq, resp, err, callStart, callEnd, i)
+
 		if err != nil {
 			return nil, fmt.Errorf("openrouter API call failed: %w", err)
 		}
@@ -320,10 +356,27 @@ func (a *openRouterAgent) generateWithModel(ctx context.Context, req *AgentReque
 		responseText = finalResponse.Choices[0].Message.Content
 	}
 
-	// Validate response is not empty
+	// Validate response is not empty. When this fires, capture as much
+	// diagnostic context as possible — primary cause of the "AI stopped
+	// responding" outage on Renascer was an empty response that gave us
+	// nothing to debug. finish_reason and tool-call count are the two most
+	// useful signals: "tool_calls" finish reason means the model wanted
+	// MORE tool calls but hit our maxIterations cap, "length" means the
+	// output was truncated by max_tokens, "stop" with empty content means
+	// the model genuinely produced nothing.
 	trimmedResponse := strings.TrimSpace(responseText)
 	if trimmedResponse == "" {
-		return nil, fmt.Errorf("empty or whitespace-only response from OpenRouter (tool calls: %d)", len(allToolCalls))
+		finishReason := ""
+		if len(finalResponse.Choices) > 0 {
+			finishReason = finalResponse.Choices[0].FinishReason
+		}
+		toolNames := make([]string, 0, len(allToolCalls))
+		for _, tc := range allToolCalls {
+			toolNames = append(toolNames, tc.Name)
+		}
+		return nil, fmt.Errorf("empty or whitespace-only response from OpenRouter (model=%s, finish_reason=%q, tool_calls=%d [%s], prompt_tokens=%d, completion_tokens=%d)",
+			modelName, finishReason, len(allToolCalls), strings.Join(toolNames, ","),
+			finalResponse.Usage.PromptTokens, finalResponse.Usage.CompletionTokens)
 	}
 
 	// Build agent response
@@ -332,6 +385,8 @@ func (a *openRouterAgent) generateWithModel(ctx context.Context, req *AgentReque
 		ToolCalls:    allToolCalls,
 		FinishReason: finalResponse.Choices[0].FinishReason,
 		TokensUsed:   finalResponse.Usage.TotalTokens,
+		InputTokens:  finalResponse.Usage.PromptTokens,
+		OutputTokens: finalResponse.Usage.CompletionTokens,
 		Model:        modelName,
 		Provider:     "openrouter",
 	}
@@ -394,6 +449,64 @@ func (a *openRouterAgent) callAPI(ctx context.Context, req openRouterRequest) (*
 }
 
 // executeFunctionCall executes a single function call
+// traceLLMCall pushes one LangFuse generation event per OpenRouter API
+// call. No-op when env keys absent. Goroutine-dispatched inside Trace —
+// the agent never waits on telemetry.
+func (a *openRouterAgent) traceLLMCall(
+	ctx context.Context,
+	req *AgentRequest,
+	apiReq openRouterRequest,
+	resp *openRouterResponse,
+	apiErr error,
+	startTime, endTime time.Time,
+	iteration int,
+) {
+	if a.tracer == nil || !a.tracer.enabled {
+		return
+	}
+
+	sessionID := ""
+	clinicID := ""
+	if req != nil && req.ConversationContext != nil {
+		sessionID = req.ConversationContext.ID.String()
+		clinicID = req.ConversationContext.ClinicID.String()
+	}
+
+	output := ""
+	inputTokens, outputTokens := 0, 0
+	errMsg := ""
+	if apiErr != nil {
+		errMsg = apiErr.Error()
+	} else if resp != nil {
+		if resp.Error != nil {
+			errMsg = resp.Error.Message
+		}
+		if len(resp.Choices) > 0 {
+			output = resp.Choices[0].Message.Content
+		}
+		inputTokens = resp.Usage.PromptTokens
+		outputTokens = resp.Usage.CompletionTokens
+	}
+
+	a.tracer.Trace(ctx, LangfuseGenerationEvent{
+		SessionID:    sessionID,
+		ClinicID:     clinicID,
+		Model:        apiReq.Model,
+		InputTokens:  inputTokens,
+		OutputTokens: outputTokens,
+		Prompt:       apiReq.Messages,
+		Output:       output,
+		StartTime:    startTime,
+		EndTime:      endTime,
+		Metadata: map[string]any{
+			"iteration":   iteration,
+			"temperature": apiReq.Temperature,
+			"max_tokens":  apiReq.MaxTokens,
+		},
+		Err: errMsg,
+	})
+}
+
 func (a *openRouterAgent) executeFunctionCall(ctx context.Context, name string, args map[string]interface{}) (interface{}, error) {
 	logger.Printf("[OpenRouter Agent] Executing tool: %s with args: %v", name, args)
 

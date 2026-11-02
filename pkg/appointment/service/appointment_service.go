@@ -3,9 +3,10 @@ package service
 import (
 	"context"
 	"fmt"
-	"github.com/aseno/backend/internal/logger"
 	"math"
 	"time"
+
+	"github.com/aseno/backend/internal/logger"
 
 	"github.com/google/uuid"
 
@@ -36,7 +37,8 @@ type AppointmentService interface {
 	GetByDay(ctx context.Context, clinicID uuid.UUID, date time.Time, professionalID *uuid.UUID) ([]*model.AppointmentResponse, error)
 	GetByWeek(ctx context.Context, clinicID uuid.UUID, date time.Time, professionalID *uuid.UUID) ([]*model.AppointmentResponse, error)
 	Update(ctx context.Context, id, clinicID uuid.UUID, req *model.UpdateAppointmentRequest) (*model.AppointmentResponse, error)
-	Delete(ctx context.Context, id, clinicID uuid.UUID) error
+	Delete(ctx context.Context, id, clinicID uuid.UUID, deletePayments bool) error
+	GetDeletePreview(ctx context.Context, id, clinicID uuid.UUID) (*model.AppointmentDeletePreview, error)
 	Confirm(ctx context.Context, id, clinicID uuid.UUID, req *model.ConfirmAppointmentRequest) (*model.AppointmentResponse, error)
 	Cancel(ctx context.Context, id, clinicID uuid.UUID, req *model.CancelAppointmentRequest) (*model.AppointmentResponse, error)
 	Complete(ctx context.Context, id, clinicID uuid.UUID) (*model.AppointmentResponse, error)
@@ -54,11 +56,47 @@ type AppointmentService interface {
 	// SetPatientRiskCalculator sets the patient risk calculator
 	SetPatientRiskCalculator(calculator PatientRiskCalculator)
 
+	// SetCommissionCalculator sets the commission calculator
+	SetCommissionCalculator(calculator CommissionCalculator)
+
 	// SetCalendarService sets the calendar service for Google Calendar sync
 	SetCalendarService(service calendar_service.CalendarService)
 
+	// SetSessionPlanHandler sets the handler for session plan updates on appointment completion
+	SetSessionPlanHandler(handler SessionPlanCompletionHandler)
+
+	// SetPaymentLister wires the source used to load the payments under an
+	// appointment before it is deleted, so the linked finance rows can be
+	// cleaned up.
+	SetPaymentLister(lister PaymentLister)
+
+	// SetFinanceUpserter wires the finance sink used to drop the
+	// `financial_transactions` rows associated with payments removed in
+	// cascade with the appointment.
+	SetFinanceUpserter(u FinanceUpserter)
+
+	// SetSalesPackagePicker wires the salespackage FIFO picker used during
+	// appointment creation: when the patient has package balance for a
+	// procedure, the join row is bound to the oldest available item.
+	SetSalesPackagePicker(picker SalesPackagePicker)
+
 	// SuggestSmartSlots suggests best time slots based on historical data
 	SuggestSmartSlots(ctx context.Context, clinicID, professionalID uuid.UUID, date time.Time, days int, durationMinutes int) ([]*model.SmartSlotSuggestion, error)
+}
+
+// SalesPackagePicker resolves the oldest active sales_package_item for a
+// (patient, procedure) pair so the appointment can charge against it.
+// Implemented by the salespackage service; nil when not wired (ad-hoc only).
+type SalesPackagePicker interface {
+	PickFIFOItemID(ctx context.Context, clinicID, patientID, procedureID uuid.UUID) (*uuid.UUID, error)
+}
+
+// PaymentLister exposes just the "list payments for an appointment" capability
+// so the appointment service can enumerate the payments that are about to be
+// dropped and clean up their finance counterparts. Narrow interface to keep
+// tests mock-friendly and avoid a wider dependency on the full payment repo.
+type PaymentLister interface {
+	ListByAppointment(appointmentID, clinicID uuid.UUID) ([]*model.AppointmentPayment, error)
 }
 
 // ProfessionalInfoProvider provides professional information
@@ -66,13 +104,29 @@ type ProfessionalInfoProvider interface {
 	GetByID(ctx context.Context, id, clinicID uuid.UUID) (*profModel.Professional, error)
 }
 
+// CommissionCalculator calculates and stores commissions for completed appointments
+type CommissionCalculator interface {
+	CalculateAndStore(ctx context.Context, appointment *model.Appointment, clinicID uuid.UUID) error
+	VoidByAppointment(ctx context.Context, appointmentID, clinicID uuid.UUID) error
+}
+
+// SessionPlanCompletionHandler handles session plan updates when an appointment is completed
+type SessionPlanCompletionHandler interface {
+	OnAppointmentCompleted(ctx context.Context, clinicID uuid.UUID, appointmentID uuid.UUID) error
+}
+
 // appointmentService implements AppointmentService
 type appointmentService struct {
-	repo            repository.AppointmentRepository
-	profRepo        ProfessionalInfoProvider
-	waitlistService WaitlistService
-	riskCalculator  PatientRiskCalculator
-	calendarService calendar_service.CalendarService
+	repo                 repository.AppointmentRepository
+	profRepo             ProfessionalInfoProvider
+	waitlistService      WaitlistService
+	riskCalculator       PatientRiskCalculator
+	commissionCalculator CommissionCalculator
+	calendarService      calendar_service.CalendarService
+	sessionPlanHandler   SessionPlanCompletionHandler
+	paymentLister        PaymentLister
+	financeUpserter      FinanceUpserter
+	salesPackagePicker   SalesPackagePicker
 }
 
 // NewAppointmentService creates a new appointment service
@@ -125,9 +179,34 @@ func (s *appointmentService) SetPatientRiskCalculator(calculator PatientRiskCalc
 	s.riskCalculator = calculator
 }
 
+// SetCommissionCalculator sets the commission calculator for automatic commission on completion
+func (s *appointmentService) SetCommissionCalculator(calculator CommissionCalculator) {
+	s.commissionCalculator = calculator
+}
+
 // SetCalendarService sets the calendar service for Google Calendar sync
 func (s *appointmentService) SetCalendarService(service calendar_service.CalendarService) {
 	s.calendarService = service
+}
+
+// SetSessionPlanHandler sets the handler for session plan updates on appointment completion
+func (s *appointmentService) SetSessionPlanHandler(handler SessionPlanCompletionHandler) {
+	s.sessionPlanHandler = handler
+}
+
+// SetPaymentLister wires the payment list source used during delete cascade.
+func (s *appointmentService) SetPaymentLister(lister PaymentLister) {
+	s.paymentLister = lister
+}
+
+// SetSalesPackagePicker wires the FIFO sales-package picker.
+func (s *appointmentService) SetSalesPackagePicker(picker SalesPackagePicker) {
+	s.salesPackagePicker = picker
+}
+
+// SetFinanceUpserter wires the finance sink used during delete cascade.
+func (s *appointmentService) SetFinanceUpserter(u FinanceUpserter) {
+	s.financeUpserter = u
 }
 
 // toCalendarData converts an appointment to calendar sync data
@@ -389,17 +468,74 @@ func (s *appointmentService) Create(ctx context.Context, clinicID uuid.UUID, req
 		appointmentType = model.AppointmentTypeRegular
 	}
 
+	// Map procedures. When a sales_package picker is wired and the patient has
+	// remaining package balance for the procedure, the join row gets bound to
+	// the FIFO item — which lets the booking consume one session of that
+	// package without the user choosing manually.
+	var appointmentProcedures []model.AppointmentProcedure
+	var calculatedProceduresPriceCents int64
+	for _, p := range req.Procedures {
+		ap := model.AppointmentProcedure{
+			ProcedureID: p.ProcedureID,
+			Price:       *p.Price, // assuming input defaults are handled by handler or we take pointer value
+		}
+		if s.salesPackagePicker != nil {
+			itemID, pickErr := s.salesPackagePicker.PickFIFOItemID(ctx, clinicID, req.PatientID, p.ProcedureID)
+			if pickErr != nil {
+				logger.Printf("[Appointment] sales package FIFO lookup failed (procedure=%s): %v", p.ProcedureID, pickErr)
+			} else if itemID != nil {
+				ap.SalesPackageItemID = itemID
+			}
+		}
+		appointmentProcedures = append(appointmentProcedures, ap)
+		calculatedProceduresPriceCents += int64(math.Round(*p.Price * 100))
+	}
+
+	// Map and validate specialties
+	var appointmentSpecialties []model.AppointmentSpecialty
+	if len(req.SpecialtyIDs) > 0 {
+		prof, err := s.profRepo.GetByID(ctx, req.ProfessionalID, clinicID)
+		if err != nil {
+			return nil, err
+		}
+
+		// Create a map of active professional specialties for fast lookup
+		profSpecs := make(map[uuid.UUID]bool)
+		for _, ps := range prof.Specialties {
+			if ps.IsActive {
+				profSpecs[ps.SpecialtyID] = true
+			}
+		}
+
+		for _, sid := range req.SpecialtyIDs {
+			if !profSpecs[sid] {
+				return nil, errors.ErrValidationInstance.WithMessage(fmt.Sprintf("Esse profissional não possui a especialidade %s", sid))
+			}
+			appointmentSpecialties = append(appointmentSpecialties, model.AppointmentSpecialty{
+				ClinicID:    clinicID,
+				SpecialtyID: sid,
+			})
+		}
+	}
+
+	priceToUse := req.Price
+	if req.Price == 0 && len(appointmentProcedures) > 0 {
+		priceToUse = float64(calculatedProceduresPriceCents) / 100.0
+	}
+
 	appointment := &model.Appointment{
 		ClinicID:       clinicID,
 		PatientID:      req.PatientID,
 		ProfessionalID: req.ProfessionalID,
 		StartTime:      req.StartTime,
-		EndTime:        endTime,
+		EndTime:        req.StartTime.Add(time.Duration(req.DurationMinutes) * time.Minute),
 		Status:         model.AppointmentStatusPending,
 		Type:           appointmentType,
 		Title:          req.Title,
 		Notes:          req.Notes,
-		Price:          req.Price,
+		Procedures:     appointmentProcedures,
+		Specialties:    appointmentSpecialties,
+		Price:          priceToUse,
 	}
 
 	if err := s.repo.Create(ctx, appointment); err != nil {
@@ -584,6 +720,56 @@ func (s *appointmentService) Update(ctx context.Context, id, clinicID uuid.UUID,
 	if req.PatientNotes != "" {
 		appointment.PatientNotes = req.PatientNotes
 	}
+	if req.Procedures != nil {
+		var appointmentProcedures []model.AppointmentProcedure
+		var calculatedProceduresPriceCents int64
+		for _, p := range *req.Procedures {
+			appointmentProcedures = append(appointmentProcedures, model.AppointmentProcedure{
+				AppointmentID: appointment.ID,
+				ProcedureID:   p.ProcedureID,
+				Price:         *p.Price,
+			})
+			calculatedProceduresPriceCents += int64(math.Round(*p.Price * 100))
+		}
+
+		// Optional: if repo.Update handles replacing associations, we can set it:
+		appointment.Procedures = appointmentProcedures
+
+		// Note: since GORM Save handles associations if configured properly, we check if price was overridden:
+		if req.Price == nil {
+			appointment.Price = float64(calculatedProceduresPriceCents) / 100.0
+		}
+	}
+
+	if req.SpecialtyIDs != nil {
+		var appointmentSpecialties []model.AppointmentSpecialty
+		if len(*req.SpecialtyIDs) > 0 {
+			prof, err := s.profRepo.GetByID(ctx, professionalID, clinicID)
+			if err != nil {
+				return nil, err
+			}
+
+			profSpecs := make(map[uuid.UUID]bool)
+			for _, ps := range prof.Specialties {
+				if ps.IsActive {
+					profSpecs[ps.SpecialtyID] = true
+				}
+			}
+
+			for _, sid := range *req.SpecialtyIDs {
+				if !profSpecs[sid] {
+					return nil, errors.ErrValidationInstance.WithMessage(fmt.Sprintf("Esse profissional não possui a especialidade %s", sid))
+				}
+				appointmentSpecialties = append(appointmentSpecialties, model.AppointmentSpecialty{
+					AppointmentID: appointment.ID,
+					ClinicID:      clinicID,
+					SpecialtyID:   sid,
+				})
+			}
+		}
+		appointment.Specialties = appointmentSpecialties
+	}
+
 	if req.Price != nil {
 		appointment.Price = *req.Price
 	}
@@ -601,9 +787,70 @@ func (s *appointmentService) Update(ctx context.Context, id, clinicID uuid.UUID,
 	return s.GetByID(ctx, id, clinicID)
 }
 
-// Delete deletes an appointment
-func (s *appointmentService) Delete(ctx context.Context, id, clinicID uuid.UUID) error {
-	return s.repo.Delete(ctx, id, clinicID)
+// Delete deletes an appointment. Linked appointment_procedures are always
+// removed in cascade because they are historical join rows tied to this
+// specific appointment. appointment_payments are kept by default — they are
+// part of the financial history — and are only removed when the caller
+// explicitly opts in via deletePayments.
+//
+// Session-plan appointments are NOT hard-deleted: they are converted into a
+// suppression tombstone (cancelled exception + deleted_at set) so the
+// CalendarFacade keeps hiding the virtual occurrence at that slot. A hard
+// delete would erase the record entirely and the RRULE would re-materialize
+// the same date on the next calendar fetch — making the appointment appear to
+// "come back" after the user asked to delete it.
+func (s *appointmentService) Delete(ctx context.Context, id, clinicID uuid.UUID, deletePayments bool) error {
+	apt, err := s.repo.GetByID(ctx, id, clinicID)
+	if err != nil {
+		return err
+	}
+
+	// Snapshot the payment IDs before the cascade runs so we can drop the
+	// matching finance rows afterwards. When deletePayments=false the
+	// repository keeps the payment rows intact as financial history and the
+	// finance side must stay untouched — so we only collect IDs when the
+	// caller opted to remove the payments too.
+	var paymentIDs []uuid.UUID
+	if deletePayments && s.paymentLister != nil {
+		payments, listErr := s.paymentLister.ListByAppointment(id, clinicID)
+		if listErr == nil {
+			paymentIDs = make([]uuid.UUID, 0, len(payments))
+			for _, p := range payments {
+				paymentIDs = append(paymentIDs, p.ID)
+			}
+		} else {
+			logger.Printf("[Appointment Delete] list payments failed for %s: %v", id, listErr)
+		}
+	}
+
+	if apt.SessionPlanID != nil {
+		if err := s.repo.SoftDeleteAsCanceledException(ctx, id, clinicID, deletePayments); err != nil {
+			return err
+		}
+	} else {
+		if err := s.repo.DeleteCascade(ctx, id, clinicID, deletePayments); err != nil {
+			return err
+		}
+	}
+
+	// Clean up the finance rows that mirror the deleted payments. Best-effort:
+	// a failure here does not undo the appointment delete — the payment row
+	// is already gone, so we only log and move on.
+	if s.financeUpserter != nil {
+		for _, pid := range paymentIDs {
+			if err := s.financeUpserter.DeleteFromAppointmentPayment(ctx, pid, clinicID); err != nil {
+				logger.Printf("[Appointment Delete] finance cleanup failed for payment %s: %v", pid, err)
+			}
+		}
+	}
+	return nil
+}
+
+// GetDeletePreview returns counts the UI uses to warn the user before
+// deleting an appointment (how many procedures cascade, and how many
+// payments exist and their total value).
+func (s *appointmentService) GetDeletePreview(ctx context.Context, id, clinicID uuid.UUID) (*model.AppointmentDeletePreview, error) {
+	return s.repo.GetDeletePreview(ctx, id, clinicID)
 }
 
 // Confirm confirms an appointment
@@ -611,6 +858,19 @@ func (s *appointmentService) Confirm(ctx context.Context, id, clinicID uuid.UUID
 	appointment, err := s.repo.GetByID(ctx, id, clinicID)
 	if err != nil {
 		return nil, err
+	}
+
+	// Reactivation guard: if the appointment was previously cancelled, the slot
+	// may have been taken by another patient. Check before allowing reactivation.
+	if appointment.Status == model.AppointmentStatusCanceled {
+		hasConflict, err := s.repo.CheckConflict(ctx, clinicID, appointment.ProfessionalID,
+			appointment.StartTime, appointment.EndTime, &id)
+		if err != nil {
+			return nil, err
+		}
+		if hasConflict {
+			return nil, errors.ErrSlotUnavailableInstance
+		}
 	}
 
 	now := time.Now()
@@ -660,6 +920,11 @@ func (s *appointmentService) Cancel(ctx context.Context, id, clinicID uuid.UUID,
 		}()
 	}
 
+	// Void any commission if appointment was previously completed
+	if s.commissionCalculator != nil {
+		_ = s.commissionCalculator.VoidByAppointment(ctx, id, clinicID)
+	}
+
 	// Delete from Google Calendar (async)
 	s.deleteFromGoogleCalendar(clinicID, id)
 
@@ -676,6 +941,18 @@ func (s *appointmentService) Complete(ctx context.Context, id, clinicID uuid.UUI
 
 	if err := s.repo.UpdateStatus(ctx, id, clinicID, model.AppointmentStatusCompleted); err != nil {
 		return nil, err
+	}
+
+	// NOTE: sessions_done increment is NOT done here — it's handled by the
+	// attendance flow (AutoRecordPresent in the handler). Doing it here too
+	// would cause double-counting.
+
+	// Calculate and store commission for completed appointment
+	if s.commissionCalculator != nil {
+		if err := s.commissionCalculator.CalculateAndStore(ctx, appointment, clinicID); err != nil {
+			logger.Printf("[Appointment] Error calculating commission for appointment %s: %v", id, err)
+			// Don't fail the completion — commission can be recalculated later
+		}
 	}
 
 	// Recalculate patient risk score in background
@@ -701,6 +978,11 @@ func (s *appointmentService) MarkNoShow(ctx context.Context, id, clinicID uuid.U
 
 	if err := s.repo.UpdateStatus(ctx, id, clinicID, model.AppointmentStatusNoShow); err != nil {
 		return nil, err
+	}
+
+	// Void any commission if appointment was previously completed
+	if s.commissionCalculator != nil {
+		_ = s.commissionCalculator.VoidByAppointment(ctx, id, clinicID)
 	}
 
 	// Recalculate patient risk score in background

@@ -44,6 +44,24 @@ func (r *messageRepository) GetByID(ctx context.Context, id uuid.UUID) (*model.M
 	return &message, nil
 }
 
+// GetByExternalID retrieves a message by the provider's message ID. Returns
+// (nil, nil) when no match is found — callers decide whether that means
+// "not ours" or a lookup miss.
+func (r *messageRepository) GetByExternalID(ctx context.Context, externalID string) (*model.Message, error) {
+	if externalID == "" {
+		return nil, nil
+	}
+	var message model.Message
+	result := r.db.WithContext(ctx).Where("external_id = ?", externalID).First(&message)
+	if result.Error != nil {
+		if result.Error == gorm.ErrRecordNotFound {
+			return nil, nil
+		}
+		return nil, errors.ErrInternalInstance.WithError(result.Error)
+	}
+	return &message, nil
+}
+
 // UpdateStatus updates the status of a message
 func (r *messageRepository) UpdateStatus(ctx context.Context, id uuid.UUID, status model.MessageStatus) error {
 	updates := map[string]interface{}{

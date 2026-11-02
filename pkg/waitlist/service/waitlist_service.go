@@ -3,19 +3,20 @@ package service
 import (
 	"context"
 	"fmt"
-	"github.com/aseno/backend/internal/logger"
 	"math"
 	"strings"
 	"time"
+
+	"github.com/aseno/backend/internal/logger"
 
 	"github.com/google/uuid"
 
 	"github.com/aseno/backend/internal/errors"
 	"github.com/aseno/backend/internal/queue"
-	clinic_model "github.com/aseno/backend/pkg/clinic/model"
 	clinic_repository "github.com/aseno/backend/pkg/clinic/repository"
 	"github.com/aseno/backend/pkg/waitlist/model"
 	"github.com/aseno/backend/pkg/waitlist/repository"
+	whatsapp_repository "github.com/aseno/backend/pkg/whatsapp/repository"
 )
 
 // ClinicInfoProvider provides clinic information for waitlist operations
@@ -25,10 +26,8 @@ type ClinicInfoProvider interface {
 
 // ClinicInfo contains clinic information needed for waitlist operations
 type ClinicInfo struct {
-	ID                uuid.UUID
-	Name              string
-	WhatsAppInstance  string
-	WhatsAppConnected bool
+	ID   uuid.UUID
+	Name string
 }
 
 // ProfessionalInfoProvider provides professional information
@@ -59,7 +58,11 @@ type WaitlistService interface {
 
 	// Encaixe operations
 	ProcessCancelledAppointment(ctx context.Context, clinicID, professionalID uuid.UUID, slotTime time.Time, durationMinutes int) error
-	HandlePatientResponse(ctx context.Context, clinicID uuid.UUID, phone string, accepted bool) error
+	// HandlePatientResponse returns handled=true when the response consumed a
+	// waitlist entry. handled=false means "no entry for this phone, caller
+	// should try other paths (appointment confirm/cancel)". err signals real
+	// failures (DB, downstream), not "entry not found".
+	HandlePatientResponse(ctx context.Context, clinicID uuid.UUID, phone string, accepted bool) (bool, error)
 }
 
 // waitlistService implements WaitlistService
@@ -71,6 +74,7 @@ type waitlistService struct {
 	messageQueue         queue.Queue
 	defaultDuration      int // Default appointment duration in minutes
 	clinicRepo           clinic_repository.ClinicRepository
+	wconnRepo            whatsapp_repository.WhatsAppConnectionRepository
 }
 
 // NewWaitlistService creates a new waitlist service
@@ -81,6 +85,7 @@ func NewWaitlistService(
 	appointmentCreator AppointmentCreator,
 	messageQueue queue.Queue,
 	clinicRepo clinic_repository.ClinicRepository,
+	wconnRepo whatsapp_repository.WhatsAppConnectionRepository,
 ) WaitlistService {
 	return &waitlistService{
 		repo:                 repo,
@@ -90,6 +95,7 @@ func NewWaitlistService(
 		messageQueue:         messageQueue,
 		defaultDuration:      50, // Default 50 minutes
 		clinicRepo:           clinicRepo,
+		wconnRepo:            wconnRepo,
 	}
 }
 
@@ -100,7 +106,7 @@ func (s *waitlistService) checkPlanRestriction(ctx context.Context, clinicID uui
 		return err
 	}
 
-	if clinic.Plan == clinic_model.PlanTypeBasic {
+	if clinic.Account != nil && clinic.Account.Plan != nil && !clinic.Account.Plan.HasApiAccess {
 		return errors.ErrUpgradeRequiredInstance.WithMessage("Lista de encaixe disponível apenas nos planos Profissional e Avançado")
 	}
 
@@ -255,7 +261,9 @@ func (s *waitlistService) ProcessCancelledAppointment(ctx context.Context, clini
 		return err
 	}
 
-	if !clinic.WhatsAppConnected || clinic.WhatsAppInstance == "" {
+	// Check if WhatsApp is connected for this clinic
+	conn, connErr := s.wconnRepo.GetActiveByClinicID(ctx, clinicID)
+	if connErr != nil || !conn.Connected {
 		logger.Printf("[Waitlist] Clinic %s does not have WhatsApp connected, skipping encaixe", clinicID)
 		return nil
 	}
@@ -295,12 +303,17 @@ func (s *waitlistService) ProcessCancelledAppointment(ctx context.Context, clini
 	// Build and send WhatsApp message
 	message := s.buildSlotOfferMessage(entry.PatientName, professionalName, clinic.Name, slotTime, entry.OriginalAppointmentID != nil)
 
+	instance := ""
+	if conn != nil && conn.Instance != nil {
+		instance = *conn.Instance
+	}
+
 	if s.messageQueue != nil && s.messageQueue.IsConnected() {
 		job := &queue.MessageJob{
 			ID:            uuid.New().String(),
 			ClinicID:      clinicID.String(),
 			AppointmentID: "", // No appointment yet
-			Instance:      clinic.WhatsAppInstance,
+			Instance:      instance,
 			Phone:         entry.PatientWhatsApp,
 			PatientName:   entry.PatientName,
 			Message:       message,
@@ -322,17 +335,19 @@ func (s *waitlistService) ProcessCancelledAppointment(ctx context.Context, clini
 	return nil
 }
 
-// HandlePatientResponse processes the patient's response to a slot offer
-func (s *waitlistService) HandlePatientResponse(ctx context.Context, clinicID uuid.UUID, phone string, accepted bool) error {
+// HandlePatientResponse processes the patient's response to a slot offer.
+// Returns handled=false when this phone has no pending waitlist entry, so the
+// caller can fall through to the regular appointment confirmation path.
+func (s *waitlistService) HandlePatientResponse(ctx context.Context, clinicID uuid.UUID, phone string, accepted bool) (bool, error) {
 	// Find the pending waitlist entry for this patient
 	entry, err := s.repo.GetPendingByPatientPhone(ctx, clinicID, phone)
 	if err != nil {
-		return err
+		return false, err
 	}
 
 	if entry == nil {
 		logger.Printf("[Waitlist] No pending entry found for phone %s", phone)
-		return nil
+		return false, nil
 	}
 
 	if accepted {
@@ -394,7 +409,7 @@ func (s *waitlistService) HandlePatientResponse(ctx context.Context, clinicID uu
 		// Patient declined - mark as declined and offer to next patient
 		err = s.repo.UpdateStatus(ctx, entry.ID, model.WaitlistStatusDeclined, nil, nil, nil)
 		if err != nil {
-			return err
+			return true, err
 		}
 
 		logger.Printf("[Waitlist] Patient %s declined slot, looking for next patient", entry.PatientID)
@@ -411,7 +426,7 @@ func (s *waitlistService) HandlePatientResponse(ctx context.Context, clinicID uu
 		}
 	}
 
-	return nil
+	return true, nil
 }
 
 // buildSlotOfferMessage creates the WhatsApp message for a slot offer
@@ -472,9 +487,9 @@ func (s *waitlistService) sendConfirmationMessage(ctx context.Context, clinicID 
 		return nil
 	}
 
-	clinic, err := s.clinicProvider.GetClinicInfo(ctx, clinicID)
-	if err != nil {
-		return err
+	conn, connErr := s.wconnRepo.GetActiveByClinicID(ctx, clinicID)
+	if connErr != nil {
+		return nil // no WhatsApp connection, skip silently
 	}
 
 	// Get patient info
@@ -519,11 +534,16 @@ func (s *waitlistService) sendConfirmationMessage(ctx context.Context, clinicID 
 		professionalName,
 	)
 
+	instance := ""
+	if conn != nil && conn.Instance != nil {
+		instance = *conn.Instance
+	}
+
 	job := &queue.MessageJob{
 		ID:            uuid.New().String(),
 		ClinicID:      clinicID.String(),
 		AppointmentID: "",
-		Instance:      clinic.WhatsAppInstance,
+		Instance:      instance,
 		Phone:         entryWithPatient.PatientWhatsApp,
 		PatientName:   entryWithPatient.PatientName,
 		Message:       message,

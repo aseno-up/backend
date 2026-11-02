@@ -23,6 +23,7 @@ const (
 	NotificationTypeTrialExpired           NotificationType = "trial_expired"
 	NotificationTypeNewPatient             NotificationType = "new_patient"
 	NotificationTypeSystem                 NotificationType = "system"
+	NotificationTypeNewBooking             NotificationType = "new_booking"
 )
 
 // Notification represents an in-app notification
@@ -56,7 +57,11 @@ func (j JSON) Value() (driver.Value, error) {
 	if j == nil {
 		return nil, nil
 	}
-	return json.Marshal(j)
+	b, err := json.Marshal(j)
+	if err != nil {
+		return nil, err
+	}
+	return string(b), nil
 }
 
 // Scan implements sql.Scanner for JSON

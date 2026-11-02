@@ -10,7 +10,7 @@ import (
 // Payment represents a payment/charge in Asaas
 type Payment struct {
 	ID                uuid.UUID      `json:"id" gorm:"type:uuid;primary_key;default:gen_random_uuid()"`
-	ClinicID          uuid.UUID      `json:"clinic_id" gorm:"type:uuid;not null;index"`
+	AccountID         uuid.UUID      `json:"account_id" gorm:"type:uuid;index"`
 	CustomerID        uuid.UUID      `json:"customer_id" gorm:"type:uuid;not null;index"`
 	SubscriptionID    *uuid.UUID     `json:"subscription_id,omitempty" gorm:"type:uuid;index"`
 	AsaasPaymentID    string         `json:"asaas_payment_id" gorm:"uniqueIndex;not null"`

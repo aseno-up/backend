@@ -38,23 +38,26 @@ type MessageClassifier interface {
 
 // Config for creating a classifier
 type Config struct {
-	Provider string
-	Model    string
-	APIKey   string
-	Timeout  time.Duration
+	Provider                  string
+	Model                     string
+	APIKey                    string
+	Timeout                   time.Duration
+	OpenRouterAPIURL          string
+	OpenRouterHTTPReferer     string
+	OpenRouterClassifierTitle string
 }
 
 // NewClassifier factory that creates the classifier based on provider
 func NewClassifier(cfg Config) (MessageClassifier, error) {
 	switch cfg.Provider {
-	case "gemini":
-		return NewGeminiClassifier(cfg)
+	case "openrouter":
+		return NewOpenRouterClassifier(cfg)
 	case "claude":
 		return NewClaudeClassifier(cfg)
 	case "openai":
 		return NewOpenAIClassifier(cfg)
 	default:
-		return nil, fmt.Errorf("unknown AI classifier provider: %s", cfg.Provider)
+		return nil, fmt.Errorf("unknown AI classifier provider: %s (supported: openrouter, claude, openai)", cfg.Provider)
 	}
 }
 

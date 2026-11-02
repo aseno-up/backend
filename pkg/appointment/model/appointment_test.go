@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	procedureModel "github.com/aseno/backend/pkg/procedure/model"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 )
@@ -13,6 +14,7 @@ func TestAppointment_NewFields_ToResponse(t *testing.T) {
 	clinicID := uuid.New()
 	patientID := uuid.New()
 	profID := uuid.New()
+	procID := uuid.New()
 
 	apt := &Appointment{
 		ID:             uuid.New(),
@@ -23,16 +25,29 @@ func TestAppointment_NewFields_ToResponse(t *testing.T) {
 		EndTime:        now.Add(50 * time.Minute),
 		Status:         AppointmentStatusPending,
 		Type:           AppointmentTypeRegular,
-		Procedure:      "Limpeza de pele",
-		TreatedRegion:  "Rosto",
-		Notes:          "Pele sensível",
+		Procedures: []AppointmentProcedure{
+			{
+				ID:          uuid.New(),
+				ProcedureID: procID,
+				Price:       150.00,
+				Procedure: &procedureModel.Procedure{
+					ID:   procID,
+					Name: "Limpeza de pele",
+				},
+			},
+		},
+		Notes: "Pele sensível",
+		Price: 150.00,
 	}
 
 	resp := apt.ToResponse()
 
-	assert.Equal(t, "Limpeza de pele", resp.Procedure, "Procedure deve ser propagado para response")
-	assert.Equal(t, "Rosto", resp.TreatedRegion, "TreatedRegion deve ser propagado para response")
-	assert.Equal(t, "Pele sensível", resp.Notes, "Notes não deve ser afetado pelos novos campos")
+	assert.Equal(t, 1, len(resp.Procedures), "Procedures deve propagar N:N")
+	assert.Equal(t, procID, resp.Procedures[0].ProcedureID)
+	assert.Equal(t, 150.00, resp.Procedures[0].Price)
+	assert.NotNil(t, resp.Procedures[0].Procedure)
+	assert.Equal(t, "Limpeza de pele", resp.Procedures[0].Procedure.Name)
+	assert.Equal(t, "Pele sensível", resp.Notes)
 }
 
 func TestAppointment_NewFields_EmptyByDefault(t *testing.T) {
@@ -50,6 +65,6 @@ func TestAppointment_NewFields_EmptyByDefault(t *testing.T) {
 
 	resp := apt.ToResponse()
 
-	assert.Empty(t, resp.Procedure, "Procedure deve ser vazio por padrão")
-	assert.Empty(t, resp.TreatedRegion, "TreatedRegion deve ser vazio por padrão")
+	assert.Empty(t, resp.Procedures, "Procedures deve ser vazio por padrão")
+	assert.Equal(t, float64(0), resp.Price)
 }

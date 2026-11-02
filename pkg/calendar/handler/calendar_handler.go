@@ -2,7 +2,6 @@ package handler
 
 import (
 	"net/http"
-	"os"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -26,13 +25,15 @@ type CalendarHandler interface {
 
 // calendarHandler implements CalendarHandler
 type calendarHandler struct {
-	service service.CalendarService
+	service     service.CalendarService
+	frontendURL string
 }
 
 // NewCalendarHandler creates a new calendar handler
-func NewCalendarHandler(service service.CalendarService) CalendarHandler {
+func NewCalendarHandler(service service.CalendarService, frontendURL string) CalendarHandler {
 	return &calendarHandler{
-		service: service,
+		service:     service,
+		frontendURL: frontendURL,
 	}
 }
 
@@ -94,7 +95,7 @@ func (h *calendarHandler) Callback(c *gin.Context) {
 	_, err = h.service.HandleCallback(c.Request.Context(), clinicID, code)
 	if err != nil {
 		// Redirect to frontend with error
-		frontendURL := os.Getenv("FRONTEND_URL")
+		frontendURL := h.frontendURL
 		if frontendURL == "" {
 			frontendURL = "http://localhost:3000"
 		}
@@ -103,7 +104,7 @@ func (h *calendarHandler) Callback(c *gin.Context) {
 	}
 
 	// Redirect back to the frontend settings page with success
-	frontendURL := os.Getenv("FRONTEND_URL")
+	frontendURL := h.frontendURL
 	if frontendURL == "" {
 		frontendURL = "http://localhost:3000"
 	}

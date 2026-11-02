@@ -3,100 +3,188 @@ package model
 import (
 	"time"
 
+	"database/sql/driver"
+	"encoding/json"
+	"errors"
 	"github.com/google/uuid"
 )
 
-// PatientRecord represents the clinical record of a patient
-type PatientRecord struct {
-	ID               uuid.UUID  `json:"id" gorm:"type:uuid;primary_key;default:gen_random_uuid()"`
-	ClinicID         uuid.UUID  `json:"clinic_id" gorm:"type:uuid;not null;index"`
-	PatientID        uuid.UUID  `json:"patient_id" gorm:"type:uuid;not null;uniqueIndex"`
-	ChiefComplaint   string     `json:"chief_complaint"`   // Queixa principal
-	MedicalHistory   string     `json:"medical_history"`   // Historico medico
-	FamilyHistory    string     `json:"family_history"`    // Historico familiar
-	Allergies        string     `json:"allergies"`         // Alergias
-	Medications      string     `json:"medications"`       // Medicamentos em uso
-	SurgicalHistory  string     `json:"surgical_history"`  // Historico cirurgico
-	SocialHistory    string     `json:"social_history"`    // Historico social (fumo, alcool, etc)
-	InitialDiagnosis string     `json:"initial_diagnosis"` // Diagnostico inicial
-	TreatmentPlan    string     `json:"treatment_plan"`    // Plano de tratamento
-	Observations     string     `json:"observations"`      // Observacoes gerais
-	CreatedAt        time.Time  `json:"created_at"`
-	UpdatedAt        time.Time  `json:"updated_at"`
-	DeletedAt        *time.Time `json:"deleted_at,omitempty" gorm:"index"`
+// JSON is a custom type for JSONB columns (objects only)
+type JSON map[string]interface{}
+
+// Value implements driver.Valuer for JSON
+func (j JSON) Value() (driver.Value, error) {
+	if j == nil {
+		return nil, nil
+	}
+	b, err := json.Marshal(j)
+	if err != nil {
+		return nil, err
+	}
+	return string(b), nil
 }
 
-// TableName returns the table name for GORM
-func (PatientRecord) TableName() string {
-	return "patient_records"
+// Scan implements sql.Scanner for JSON
+func (j *JSON) Scan(value interface{}) error {
+	if value == nil {
+		*j = nil
+		return nil
+	}
+
+	var data []byte
+	switch v := value.(type) {
+	case []byte:
+		data = v
+	case string:
+		data = []byte(v)
+	default:
+		return errors.New("invalid type for JSON")
+	}
+
+	return json.Unmarshal(data, j)
 }
+
+// RawJSON accepts any valid JSON (arrays, objects, etc.)
+type RawJSON json.RawMessage
+
+// Value implements driver.Valuer for RawJSON
+func (r RawJSON) Value() (driver.Value, error) {
+	if len(r) == 0 {
+		return nil, nil
+	}
+	return []byte(r), nil
+}
+
+// Scan implements sql.Scanner for RawJSON
+func (r *RawJSON) Scan(value interface{}) error {
+	if value == nil {
+		*r = nil
+		return nil
+	}
+	switch v := value.(type) {
+	case []byte:
+		*r = append((*r)[0:0], v...)
+	case string:
+		*r = []byte(v)
+	default:
+		return errors.New("invalid type for RawJSON")
+	}
+	return nil
+}
+
+// MarshalJSON implements json.Marshaler
+func (r RawJSON) MarshalJSON() ([]byte, error) {
+	if len(r) == 0 {
+		return []byte("null"), nil
+	}
+	return []byte(r), nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler
+func (r *RawJSON) UnmarshalJSON(data []byte) error {
+	*r = append((*r)[0:0], data...)
+	return nil
+}
+
+// NewRawJSON creates a RawJSON from any serializable value
+func NewRawJSON(v interface{}) RawJSON {
+	data, _ := json.Marshal(v)
+	return RawJSON(data)
+}
+
+// PatientRecord represents the clinical record of a patient
+type PatientRecord struct {
+	ID           uuid.UUID  `json:"id" gorm:"type:uuid;primary_key;default:gen_random_uuid()"`
+	ClinicID     uuid.UUID  `json:"clinic_id" gorm:"type:uuid;not null;index"`
+	PatientID    uuid.UUID  `json:"patient_id" gorm:"type:uuid;not null;index"`
+	TemplateID   *uuid.UUID `json:"template_id,omitempty" gorm:"type:uuid;index"`
+	CustomFields JSON       `json:"custom_fields,omitempty" gorm:"type:jsonb"`
+	RecordedAt   time.Time  `json:"recorded_at" gorm:"not null;default:now()"`
+	RecordedBy   uuid.UUID  `json:"recorded_by" gorm:"type:uuid;not null"`
+	CreatedAt    time.Time  `json:"created_at"`
+	UpdatedAt    time.Time  `json:"updated_at"`
+	DeletedAt    *time.Time `json:"deleted_at,omitempty" gorm:"index"`
+}
+
+// AnamneseTemplate represents a template for clinical records
+type AnamneseTemplate struct {
+	ID        uuid.UUID               `json:"id" gorm:"type:uuid;primary_key;default:gen_random_uuid()"`
+	ClinicID  uuid.UUID               `json:"clinic_id" gorm:"type:uuid;not null;index"`
+	Name      string                  `json:"name" gorm:"not null"`
+	IsDefault bool                    `json:"is_default" gorm:"not null;default:false"`
+	Fields    []AnamneseTemplateField `json:"fields,omitempty" gorm:"foreignKey:TemplateID"`
+	CreatedAt time.Time               `json:"created_at"`
+	UpdatedAt time.Time               `json:"updated_at"`
+	DeletedAt *time.Time              `json:"deleted_at,omitempty" gorm:"index"`
+}
+
+// AnamneseTemplateField represents a single field in a template
+type AnamneseTemplateField struct {
+	ID           uuid.UUID  `json:"id" gorm:"type:uuid;primary_key;default:gen_random_uuid()"`
+	TemplateID   uuid.UUID  `json:"template_id" gorm:"type:uuid;not null;index"`
+	Label        string     `json:"label" gorm:"not null"`
+	FieldKey     string     `json:"field_key" gorm:"not null"`
+	FieldType    string     `json:"field_type" gorm:"not null"` // text, textarea, select, multiselect, scale, section_header
+	Options      RawJSON    `json:"options,omitempty" gorm:"type:jsonb"`
+	Required     bool       `json:"required" gorm:"not null;default:false"`
+	DisplayOrder int        `json:"display_order" gorm:"not null;default:0"`
+	Placeholder  string     `json:"placeholder"`
+	DeletedAt    *time.Time `json:"deleted_at,omitempty" gorm:"index"`
+}
+
+// AnamneseTemplateSpecialty represents the many-to-many relationship between templates and specialties
+type AnamneseTemplateSpecialty struct {
+	TemplateID  uuid.UUID `gorm:"type:uuid;primaryKey"`
+	SpecialtyID uuid.UUID `gorm:"type:uuid;primaryKey"`
+}
+
+// TableName returns the table names for GORM
+func (PatientRecord) TableName() string             { return "patient_records" }
+func (AnamneseTemplate) TableName() string          { return "anamnese_templates" }
+func (AnamneseTemplateField) TableName() string     { return "anamnese_template_fields" }
+func (AnamneseTemplateSpecialty) TableName() string { return "anamnese_template_specialties" }
 
 // PatientRecordResponse represents the API response for a patient record
 type PatientRecordResponse struct {
-	ID               uuid.UUID `json:"id"`
-	ClinicID         uuid.UUID `json:"clinic_id"`
-	PatientID        uuid.UUID `json:"patient_id"`
-	ChiefComplaint   string    `json:"chief_complaint"`
-	MedicalHistory   string    `json:"medical_history"`
-	FamilyHistory    string    `json:"family_history"`
-	Allergies        string    `json:"allergies"`
-	Medications      string    `json:"medications"`
-	SurgicalHistory  string    `json:"surgical_history"`
-	SocialHistory    string    `json:"social_history"`
-	InitialDiagnosis string    `json:"initial_diagnosis"`
-	TreatmentPlan    string    `json:"treatment_plan"`
-	Observations     string    `json:"observations"`
-	CreatedAt        time.Time `json:"created_at"`
-	UpdatedAt        time.Time `json:"updated_at"`
+	ID           uuid.UUID         `json:"id"`
+	ClinicID     uuid.UUID         `json:"clinic_id"`
+	PatientID    uuid.UUID         `json:"patient_id"`
+	TemplateID   *uuid.UUID        `json:"template_id,omitempty"`
+	Template     *AnamneseTemplate `json:"template,omitempty"`
+	CustomFields JSON              `json:"custom_fields,omitempty"`
+	RecordedAt   time.Time         `json:"recorded_at"`
+	RecordedBy   uuid.UUID         `json:"recorded_by"`
+	Professional *PatientBasicInfo `json:"professional,omitempty"` // Basic info of the person who recorded it
+	CreatedAt    time.Time         `json:"created_at"`
+	UpdatedAt    time.Time         `json:"updated_at"`
 }
 
 // ToResponse converts PatientRecord to PatientRecordResponse
 func (r *PatientRecord) ToResponse() *PatientRecordResponse {
 	return &PatientRecordResponse{
-		ID:               r.ID,
-		ClinicID:         r.ClinicID,
-		PatientID:        r.PatientID,
-		ChiefComplaint:   r.ChiefComplaint,
-		MedicalHistory:   r.MedicalHistory,
-		FamilyHistory:    r.FamilyHistory,
-		Allergies:        r.Allergies,
-		Medications:      r.Medications,
-		SurgicalHistory:  r.SurgicalHistory,
-		SocialHistory:    r.SocialHistory,
-		InitialDiagnosis: r.InitialDiagnosis,
-		TreatmentPlan:    r.TreatmentPlan,
-		Observations:     r.Observations,
-		CreatedAt:        r.CreatedAt,
-		UpdatedAt:        r.UpdatedAt,
+		ID:           r.ID,
+		ClinicID:     r.ClinicID,
+		PatientID:    r.PatientID,
+		TemplateID:   r.TemplateID,
+		CustomFields: r.CustomFields,
+		RecordedAt:   r.RecordedAt,
+		RecordedBy:   r.RecordedBy,
+		CreatedAt:    r.CreatedAt,
+		UpdatedAt:    r.UpdatedAt,
 	}
 }
 
 // CreatePatientRecordRequest represents the request to create a patient record
 type CreatePatientRecordRequest struct {
-	ChiefComplaint   string `json:"chief_complaint"`
-	MedicalHistory   string `json:"medical_history"`
-	FamilyHistory    string `json:"family_history"`
-	Allergies        string `json:"allergies"`
-	Medications      string `json:"medications"`
-	SurgicalHistory  string `json:"surgical_history"`
-	SocialHistory    string `json:"social_history"`
-	InitialDiagnosis string `json:"initial_diagnosis"`
-	TreatmentPlan    string `json:"treatment_plan"`
-	Observations     string `json:"observations"`
+	TemplateID   *uuid.UUID `json:"template_id"`
+	CustomFields JSON       `json:"custom_fields" binding:"required"`
 }
 
 // UpdatePatientRecordRequest represents the request to update a patient record
+// Note: In append-only, this actually creates a new version
 type UpdatePatientRecordRequest struct {
-	ChiefComplaint   *string `json:"chief_complaint"`
-	MedicalHistory   *string `json:"medical_history"`
-	FamilyHistory    *string `json:"family_history"`
-	Allergies        *string `json:"allergies"`
-	Medications      *string `json:"medications"`
-	SurgicalHistory  *string `json:"surgical_history"`
-	SocialHistory    *string `json:"social_history"`
-	InitialDiagnosis *string `json:"initial_diagnosis"`
-	TreatmentPlan    *string `json:"treatment_plan"`
-	Observations     *string `json:"observations"`
+	TemplateID   *uuid.UUID `json:"template_id"`
+	CustomFields JSON       `json:"custom_fields" binding:"required"`
 }
 
 // SessionNote represents a clinical note for an appointment/session

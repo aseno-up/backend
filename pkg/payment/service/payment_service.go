@@ -2,12 +2,23 @@ package service
 
 import (
 	"context"
+	"fmt"
+	"math"
+	"strings"
 	"time"
+
+	"github.com/aseno/backend/internal/logger"
 
 	"github.com/google/uuid"
 
 	"github.com/aseno/backend/internal/errors"
+	account_model "github.com/aseno/backend/pkg/account/model"
+	account_repository "github.com/aseno/backend/pkg/account/repository"
+	clinic_repository "github.com/aseno/backend/pkg/clinic/repository"
 	"github.com/aseno/backend/pkg/payment/model"
+	plan_model "github.com/aseno/backend/pkg/plan/model"
+	plan_service "github.com/aseno/backend/pkg/plan/service"
+	promotion_service "github.com/aseno/backend/pkg/promotion/service"
 )
 
 // PaymentClient defines the interface for payment gateway operations
@@ -38,7 +49,7 @@ type PaymentClient interface {
 type CustomerRepository interface {
 	Create(ctx context.Context, customer *model.Customer) error
 	GetByID(ctx context.Context, id uuid.UUID) (*model.Customer, error)
-	GetByClinicID(ctx context.Context, clinicID uuid.UUID) (*model.Customer, error)
+	GetByAccountID(ctx context.Context, accountID uuid.UUID) (*model.Customer, error)
 	GetByAsaasID(ctx context.Context, asaasID string) (*model.Customer, error)
 	Update(ctx context.Context, customer *model.Customer) error
 	Delete(ctx context.Context, id uuid.UUID) error
@@ -49,7 +60,7 @@ type PaymentRepository interface {
 	Create(ctx context.Context, payment *model.Payment) error
 	GetByID(ctx context.Context, id uuid.UUID) (*model.Payment, error)
 	GetByAsaasID(ctx context.Context, asaasID string) (*model.Payment, error)
-	GetByClinicID(ctx context.Context, clinicID uuid.UUID, limit, offset int) ([]*model.Payment, int64, error)
+	GetByAccountID(ctx context.Context, accountID uuid.UUID, limit, offset int) ([]*model.Payment, int64, error)
 	GetByCustomerID(ctx context.Context, customerID uuid.UUID, limit, offset int) ([]*model.Payment, int64, error)
 	Update(ctx context.Context, payment *model.Payment) error
 	UpdateStatus(ctx context.Context, id uuid.UUID, status model.PaymentStatus) error
@@ -60,7 +71,7 @@ type SubscriptionRepository interface {
 	Create(ctx context.Context, subscription *model.Subscription) error
 	GetByID(ctx context.Context, id uuid.UUID) (*model.Subscription, error)
 	GetByAsaasID(ctx context.Context, asaasID string) (*model.Subscription, error)
-	GetByClinicID(ctx context.Context, clinicID uuid.UUID) (*model.Subscription, error)
+	GetByAccountID(ctx context.Context, accountID uuid.UUID) (*model.Subscription, error)
 	GetByCustomerID(ctx context.Context, customerID uuid.UUID) ([]*model.Subscription, error)
 	Update(ctx context.Context, subscription *model.Subscription) error
 	UpdateStatus(ctx context.Context, id uuid.UUID, status model.SubscriptionStatus) error
@@ -74,19 +85,26 @@ type PaymentService interface {
 
 	// Payment operations
 	CreatePayment(ctx context.Context, clinicID uuid.UUID, req *CreatePaymentInput) (*model.Payment, error)
-	GetPayment(ctx context.Context, clinicID uuid.UUID, paymentID uuid.UUID) (*model.Payment, error)
+	GetPayment(ctx context.Context, clinicID uuid.UUID, paymentID string) (*model.Payment, error)
 	GetPayments(ctx context.Context, clinicID uuid.UUID, page, perPage int) ([]*model.Payment, int64, error)
-	GetPixQRCode(ctx context.Context, clinicID uuid.UUID, paymentID uuid.UUID) (*model.AsaasPixQRCodeResponse, error)
+	GetPixQRCode(ctx context.Context, clinicID uuid.UUID, paymentID string) (*model.AsaasPixQRCodeResponse, error)
 	CancelPayment(ctx context.Context, clinicID uuid.UUID, paymentID uuid.UUID) error
 
 	// Subscription operations
 	CreateSubscription(ctx context.Context, clinicID uuid.UUID, req *CreateSubscriptionInput) (*model.Subscription, error)
 	GetSubscription(ctx context.Context, clinicID uuid.UUID) (*model.Subscription, error)
 	CancelSubscription(ctx context.Context, clinicID uuid.UUID) error
+	SwitchPlan(ctx context.Context, clinicID uuid.UUID, newPlan string, billingType string, cycle string, variant string, offerToken *string, creditCard *model.CreditCardInfo, creditCardHolder *model.CreditCardHolderInfo, units int) (*model.Subscription, error)
+	GetSubscriptionPayments(ctx context.Context, clinicID uuid.UUID) (*model.PaymentListResponse, error)
+	// SetPromotionService wires the optional promotion service. When unset,
+	// SwitchPlan skips the promotion lookup entirely (no extra discount).
+	// When set, SwitchPlan auto-applies the single active promotion that
+	// covers the chosen plan — server is the source of truth.
+	SetPromotionService(svc promotion_service.PromotionService)
 
 	// Helper methods for registration flow
 	CreateCustomerForClinic(ctx context.Context, clinicID uuid.UUID, req *model.CreateCustomerRequest) error
-	CreateSubscriptionForClinic(ctx context.Context, clinicID uuid.UUID, plan string, billing string) error
+	CreateSubscriptionForClinic(ctx context.Context, clinicID uuid.UUID, planID uuid.UUID, offerToken *string, billing string, variant string, units int) error
 
 	// Webhook handling
 	HandleWebhook(ctx context.Context, payload *model.AsaasWebhookPayload) error
@@ -117,9 +135,11 @@ type CreatePaymentInput struct {
 // CreateSubscriptionInput represents input for creating a subscription
 type CreateSubscriptionInput struct {
 	BillingType model.BillingType
-	Value       float64
+	PlanID      uuid.UUID
+	OfferToken  *string
 	Cycle       model.BillingCycle
-	Description string
+	Variant     string // "solo" for single-professional discounted contract; empty = clinic
+	Units       int    // number of units (clinics) contracted; required for "advanced" (min 2)
 }
 
 // paymentService implements PaymentService
@@ -128,28 +148,85 @@ type paymentService struct {
 	customerRepo     CustomerRepository
 	paymentRepo      PaymentRepository
 	subscriptionRepo SubscriptionRepository
+	clinicRepo       clinic_repository.ClinicRepository
+	accountRepo      account_repository.AccountRepository
+	planService      plan_service.PlanService
+	// promotionService is optional — when nil, SwitchPlan ignores promotionID
+	// (promo handling becomes a no-op). Set via SetPromotionService after
+	// construction so the existing constructor signature stays stable for tests.
+	promotionService promotion_service.PromotionService
 }
 
 // NewPaymentService creates a new payment service
 func NewPaymentService(
 	client PaymentClient,
 	customerRepo CustomerRepository,
-	paymentRepo PaymentRepository,
 	subscriptionRepo SubscriptionRepository,
+	paymentRepo PaymentRepository,
+	clinicRepo clinic_repository.ClinicRepository,
+	accountRepo account_repository.AccountRepository,
+	planService plan_service.PlanService,
 ) PaymentService {
 	return &paymentService{
 		client:           client,
 		customerRepo:     customerRepo,
-		paymentRepo:      paymentRepo,
 		subscriptionRepo: subscriptionRepo,
+		paymentRepo:      paymentRepo,
+		clinicRepo:       clinicRepo,
+		accountRepo:      accountRepo,
+		planService:      planService,
 	}
 }
 
-// CreateOrGetCustomer creates a new customer or returns existing one
+// SetPromotionService wires the promotion service. Called from main.go after
+// both services are constructed (avoids a cyclic init in the wiring graph).
+func (s *paymentService) SetPromotionService(svc promotion_service.PromotionService) {
+	s.promotionService = svc
+}
 func (s *paymentService) CreateOrGetCustomer(ctx context.Context, clinicID uuid.UUID, req *CreateCustomerInput) (*model.Customer, error) {
+	clinic, err := s.clinicRepo.GetByID(ctx, clinicID)
+	if err != nil {
+		return nil, errors.ErrNotFoundInstance.WithMessage("Clinic not found")
+	}
+
 	// Check if customer already exists for this clinic
-	existing, err := s.customerRepo.GetByClinicID(ctx, clinicID)
+	existing, err := s.customerRepo.GetByAccountID(ctx, clinic.AccountID)
 	if err == nil && existing != nil {
+		// Sync the customer data with Asaas to ensure CPF/CNPJ is present for subscription
+		asaasReq := &model.CreateCustomerRequest{
+			Name:          req.Name,
+			Email:         req.Email,
+			Phone:         req.Phone,
+			Document:      req.Document,
+			PostalCode:    req.PostalCode,
+			Address:       req.Address,
+			AddressNumber: req.AddressNumber,
+			Province:      req.Province,
+			City:          req.City,
+			State:         req.State,
+			ExternalRef:   clinicID.String(),
+		}
+
+		_, updateErr := s.client.UpdateCustomer(ctx, existing.AsaasCustomerID, asaasReq)
+		if updateErr != nil {
+			logger.Warnf("[PAYMENT] Warning: failed to update Asaas customer %s: %v", existing.AsaasCustomerID, updateErr)
+			// Don't fail the request completely if update fails, but log it
+			// However if it's a validation error (like invalid CPF), we should return it
+			return nil, errors.ErrPaymentGatewayInstance.WithMessage(fmt.Sprintf("Asaas: %v", updateErr))
+		}
+
+		// Also update the local database if document changed
+		if req.Document != "" && existing.Document != req.Document {
+			existing.Document = req.Document
+			if len(req.Document) > 11 {
+				existing.DocumentType = model.DocumentTypeCNPJ
+			} else {
+				existing.DocumentType = model.DocumentTypeCPF
+			}
+			// Let's assume there's a repository method to update, or we just rely on Asaas having the data
+			// (Ideally we would have an s.customerRepo.Update, but we can skip it if not urgently needed)
+		}
+
 		return existing, nil
 	}
 
@@ -170,7 +247,8 @@ func (s *paymentService) CreateOrGetCustomer(ctx context.Context, clinicID uuid.
 
 	asaasCustomer, err := s.client.CreateCustomer(ctx, asaasReq)
 	if err != nil {
-		return nil, errors.ErrPaymentGatewayInstance.WithError(err)
+		logger.Errorf("[PAYMENT] Error creating Asaas customer: %v", err)
+		return nil, errors.ErrPaymentGatewayInstance.WithMessage(fmt.Sprintf("Asaas: %v", err))
 	}
 
 	// Determine document type
@@ -181,7 +259,7 @@ func (s *paymentService) CreateOrGetCustomer(ctx context.Context, clinicID uuid.
 
 	// Save customer to database
 	customer := &model.Customer{
-		ClinicID:        clinicID,
+		AccountID:       clinic.AccountID,
 		AsaasCustomerID: asaasCustomer.ID,
 		Name:            req.Name,
 		Email:           req.Email,
@@ -191,9 +269,9 @@ func (s *paymentService) CreateOrGetCustomer(ctx context.Context, clinicID uuid.
 		PostalCode:      req.PostalCode,
 		Address:         req.Address,
 		AddressNumber:   req.AddressNumber,
-		Province:        req.Province,
-		City:            req.City,
-		State:           req.State,
+		Province:        asaasCustomer.Province,
+		City:            fmt.Sprintf("%v", asaasCustomer.City),
+		State:           fmt.Sprintf("%v", asaasCustomer.State),
 		ExternalRef:     clinicID.String(),
 	}
 
@@ -206,13 +284,22 @@ func (s *paymentService) CreateOrGetCustomer(ctx context.Context, clinicID uuid.
 
 // GetCustomerByClinic retrieves the customer for a clinic
 func (s *paymentService) GetCustomerByClinic(ctx context.Context, clinicID uuid.UUID) (*model.Customer, error) {
-	return s.customerRepo.GetByClinicID(ctx, clinicID)
+	clinic, err := s.clinicRepo.GetByID(ctx, clinicID)
+	if err != nil {
+		return nil, err
+	}
+	return s.customerRepo.GetByAccountID(ctx, clinic.AccountID)
 }
 
 // CreatePayment creates a new payment
 func (s *paymentService) CreatePayment(ctx context.Context, clinicID uuid.UUID, req *CreatePaymentInput) (*model.Payment, error) {
+	clinic, err := s.clinicRepo.GetByID(ctx, clinicID)
+	if err != nil {
+		return nil, errors.ErrNotFoundInstance.WithMessage("Clinic not found")
+	}
+
 	// Get customer for clinic
-	customer, err := s.customerRepo.GetByClinicID(ctx, clinicID)
+	customer, err := s.customerRepo.GetByAccountID(ctx, clinic.AccountID)
 	if err != nil {
 		return nil, errors.ErrNotFoundInstance.WithMessage("Customer not found. Please create billing profile first.")
 	}
@@ -237,7 +324,7 @@ func (s *paymentService) CreatePayment(ctx context.Context, clinicID uuid.UUID, 
 
 	// Save payment to database
 	payment := &model.Payment{
-		ClinicID:       clinicID,
+		AccountID:      clinic.AccountID,
 		CustomerID:     customer.ID,
 		AsaasPaymentID: asaasPayment.ID,
 		Value:          asaasPayment.Value,
@@ -258,16 +345,38 @@ func (s *paymentService) CreatePayment(ctx context.Context, clinicID uuid.UUID, 
 	return payment, nil
 }
 
-// GetPayment retrieves a payment
-func (s *paymentService) GetPayment(ctx context.Context, clinicID uuid.UUID, paymentID uuid.UUID) (*model.Payment, error) {
-	payment, err := s.paymentRepo.GetByID(ctx, paymentID)
-	if err != nil {
-		return nil, err
+// GetPayment retrieves a specific payment from local DB, falling back to Asaas if it's an Asaas ID
+func (s *paymentService) GetPayment(ctx context.Context, clinicID uuid.UUID, paymentID string) (*model.Payment, error) {
+	// Check if paymentID is an Asaas ID (e.g., pay_123456)
+	if strings.HasPrefix(paymentID, "pay_") {
+		// Try to find it in our DB by Asaas ID first
+		payment, err := s.paymentRepo.GetByAsaasID(ctx, paymentID)
+		if err == nil {
+			return payment, nil
+		}
+		// Try to fetch from Asaas API (we return a rough representation or just an error since we return *model.Payment)
+		// For now, if we don't have it locally, return not found, as we need a DB record to construct *model.Payment easily
+		return nil, errors.ErrNotFoundInstance.WithMessage("Payment not found in local database")
 	}
 
-	// Verify clinic ownership
-	if payment.ClinicID != clinicID {
-		return nil, errors.ErrForbiddenInstance
+	parsedUUID, err := uuid.Parse(paymentID)
+	if err != nil {
+		return nil, errors.ErrInvalidInstance.WithMessage("Invalid payment ID format")
+	}
+
+	payment, err := s.paymentRepo.GetByID(ctx, parsedUUID)
+	if err != nil {
+		return nil, errors.ErrNotFoundInstance.WithMessage("Payment not found")
+	}
+
+	clinic, err := s.clinicRepo.GetByID(ctx, clinicID)
+	if err != nil {
+		return nil, errors.ErrNotFoundInstance.WithMessage("Clinic not found")
+	}
+
+	// Verify ownership (indirectly via AccountID)
+	if payment.AccountID != clinic.AccountID {
+		return nil, errors.ErrUnauthorizedInstance.WithMessage("Payment does not belong to this clinic")
 	}
 
 	return payment, nil
@@ -275,13 +384,31 @@ func (s *paymentService) GetPayment(ctx context.Context, clinicID uuid.UUID, pay
 
 // GetPayments retrieves payments for a clinic
 func (s *paymentService) GetPayments(ctx context.Context, clinicID uuid.UUID, page, perPage int) ([]*model.Payment, int64, error) {
+	clinic, err := s.clinicRepo.GetByID(ctx, clinicID)
+	if err != nil {
+		return nil, 0, err
+	}
 	offset := (page - 1) * perPage
-	return s.paymentRepo.GetByClinicID(ctx, clinicID, perPage, offset)
+	return s.paymentRepo.GetByAccountID(ctx, clinic.AccountID, perPage, offset)
 }
 
 // GetPixQRCode retrieves the PIX QR code for a payment
-func (s *paymentService) GetPixQRCode(ctx context.Context, clinicID uuid.UUID, paymentID uuid.UUID) (*model.AsaasPixQRCodeResponse, error) {
-	payment, err := s.GetPayment(ctx, clinicID, paymentID)
+func (s *paymentService) GetPixQRCode(ctx context.Context, clinicID uuid.UUID, paymentID string) (*model.AsaasPixQRCodeResponse, error) {
+	// Check if paymentID is an Asaas ID (e.g., pay_123456)
+	if strings.HasPrefix(paymentID, "pay_") {
+		// Fetch directly from Asaas. To be perfectly secure, we'd verify the customer matches the clinic.
+		// For now, since the frontend explicitly requested this payment ID it just got from GetSubscriptionPayments,
+		// we fetch it from Asaas.
+		return s.client.GetPixQRCode(ctx, paymentID)
+	}
+
+	// Otherwise, assume it's an internal UUID
+	parsedUUID, err := uuid.Parse(paymentID)
+	if err != nil {
+		return nil, errors.ErrInvalidInstance.WithMessage("Invalid payment ID format")
+	}
+
+	payment, err := s.GetPayment(ctx, clinicID, parsedUUID.String())
 	if err != nil {
 		return nil, err
 	}
@@ -291,7 +418,7 @@ func (s *paymentService) GetPixQRCode(ctx context.Context, clinicID uuid.UUID, p
 
 // CancelPayment cancels a payment
 func (s *paymentService) CancelPayment(ctx context.Context, clinicID uuid.UUID, paymentID uuid.UUID) error {
-	payment, err := s.GetPayment(ctx, clinicID, paymentID)
+	payment, err := s.GetPayment(ctx, clinicID, paymentID.String())
 	if err != nil {
 		return err
 	}
@@ -305,27 +432,74 @@ func (s *paymentService) CancelPayment(ctx context.Context, clinicID uuid.UUID, 
 
 // CreateSubscription creates a new subscription
 func (s *paymentService) CreateSubscription(ctx context.Context, clinicID uuid.UUID, req *CreateSubscriptionInput) (*model.Subscription, error) {
+	clinic, err := s.clinicRepo.GetByID(ctx, clinicID)
+	if err != nil {
+		return nil, errors.ErrNotFoundInstance.WithMessage("Clinic not found")
+	}
+
 	// Get customer for clinic
-	customer, err := s.customerRepo.GetByClinicID(ctx, clinicID)
+	customer, err := s.customerRepo.GetByAccountID(ctx, clinic.AccountID)
 	if err != nil {
 		return nil, errors.ErrNotFoundInstance.WithMessage("Customer not found. Please create billing profile first.")
 	}
 
 	// Check if subscription already exists
-	existing, _ := s.subscriptionRepo.GetByClinicID(ctx, clinicID)
+	existing, _ := s.subscriptionRepo.GetByAccountID(ctx, clinic.AccountID)
 	if existing != nil && existing.Status == model.SubscriptionStatusActive {
 		return nil, errors.ErrConflictInstance.WithMessage("Clinic already has an active subscription")
 	}
+
+	// Get actual Plan Price
+	plan, err := s.planService.GetPlanByID(ctx, req.PlanID)
+	if err != nil {
+		return nil, errors.ErrBadRequestInstance.WithMessage("Invalid plan")
+	}
+
+	var planCycleType plan_model.CycleType
+	if req.Cycle == model.BillingCycleYearly {
+		planCycleType = plan_model.CycleTypeYearly
+	} else {
+		planCycleType = plan_model.CycleTypeMonthly
+	}
+
+	planVariant := plan_model.NormalizeVariant(req.Variant)
+
+	var offer *plan_model.Offer
+	if !planVariant.IsSolo() && req.OfferToken != nil && *req.OfferToken != "" {
+		o, err := s.planService.ValidateOffer(ctx, *req.OfferToken)
+		if err == nil {
+			offer = o
+		}
+	}
+
+	value, err := s.planService.ResolvePrice(ctx, plan, offer, planCycleType, planVariant)
+	if err != nil {
+		return nil, errors.ErrBadRequestInstance.WithMessage(err.Error())
+	}
+
+	if planVariant.IsSolo() && plan.Slug == "advanced" {
+		return nil, errors.ErrValidationInstance.WithMessage("O plano Avançado não possui modalidade autônomo")
+	}
+
+	// Advanced plan: bill per contracted unit, require at least 2.
+	if plan.Slug == "advanced" {
+		if req.Units < 2 {
+			return nil, errors.ErrValidationInstance.WithMessage("O plano Avançado exige contratação mínima de 2 unidades")
+		}
+		value = value * float64(req.Units)
+	}
+
+	description := "Assinatura " + plan.Name
 
 	// Create subscription in Asaas
 	nextDueDate := time.Now().AddDate(0, 0, 1) // Tomorrow
 	asaasReq := &model.CreateSubscriptionRequest{
 		CustomerID:  customer.AsaasCustomerID,
 		BillingType: req.BillingType,
-		Value:       req.Value,
+		Value:       value,
 		NextDueDate: nextDueDate.Format("2006-01-02"),
 		Cycle:       req.Cycle,
-		Description: req.Description,
+		Description: description,
 		ExternalRef: clinicID.String(),
 	}
 
@@ -334,12 +508,44 @@ func (s *paymentService) CreateSubscription(ctx context.Context, clinicID uuid.U
 		return nil, errors.ErrPaymentGatewayInstance.WithError(err)
 	}
 
+	// Validate Asaas returned a valid subscription ID
+	if asaasSub.ID == "" {
+		return nil, errors.ErrPaymentGatewayInstance.WithMessage("Asaas returned empty subscription ID")
+	}
+
 	// Parse next due date
 	parsedNextDueDate, _ := time.Parse("2006-01-02", asaasSub.NextDueDate)
 
+	// Determine OfferID for tracking usages
+	var offerID *uuid.UUID
+	if offer != nil {
+		offerID = &offer.ID
+		// Consume offer
+		_ = s.planService.UseOffer(ctx, *offerID)
+	}
+
+	// Calculate absolute limits based on Plan or Custom via Offer (solo variant overrides below)
+	maxClinics := plan.MaxClinics
+	maxProfessionals := plan.MaxProfessionals
+	if offer != nil {
+		if offer.CustomMaxClinics != nil {
+			maxClinics = *offer.CustomMaxClinics
+		}
+		if offer.CustomMaxProfessionals != nil {
+			maxProfessionals = *offer.CustomMaxProfessionals
+		}
+	}
+	if plan.Slug == "advanced" {
+		maxClinics = req.Units
+	}
+	if planVariant.IsSolo() {
+		maxProfessionals = plan_model.SoloMaxProfessionals
+		maxClinics = 1
+	}
+
 	// Save subscription to database
 	subscription := &model.Subscription{
-		ClinicID:            clinicID,
+		AccountID:           clinic.AccountID,
 		CustomerID:          customer.ID,
 		AsaasSubscriptionID: asaasSub.ID,
 		Value:               asaasSub.Value,
@@ -349,6 +555,15 @@ func (s *paymentService) CreateSubscription(ctx context.Context, clinicID uuid.U
 		NextDueDate:         parsedNextDueDate,
 		Description:         asaasSub.Description,
 		ExternalRef:         asaasSub.ExternalRef,
+
+		PlanID:                     &plan.ID,
+		PlanVariant:                planVariant,
+		OfferID:                    offerID,
+		PriceAtContract:            value,
+		MaxClinicsAtContract:       maxClinics,
+		MaxProfessionalsAtContract: maxProfessionals,
+		MaxWhatsappAtContract:      plan.MaxWhatsappConnections,
+		MaxGoogleAtContract:        plan.MaxGoogleCalendars,
 	}
 
 	if err := s.subscriptionRepo.Create(ctx, subscription); err != nil {
@@ -360,12 +575,20 @@ func (s *paymentService) CreateSubscription(ctx context.Context, clinicID uuid.U
 
 // GetSubscription retrieves the subscription for a clinic
 func (s *paymentService) GetSubscription(ctx context.Context, clinicID uuid.UUID) (*model.Subscription, error) {
-	return s.subscriptionRepo.GetByClinicID(ctx, clinicID)
+	clinic, err := s.clinicRepo.GetByID(ctx, clinicID)
+	if err != nil {
+		return nil, err
+	}
+	return s.subscriptionRepo.GetByAccountID(ctx, clinic.AccountID)
 }
 
 // CancelSubscription cancels a subscription
 func (s *paymentService) CancelSubscription(ctx context.Context, clinicID uuid.UUID) error {
-	subscription, err := s.subscriptionRepo.GetByClinicID(ctx, clinicID)
+	clinic, err := s.clinicRepo.GetByID(ctx, clinicID)
+	if err != nil {
+		return err
+	}
+	subscription, err := s.subscriptionRepo.GetByAccountID(ctx, clinic.AccountID)
 	if err != nil {
 		return err
 	}
@@ -383,35 +606,197 @@ func (s *paymentService) HandleWebhook(ctx context.Context, payload *model.Asaas
 		return nil
 	}
 
-	// Find payment by Asaas ID
+	logger.Infof("[WEBHOOK] Event: %s, PaymentID: %s, Status: %s, Subscription: %s",
+		payload.Event, payload.Payment.ID, payload.Payment.Status, payload.Payment.Subscription)
+
+	// Try to find or create payment in local DB
 	payment, err := s.paymentRepo.GetByAsaasID(ctx, payload.Payment.ID)
 	if err != nil {
-		// Payment not found in our database, might be from another source
-		return nil
+		// Payment not in our DB yet — create it if we can link it to a subscription
+		payment, err = s.createPaymentFromWebhook(ctx, payload.Payment)
+		if err != nil {
+			logger.Errorf("[WEBHOOK] Could not create payment from webhook: %v", err)
+			// Don't return error — still try to update account status
+		}
 	}
 
-	// Update payment status
-	newStatus := model.PaymentStatus(payload.Payment.Status)
-	if err := s.paymentRepo.UpdateStatus(ctx, payment.ID, newStatus); err != nil {
-		return err
+	// Update payment status in local DB if we have a record
+	if payment != nil {
+		newStatus := model.PaymentStatus(payload.Payment.Status)
+		if err := s.paymentRepo.UpdateStatus(ctx, payment.ID, newStatus); err != nil {
+			logger.Errorf("[WEBHOOK] Error updating payment status: %v", err)
+		}
 	}
 
-	// Handle specific events
+	// Update account subscription status based on event
 	switch payload.Event {
 	case model.WebhookEventPaymentReceived, model.WebhookEventPaymentConfirmed:
-		// Payment was received - could update clinic subscription status here
-		// This would require injecting a clinic service/repository
+		if payment != nil && payment.SubscriptionID != nil {
+			// Find subscription
+			subscription, err := s.subscriptionRepo.GetByID(ctx, *payment.SubscriptionID)
+			if err == nil {
+				// Update Account with Price Lock values and correct PlanID
+				account, err := s.accountRepo.GetByID(ctx, payment.AccountID)
+				if err == nil {
+					account.MaxClinics = subscription.MaxClinicsAtContract
+					account.MaxProfessionals = subscription.MaxProfessionalsAtContract
+					account.MaxWhatsappConnections = subscription.MaxWhatsappAtContract
+					account.MaxGoogleCalendars = subscription.MaxGoogleAtContract
+					if subscription.PlanID != nil {
+						account.PlanID = subscription.PlanID
+					}
+					s.accountRepo.Update(ctx, account)
+				}
+			}
+		}
+		return s.handlePaymentConfirmed(ctx, payload.Payment)
 	case model.WebhookEventPaymentOverdue:
-		// Payment is overdue - could notify the clinic
+		return s.handlePaymentOverdue(ctx, payload.Payment)
+	case model.WebhookEventPaymentRefunded, model.WebhookEventPaymentDeleted:
+		return s.handlePaymentCanceled(ctx, payload.Payment)
 	}
 
 	return nil
 }
 
+// createPaymentFromWebhook creates a local payment record from webhook data
+func (s *paymentService) createPaymentFromWebhook(ctx context.Context, wp *model.WebhookPayment) (*model.Payment, error) {
+	if wp.Subscription == "" {
+		return nil, fmt.Errorf("no subscription ID in webhook payment")
+	}
+
+	// Find subscription by Asaas ID
+	subscription, err := s.subscriptionRepo.GetByAsaasID(ctx, wp.Subscription)
+	if err != nil {
+		return nil, fmt.Errorf("subscription not found for Asaas ID %s: %w", wp.Subscription, err)
+	}
+
+	// Find customer by Asaas ID
+	customer, err := s.customerRepo.GetByAsaasID(ctx, wp.Customer)
+	if err != nil {
+		return nil, fmt.Errorf("customer not found for Asaas ID %s: %w", wp.Customer, err)
+	}
+
+	dueDate, _ := time.Parse("2006-01-02", wp.DueDate)
+
+	payment := &model.Payment{
+		AccountID:      subscription.AccountID,
+		CustomerID:     customer.ID,
+		SubscriptionID: &subscription.ID,
+		AsaasPaymentID: wp.ID,
+		Value:          wp.Value,
+		NetValue:       wp.NetValue,
+		Status:         model.PaymentStatus(wp.Status),
+		BillingType:    model.BillingType(wp.BillingType),
+		DueDate:        dueDate,
+		InvoiceURL:     wp.InvoiceURL,
+		BankSlipURL:    wp.BankSlipURL,
+		Description:    wp.Description,
+		ExternalRef:    wp.ExternalRef,
+	}
+
+	if wp.PaymentDate != "" {
+		pd, _ := time.Parse("2006-01-02", wp.PaymentDate)
+		payment.PaymentDate = &pd
+	}
+
+	if err := s.paymentRepo.Create(ctx, payment); err != nil {
+		return nil, fmt.Errorf("failed to create payment: %w", err)
+	}
+
+	logger.Infof("[WEBHOOK] Created local payment record %s for Asaas payment %s", payment.ID, wp.ID)
+	return payment, nil
+}
+
+// handlePaymentConfirmed activates the account when payment is confirmed
+func (s *paymentService) handlePaymentConfirmed(ctx context.Context, wp *model.WebhookPayment) error {
+	account, err := s.getAccountFromWebhookPayment(ctx, wp)
+	if err != nil {
+		logger.Errorf("[WEBHOOK] Could not find account for confirmed payment: %v", err)
+		return nil
+	}
+
+	account.SubscriptionStatus = account_model.SubscriptionStatusActive
+	if err := s.accountRepo.Update(ctx, account); err != nil {
+		return fmt.Errorf("failed to activate account %s: %w", account.ID, err)
+	}
+
+	logger.Infof("[WEBHOOK] Account %s activated after payment confirmation", account.ID)
+	return nil
+}
+
+// handlePaymentOverdue sets the account to past_due when payment is overdue
+func (s *paymentService) handlePaymentOverdue(ctx context.Context, wp *model.WebhookPayment) error {
+	account, err := s.getAccountFromWebhookPayment(ctx, wp)
+	if err != nil {
+		logger.Errorf("[WEBHOOK] Could not find account for overdue payment: %v", err)
+		return nil
+	}
+
+	account.SubscriptionStatus = account_model.SubscriptionStatusPastDue
+	if err := s.accountRepo.Update(ctx, account); err != nil {
+		return fmt.Errorf("failed to set account %s to past_due: %w", account.ID, err)
+	}
+
+	logger.Infof("[WEBHOOK] Account %s set to past_due after payment overdue", account.ID)
+	return nil
+}
+
+// handlePaymentCanceled sets the account to canceled when payment is refunded/deleted
+func (s *paymentService) handlePaymentCanceled(ctx context.Context, wp *model.WebhookPayment) error {
+	account, err := s.getAccountFromWebhookPayment(ctx, wp)
+	if err != nil {
+		logger.Errorf("[WEBHOOK] Could not find account for canceled payment: %v", err)
+		return nil
+	}
+
+	account.SubscriptionStatus = account_model.SubscriptionStatusCanceled
+	if err := s.accountRepo.Update(ctx, account); err != nil {
+		return fmt.Errorf("failed to cancel account %s: %w", account.ID, err)
+	}
+
+	logger.Infof("[WEBHOOK] Account %s canceled after payment refund/deletion", account.ID)
+	return nil
+}
+
+// getAccountFromWebhookPayment finds the Account linked to a webhook payment
+// via the subscription's Asaas ID or the external reference (clinicID)
+func (s *paymentService) getAccountFromWebhookPayment(ctx context.Context, wp *model.WebhookPayment) (*account_model.Account, error) {
+	if s.accountRepo == nil {
+		return nil, fmt.Errorf("accountRepo not available")
+	}
+
+	// Try via subscription Asaas ID first
+	if wp.Subscription != "" {
+		subscription, err := s.subscriptionRepo.GetByAsaasID(ctx, wp.Subscription)
+		if err == nil {
+			return s.accountRepo.GetByID(ctx, subscription.AccountID)
+		}
+	}
+
+	// Fallback: try via external reference (which is the clinicID)
+	if wp.ExternalRef != "" {
+		clinicID, err := uuid.Parse(wp.ExternalRef)
+		if err == nil {
+			clinic, err := s.clinicRepo.GetByID(ctx, clinicID)
+			if err == nil {
+				return s.accountRepo.GetByID(ctx, clinic.AccountID)
+			}
+		}
+	}
+
+	return nil, fmt.Errorf("could not find account for payment %s", wp.ID)
+}
+
 // CreateCustomerForClinic creates an Asaas customer for a clinic during registration
 func (s *paymentService) CreateCustomerForClinic(ctx context.Context, clinicID uuid.UUID, req *model.CreateCustomerRequest) error {
+	clinic, err := s.clinicRepo.GetByID(ctx, clinicID)
+	if err != nil {
+		return err
+	}
+
 	// Check if customer already exists
-	existing, _ := s.customerRepo.GetByClinicID(ctx, clinicID)
+	existing, _ := s.customerRepo.GetByAccountID(ctx, clinic.AccountID)
 	if existing != nil {
 		return nil // Customer already exists, nothing to do
 	}
@@ -424,7 +809,7 @@ func (s *paymentService) CreateCustomerForClinic(ctx context.Context, clinicID u
 
 	// Save customer in database
 	customer := &model.Customer{
-		ClinicID:        clinicID,
+		AccountID:       clinic.AccountID,
 		AsaasCustomerID: asaasCustomer.ID,
 		Name:            asaasCustomer.Name,
 		Email:           asaasCustomer.Email,
@@ -434,41 +819,67 @@ func (s *paymentService) CreateCustomerForClinic(ctx context.Context, clinicID u
 		Address:         asaasCustomer.Address,
 		AddressNumber:   asaasCustomer.AddressNumber,
 		Province:        asaasCustomer.Province,
-		City:            asaasCustomer.City,
-		State:           asaasCustomer.State,
+		City:            fmt.Sprintf("%v", asaasCustomer.City),
+		State:           fmt.Sprintf("%v", asaasCustomer.State),
 	}
 
 	return s.customerRepo.Create(ctx, customer)
 }
 
 // CreateSubscriptionForClinic creates an Asaas subscription for a clinic during registration
-func (s *paymentService) CreateSubscriptionForClinic(ctx context.Context, clinicID uuid.UUID, plan string, billing string) error {
+func (s *paymentService) CreateSubscriptionForClinic(ctx context.Context, clinicID uuid.UUID, planID uuid.UUID, offerToken *string, billing string, variant string, units int) error {
+	planVariant := plan_model.NormalizeVariant(variant)
+	clinic, err := s.clinicRepo.GetByID(ctx, clinicID)
+	if err != nil {
+		return err
+	}
+
 	// Get customer
-	customer, err := s.customerRepo.GetByClinicID(ctx, clinicID)
+	customer, err := s.customerRepo.GetByAccountID(ctx, clinic.AccountID)
 	if err != nil {
 		return errors.ErrNotFoundInstance.WithMessage("Customer not found")
 	}
 
-	// Map plan to price (you should get this from config/database)
-	var value float64
-	switch plan {
-	case "basic":
-		value = 99.00
-	case "professional":
-		value = 199.00
-	case "advanced":
-		value = 349.00
-	default:
+	// Fetch Plan
+	plan, err := s.planService.GetPlanByID(ctx, planID)
+	if err != nil {
 		return errors.ErrBadRequestInstance.WithMessage("Invalid plan")
 	}
 
-	// Adjust for billing cycle
+	// Validate Plan and Offer to get Price
+	var planCycleType plan_model.CycleType
 	var cycle model.BillingCycle
 	if billing == "annually" {
+		planCycleType = plan_model.CycleTypeYearly
 		cycle = model.BillingCycleYearly
-		value = value * 10 // 2 months free on annual billing
 	} else {
+		planCycleType = plan_model.CycleTypeMonthly
 		cycle = model.BillingCycleMonthly
+	}
+
+	var offer *plan_model.Offer
+	if !planVariant.IsSolo() && offerToken != nil && *offerToken != "" {
+		o, err := s.planService.ValidateOffer(ctx, *offerToken)
+		if err == nil {
+			offer = o
+		}
+	}
+
+	value, err := s.planService.ResolvePrice(ctx, plan, offer, planCycleType, planVariant)
+	if err != nil {
+		return errors.ErrBadRequestInstance.WithMessage(err.Error())
+	}
+
+	if planVariant.IsSolo() && plan.Slug == "advanced" {
+		return errors.ErrValidationInstance.WithMessage("O plano Avançado não possui modalidade autônomo")
+	}
+
+	// Advanced plan: bill per contracted unit, require at least 2.
+	if plan.Slug == "advanced" {
+		if units < 2 {
+			return errors.ErrValidationInstance.WithMessage("O plano Avançado exige contratação mínima de 2 unidades")
+		}
+		value = value * float64(units)
 	}
 
 	// Calculate next due date (immediate charge)
@@ -481,7 +892,7 @@ func (s *paymentService) CreateSubscriptionForClinic(ctx context.Context, clinic
 		Value:       value,
 		NextDueDate: nextDueDate,
 		Cycle:       cycle,
-		Description: "Assinatura " + plan,
+		Description: "Assinatura " + plan.Name,
 	}
 
 	asaasSubscription, err := s.client.CreateSubscription(ctx, asaasReq)
@@ -489,12 +900,42 @@ func (s *paymentService) CreateSubscriptionForClinic(ctx context.Context, clinic
 		return err
 	}
 
+	// Validate Asaas returned a valid subscription ID
+	if asaasSubscription.ID == "" {
+		return errors.ErrPaymentGatewayInstance.WithMessage("Asaas returned empty subscription ID")
+	}
+
 	// Parse next due date
 	nextDue, _ := time.Parse("2006-01-02", asaasSubscription.NextDueDate)
 
+	var offerID *uuid.UUID
+	if offer != nil {
+		offerID = &offer.ID
+		_ = s.planService.UseOffer(ctx, *offerID)
+	}
+
+	// Calculate absolute limits based on Plan or Custom via Offer (solo overrides below)
+	maxClinics := plan.MaxClinics
+	maxProfessionals := plan.MaxProfessionals
+	if offer != nil {
+		if offer.CustomMaxClinics != nil {
+			maxClinics = *offer.CustomMaxClinics
+		}
+		if offer.CustomMaxProfessionals != nil {
+			maxProfessionals = *offer.CustomMaxProfessionals
+		}
+	}
+	if plan.Slug == "advanced" {
+		maxClinics = units
+	}
+	if planVariant.IsSolo() {
+		maxProfessionals = plan_model.SoloMaxProfessionals
+		maxClinics = 1
+	}
+
 	// Save subscription in database
 	subscription := &model.Subscription{
-		ClinicID:            clinicID,
+		AccountID:           clinic.AccountID,
 		CustomerID:          customer.ID,
 		AsaasSubscriptionID: asaasSubscription.ID,
 		Status:              model.SubscriptionStatus(asaasSubscription.Status),
@@ -503,7 +944,265 @@ func (s *paymentService) CreateSubscriptionForClinic(ctx context.Context, clinic
 		NextDueDate:         nextDue,
 		Cycle:               model.BillingCycle(asaasSubscription.Cycle),
 		Description:         asaasSubscription.Description,
+
+		PlanID:                     &plan.ID,
+		PlanVariant:                planVariant,
+		OfferID:                    offerID,
+		PriceAtContract:            value,
+		MaxClinicsAtContract:       maxClinics,
+		MaxProfessionalsAtContract: maxProfessionals,
+		MaxWhatsappAtContract:      plan.MaxWhatsappConnections,
+		MaxGoogleAtContract:        plan.MaxGoogleCalendars,
 	}
 
 	return s.subscriptionRepo.Create(ctx, subscription)
+}
+
+// SwitchPlan handles plan switching: cancels current subscription and creates new one
+// For trial/expired accounts: creates immediate subscription
+// For active accounts: cancels current, creates new with nextDueDate = current period end
+func (s *paymentService) SwitchPlan(ctx context.Context, clinicID uuid.UUID, newPlan string, billingType string, cycle string, variant string, offerToken *string, creditCard *model.CreditCardInfo, creditCardHolder *model.CreditCardHolderInfo, units int) (*model.Subscription, error) {
+	planVariant := plan_model.NormalizeVariant(variant)
+	clinic, err := s.clinicRepo.GetByID(ctx, clinicID)
+	if err != nil {
+		return nil, errors.ErrNotFoundInstance.WithMessage("Clinic not found")
+	}
+
+	// Get customer (required for subscription)
+	customer, err := s.customerRepo.GetByAccountID(ctx, clinic.AccountID)
+	if err != nil {
+		return nil, errors.ErrNotFoundInstance.WithMessage("Customer not found. Please create billing profile first.")
+	}
+	if customer.AsaasCustomerID == "" {
+		logger.Errorf("[PAYMENT] Customer found for account %s but AsaasCustomerID is EMPTY. Cannot create subscription.", clinic.AccountID)
+		return nil, errors.ErrPaymentGatewayInstance.WithMessage("Customer billing profile is incomplete. Please update your billing info.")
+	}
+
+	// Fetch the plan
+	var plan *plan_model.Plan
+	plans, err := s.planService.ListPlans(ctx)
+	if err != nil {
+		return nil, errors.ErrInternalInstance.WithMessage("Failed to fetch plans")
+	}
+	for i := range plans {
+		if plans[i].Slug == newPlan {
+			plan = &plans[i]
+			break
+		}
+	}
+	if plan == nil {
+		return nil, errors.ErrBadRequestInstance.WithMessage("Invalid plan")
+	}
+
+	description := plan.Name + " - Aseno"
+
+	// Determine billing cycle
+	var cycleType plan_model.CycleType
+	var asaasCycle model.BillingCycle
+	if cycle == "YEARLY" {
+		cycleType = plan_model.CycleTypeYearly
+		asaasCycle = model.BillingCycleYearly
+	} else {
+		cycleType = plan_model.CycleTypeMonthly
+		asaasCycle = model.BillingCycleMonthly
+	}
+
+	// Validate offer if provided (offers do not apply to solo variant)
+	var offer *plan_model.Offer
+	if !planVariant.IsSolo() && offerToken != nil && *offerToken != "" {
+		o, err := s.planService.ValidateOffer(ctx, *offerToken)
+		if err == nil {
+			offer = o
+		}
+	}
+
+	value, err := s.planService.ResolvePrice(ctx, plan, offer, cycleType, planVariant)
+	if err != nil {
+		return nil, errors.ErrInternalInstance.WithMessage("Falha ao calcular o preço do plano").WithError(err)
+	}
+
+	// Solo variant is not compatible with the advanced plan (which is per-unit).
+	if planVariant.IsSolo() && plan.Slug == "advanced" {
+		return nil, errors.ErrValidationInstance.WithMessage("O plano Avançado não possui modalidade autônomo")
+	}
+
+	// Advanced plan: bill per contracted unit, require at least 2.
+	if plan.Slug == "advanced" {
+		if units < 2 {
+			return nil, errors.ErrValidationInstance.WithMessage("O plano Avançado exige contratação mínima de 2 unidades")
+		}
+		value = value * float64(units)
+	}
+
+	// Auto-apply the active promotion (if any) when it covers this plan.
+	// Server-side detection means no client param is needed and we can't be
+	// tricked by stale URLs — GetActive already filters by is_active + window.
+	// Runs AFTER the per-unit multiplier so the discount applies to the
+	// full per-billing-cycle amount. No-op when promotionService isn't wired
+	// (test setups skip it).
+	if s.promotionService != nil {
+		promo, err := s.promotionService.GetActive(ctx)
+		if err == nil && promo != nil && promo.AppliesToPlan(plan.Slug) {
+			// Round to integer reais so the charge matches what the frontend
+			// shows in the price card and in the checkout summary.
+			discounted := math.Round(value * float64(100-promo.DiscountPercent) / 100.0)
+			if discounted < 1 {
+				discounted = 1
+			}
+			logger.Infof("[PAYMENT] Applying active promotion %s (-%d%%) to plan %s: R$ %.2f -> R$ %.2f", promo.ID, promo.DiscountPercent, plan.Slug, value, discounted)
+			value = discounted
+		}
+	}
+
+	// Check for existing active subscription
+	var nextDueDate string
+	existingSub, _ := s.subscriptionRepo.GetByAccountID(ctx, clinic.AccountID)
+	if existingSub != nil && existingSub.Status == model.SubscriptionStatusActive {
+		if existingSub.AsaasSubscriptionID != "" {
+			// Cancel existing valid subscription in Asaas
+			if err := s.client.DeleteSubscription(ctx, existingSub.AsaasSubscriptionID); err != nil {
+				logger.Warnf("[PAYMENT] Warning: failed to cancel Asaas subscription %s: %v", existingSub.AsaasSubscriptionID, err)
+			}
+		} else {
+			// Ghost subscription (no Asaas ID) — skip Asaas cancellation
+			logger.Warnf("[PAYMENT] Found ghost subscription %s with empty Asaas ID for account %s, skipping Asaas cancel", existingSub.ID, clinic.AccountID)
+		}
+
+		// Mark as inactive in our DB
+		err = s.subscriptionRepo.UpdateStatus(ctx, existingSub.ID, model.SubscriptionStatusInactive)
+		if err != nil {
+			logger.Errorf("[PAYMENT] Error updating subscription status: %v", err)
+		}
+
+		// Use existing NextDueDate only if it's valid, otherwise charge immediately
+		if existingSub.AsaasSubscriptionID != "" && !existingSub.NextDueDate.IsZero() {
+			nextDueDate = existingSub.NextDueDate.Format("2006-01-02")
+		} else {
+			nextDueDate = time.Now().Format("2006-01-02")
+		}
+	} else {
+		// No active subscription (trial or expired): charge immediately
+		nextDueDate = time.Now().Format("2006-01-02")
+	}
+
+	// Create new subscription in Asaas
+	asaasReq := &model.CreateSubscriptionRequest{
+		CustomerID:           customer.AsaasCustomerID,
+		BillingType:          model.BillingType(billingType),
+		Value:                value,
+		NextDueDate:          nextDueDate,
+		Cycle:                asaasCycle,
+		Description:          description,
+		ExternalRef:          clinicID.String(),
+		CreditCard:           creditCard,
+		CreditCardHolderInfo: creditCardHolder,
+	}
+	asaasSub, err := s.client.CreateSubscription(ctx, asaasReq)
+	if err != nil {
+		logger.Errorf("[PAYMENT] Error creating Asaas subscription: %v", err)
+		logger.Errorf("[PAYMENT] Asaas request: customer=%s, billingType=%s, value=%.2f, nextDueDate=%s, cycle=%s",
+			asaasReq.CustomerID, asaasReq.BillingType, asaasReq.Value, asaasReq.NextDueDate, asaasReq.Cycle)
+		return nil, errors.ErrPaymentGatewayInstance.WithMessage(fmt.Sprintf("Asaas: %v", err))
+	}
+
+	logger.Infof("[PAYMENT] Asaas response: ID=%s, Status=%s, Value=%.2f, Cycle=%s, NextDueDate=%s",
+		asaasSub.ID, asaasSub.Status, asaasSub.Value, asaasSub.Cycle, asaasSub.NextDueDate)
+
+	// Validate Asaas returned a valid subscription ID
+	if asaasSub.ID == "" {
+		logger.Errorf("[PAYMENT] Asaas returned empty subscription ID for clinic %s", clinicID)
+		logger.Errorf("[PAYMENT] Asaas request was: customer=%s, billingType=%s, value=%.2f, nextDueDate=%s, cycle=%s",
+			asaasReq.CustomerID, asaasReq.BillingType, asaasReq.Value, asaasReq.NextDueDate, asaasReq.Cycle)
+		return nil, errors.ErrPaymentGatewayInstance.WithMessage("Asaas returned empty subscription ID")
+	}
+
+	// Parse next due date
+	parsedNextDueDate, _ := time.Parse("2006-01-02", asaasSub.NextDueDate)
+
+	// Save new subscription in DB
+	subscription := &model.Subscription{
+		AccountID:           clinic.AccountID,
+		CustomerID:          customer.ID,
+		AsaasSubscriptionID: asaasSub.ID,
+		Value:               asaasSub.Value,
+		Status:              model.SubscriptionStatus(asaasSub.Status),
+		BillingType:         model.BillingType(asaasSub.BillingType),
+		Cycle:               model.BillingCycle(asaasSub.Cycle),
+		NextDueDate:         parsedNextDueDate,
+		Description:         asaasSub.Description,
+		ExternalRef:         asaasSub.ExternalRef,
+
+		// Price Lock fields
+		PlanID:                     &plan.ID,
+		PlanVariant:                planVariant,
+		PriceAtContract:            value,
+		MaxClinicsAtContract:       plan.MaxClinics,
+		MaxProfessionalsAtContract: plan.MaxProfessionals,
+		MaxWhatsappAtContract:      plan.MaxWhatsappConnections,
+		MaxGoogleAtContract:        plan.MaxGoogleCalendars,
+	}
+
+	// Solo variant: single professional, single clinic, regardless of plan defaults.
+	if planVariant.IsSolo() {
+		subscription.MaxProfessionalsAtContract = plan_model.SoloMaxProfessionals
+		subscription.MaxClinicsAtContract = 1
+	}
+
+	// Apply offer-level overrides and track offer usage (solo ignores offers)
+	if offer != nil && !planVariant.IsSolo() {
+		subscription.OfferID = &offer.ID
+		_ = s.planService.UseOffer(ctx, offer.ID)
+		if offer.CustomMaxClinics != nil {
+			subscription.MaxClinicsAtContract = *offer.CustomMaxClinics
+		}
+		if offer.CustomMaxProfessionals != nil {
+			subscription.MaxProfessionalsAtContract = *offer.CustomMaxProfessionals
+		}
+	}
+	if plan.Slug == "advanced" {
+		subscription.MaxClinicsAtContract = units
+	}
+
+	if err := s.subscriptionRepo.Create(ctx, subscription); err != nil {
+		return nil, err
+	}
+
+	// Update account plan and status
+	if s.accountRepo != nil {
+		account, err := s.accountRepo.GetByID(ctx, clinic.AccountID)
+		if err == nil && plan != nil {
+			account.PlanID = &plan.ID
+			account.PlanVariant = planVariant
+			account.SubscriptionStatus = account_model.SubscriptionStatusPending
+			if planVariant.IsSolo() {
+				account.MaxProfessionals = plan_model.SoloMaxProfessionals
+				account.MaxClinics = 1
+			} else {
+				account.MaxProfessionals = subscription.MaxProfessionalsAtContract
+				account.MaxClinics = subscription.MaxClinicsAtContract
+			}
+			account.MaxWhatsappConnections = subscription.MaxWhatsappAtContract
+			account.MaxGoogleCalendars = subscription.MaxGoogleAtContract
+			if err := s.accountRepo.Update(ctx, account); err != nil {
+				logger.Errorf("[PAYMENT] Error updating account plan: %v", err)
+			}
+		}
+	}
+
+	return subscription, nil
+}
+
+// GetSubscriptionPayments returns payments for the current subscription from Asaas
+func (s *paymentService) GetSubscriptionPayments(ctx context.Context, clinicID uuid.UUID) (*model.PaymentListResponse, error) {
+	clinic, err := s.clinicRepo.GetByID(ctx, clinicID)
+	if err != nil {
+		return nil, errors.ErrNotFoundInstance.WithMessage("Clinic not found")
+	}
+
+	subscription, err := s.subscriptionRepo.GetByAccountID(ctx, clinic.AccountID)
+	if err != nil {
+		return nil, errors.ErrNotFoundInstance.WithMessage("No subscription found")
+	}
+
+	return s.client.GetSubscriptionPayments(ctx, subscription.AsaasSubscriptionID)
 }

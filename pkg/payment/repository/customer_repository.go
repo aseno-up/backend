@@ -43,10 +43,10 @@ func (r *customerRepository) GetByID(ctx context.Context, id uuid.UUID) (*model.
 	return &customer, nil
 }
 
-// GetByClinicID retrieves a customer by clinic ID
-func (r *customerRepository) GetByClinicID(ctx context.Context, clinicID uuid.UUID) (*model.Customer, error) {
+// GetByAccountID retrieves a customer by account ID
+func (r *customerRepository) GetByAccountID(ctx context.Context, accountID uuid.UUID) (*model.Customer, error) {
 	var customer model.Customer
-	result := r.db.WithContext(ctx).Where("clinic_id = ?", clinicID).First(&customer)
+	result := r.db.WithContext(ctx).Where("account_id = ?", accountID).First(&customer)
 	if result.Error != nil {
 		if result.Error == gorm.ErrRecordNotFound {
 			return nil, errors.ErrCustomerNotFoundInstance

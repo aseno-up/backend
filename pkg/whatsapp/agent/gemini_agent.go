@@ -133,8 +133,9 @@ func (a *geminiAgent) generateWithModel(ctx context.Context, req *AgentRequest, 
 		genModel.SetMaxOutputTokens(2048) // Default max tokens
 	}
 
-	// Configure function calling (tools)
-	functionDeclarations := a.toolRegistry.GetGeminiFunctionDeclarations()
+	// Configure function calling (tools). AllowedTools whitelist restricts
+	// the LLM physically (e.g. handoff mode exposes only complete_handoff_to_human).
+	functionDeclarations := a.toolRegistry.FilteredGeminiFunctionDeclarations(req.AllowedTools, req.DisallowedTools)
 	genModel.Tools = []*genai.Tool{
 		{
 			FunctionDeclarations: functionDeclarations,
@@ -146,11 +147,14 @@ func (a *geminiAgent) generateWithModel(ctx context.Context, req *AgentRequest, 
 		req.ClinicName,
 		req.ConversationContext.PatientName,
 		req.ConversationContext,
-	)
+	).
+		WithBusinessInfo(req.ClinicBusinessInfo).
+		WithFAQ(req.ClinicFAQ).
+		WithPatientContext(req.PatientContext)
 	systemPrompt := promptBuilder.Build()
 
 	// Build user prompt with conversation history
-	userPrompt := BuildUserPrompt(req.ConversationContext, req.UserMessage)
+	userPrompt := BuildUserPromptWithLimit(req.ConversationContext, req.UserMessage, req.HistoryTurns)
 
 	// Start chat session
 	chat := genModel.StartChat()
@@ -169,7 +173,9 @@ func (a *geminiAgent) generateWithModel(ctx context.Context, req *AgentRequest, 
 
 	// Send message and handle tool calls in a loop (multi-turn function calling)
 	currentPrompt := userPrompt
-	maxIterations := 5 // Prevent infinite loops
+	// See openrouter_agent.go for rationale on 10 (was 5, too low for the
+	// unified handoff flow where the LLM needs ~6-8 tool calls).
+	maxIterations := 10
 	var finalResponse *genai.GenerateContentResponse
 
 	for i := 0; i < maxIterations; i++ {
@@ -285,9 +291,11 @@ func (a *geminiAgent) generateWithModel(ctx context.Context, req *AgentRequest, 
 	}
 
 	// Calculate tokens used (approximate)
-	tokensUsed := 0
+	tokensUsed, inputTokens, outputTokens := 0, 0, 0
 	if finalResponse.UsageMetadata != nil {
 		tokensUsed = int(finalResponse.UsageMetadata.TotalTokenCount)
+		inputTokens = int(finalResponse.UsageMetadata.PromptTokenCount)
+		outputTokens = int(finalResponse.UsageMetadata.CandidatesTokenCount)
 	}
 
 	// Build agent response
@@ -296,6 +304,8 @@ func (a *geminiAgent) generateWithModel(ctx context.Context, req *AgentRequest, 
 		ToolCalls:    allToolCalls,
 		FinishReason: string(finalResponse.Candidates[0].FinishReason),
 		TokensUsed:   tokensUsed,
+		InputTokens:  inputTokens,
+		OutputTokens: outputTokens,
 		Model:        modelName,
 		Provider:     "gemini",
 	}

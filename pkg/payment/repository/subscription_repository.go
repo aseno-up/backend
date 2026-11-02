@@ -23,6 +23,11 @@ func NewSubscriptionRepository(db *gorm.DB) service.SubscriptionRepository {
 
 // Create creates a new subscription
 func (r *subscriptionRepository) Create(ctx context.Context, subscription *model.Subscription) error {
+	// Guard: reject subscriptions without a valid Asaas subscription ID
+	if subscription.AsaasSubscriptionID == "" {
+		return errors.ErrInternalInstance.WithMessage("cannot create subscription without Asaas subscription ID")
+	}
+
 	result := r.db.WithContext(ctx).Create(subscription)
 	if result.Error != nil {
 		return errors.ErrInternalInstance.WithError(result.Error)
@@ -62,12 +67,12 @@ func (r *subscriptionRepository) GetByAsaasID(ctx context.Context, asaasID strin
 	return &subscription, nil
 }
 
-// GetByClinicID retrieves the active subscription for a clinic
-func (r *subscriptionRepository) GetByClinicID(ctx context.Context, clinicID uuid.UUID) (*model.Subscription, error) {
+// GetByAccountID retrieves the active subscription for an account
+func (r *subscriptionRepository) GetByAccountID(ctx context.Context, accountID uuid.UUID) (*model.Subscription, error) {
 	var subscription model.Subscription
 	result := r.db.WithContext(ctx).
 		Preload("Customer").
-		Where("clinic_id = ? AND status = ?", clinicID, model.SubscriptionStatusActive).
+		Where("account_id = ? AND status = ?", accountID, model.SubscriptionStatusActive).
 		First(&subscription)
 	if result.Error != nil {
 		if result.Error == gorm.ErrRecordNotFound {

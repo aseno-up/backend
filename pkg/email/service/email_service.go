@@ -16,6 +16,35 @@ type EmailService interface {
 	SendWelcome(ctx context.Context, data *WelcomeEmailData) error
 	SendPasswordReset(ctx context.Context, data *ResetPasswordEmailData) error
 	SendEmailVerification(ctx context.Context, data *EmailVerificationData) error
+	SendOwnerWelcome(ctx context.Context, data *OwnerWelcomeEmailData) error
+	SendContactForm(ctx context.Context, data *ContactFormData) error
+	SendBookingConfirmation(ctx context.Context, data *BookingConfirmationEmailData) error
+	SendPortalEmailVerification(ctx context.Context, data *PortalEmailVerificationData) error
+	SendLeadIsca(ctx context.Context, data *LeadIscaEmailData) error
+	SendPaymentReminder(ctx context.Context, data *PaymentReminderEmailData) error
+	SendOnboardingLink(ctx context.Context, data *OnboardingLinkEmailData) error
+}
+
+// OnboardingLinkEmailData carries the data for the magic-link e-mail sent
+// from the landing page "Receba seu link de acesso" capture forms. Clicking
+// the link takes the visitor to /onboarding/<token> where they finish
+// signing up — the click itself counts as e-mail verification.
+type OnboardingLinkEmailData struct {
+	RecipientEmail string
+	RecipientName  string
+	OnboardingLink string
+	ExpiresAt      time.Time
+}
+
+// PaymentReminderEmailData carries the information needed to render the
+// monthly payment reminder email. Amount is optional (0 hides the value).
+type PaymentReminderEmailData struct {
+	RecipientEmail string
+	RecipientName  string
+	ClinicName     string
+	PlanTitle      string
+	DueDate        time.Time
+	Amount         float64
 }
 
 // InviteEmailData contains data for invite emails
@@ -48,6 +77,55 @@ type EmailVerificationData struct {
 	RecipientEmail   string
 	RecipientName    string
 	VerificationLink string
+}
+
+// OwnerWelcomeEmailData contains data for the welcome email sent to a new
+// account owner right after email verification. The owner has not seen the
+// onboarding screen yet, so we deliberately avoid any derived name or
+// clinic-context greeting.
+type OwnerWelcomeEmailData struct {
+	RecipientEmail string
+	LoginLink      string
+}
+
+// ContactFormData contains data for contact form submissions
+type ContactFormData struct {
+	Name    string
+	Email   string
+	Message string
+}
+
+// BookingConfirmationEmailData contains data for booking confirmation emails
+type BookingConfirmationEmailData struct {
+	RecipientEmail   string
+	RecipientName    string
+	ClinicName       string
+	ProfessionalName string
+	StartTime        time.Time
+	EndTime          time.Time
+	PortalLink       string // Link to create portal account
+	PaymentURL       string // Link to payment page (if payment required)
+}
+
+// PortalEmailVerificationData contains data for portal email verification
+type PortalEmailVerificationData struct {
+	RecipientEmail string
+	RecipientName  string
+	ClinicName     string
+	VerifyLink     string
+}
+
+// LeadIscaEmailData contains data for lead isca (bait) emails with spreadsheet attachments
+type LeadIscaEmailData struct {
+	RecipientEmail string
+	RecipientName  string
+	Attachments    []EmailAttachment
+}
+
+// EmailAttachment represents a file attachment for an email
+type EmailAttachment struct {
+	Name    string // filename
+	Content string // base64-encoded content
 }
 
 // SMTPConfig holds SMTP configuration
@@ -101,6 +179,20 @@ func (s *smtpEmailService) SendPasswordReset(ctx context.Context, data *ResetPas
 	body, err := s.renderPasswordResetTemplate(data)
 	if err != nil {
 		return fmt.Errorf("failed to render password reset template: %w", err)
+	}
+
+	return s.sendEmail(data.RecipientEmail, subject, body)
+}
+
+// SendOwnerWelcome sends a welcome email to a new account owner after they
+// verify their email. No personalized name or clinic-context greeting because
+// the owner has not gone through onboarding yet.
+func (s *smtpEmailService) SendOwnerWelcome(ctx context.Context, data *OwnerWelcomeEmailData) error {
+	subject := "Bem-vindo(a) ao Aseno!"
+
+	body, err := s.renderOwnerWelcomeTemplate(data)
+	if err != nil {
+		return fmt.Errorf("failed to render owner welcome template: %w", err)
 	}
 
 	return s.sendEmail(data.RecipientEmail, subject, body)
@@ -262,6 +354,9 @@ func (s *smtpEmailService) renderWelcomeTemplate(data *WelcomeEmailData) (string
             <p style="text-align: center;">
                 <a href="{{.LoginLink}}" class="button">Acessar Sistema</a>
             </p>
+            <p style="margin-top: 24px;">Precisa de ajuda? Fale com a gente no WhatsApp:
+                <a href="https://wa.me/5575982947172">(75) 9 8294-7172</a>.
+            </p>
         </div>
         <div class="footer">
             <p>Este email foi enviado automaticamente. Por favor, nao responda.</p>
@@ -271,6 +366,56 @@ func (s *smtpEmailService) renderWelcomeTemplate(data *WelcomeEmailData) (string
 </html>
 `
 	t, err := template.New("welcome").Parse(tmpl)
+	if err != nil {
+		return "", err
+	}
+
+	var buf bytes.Buffer
+	if err := t.Execute(&buf, data); err != nil {
+		return "", err
+	}
+
+	return buf.String(), nil
+}
+
+func (s *smtpEmailService) renderOwnerWelcomeTemplate(data *OwnerWelcomeEmailData) (string, error) {
+	tmpl := `
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <style>
+        body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+        .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+        .header { background: #4F46E5; color: white; padding: 20px; text-align: center; border-radius: 8px 8px 0 0; }
+        .content { background: #f9fafb; padding: 30px; border-radius: 0 0 8px 8px; }
+        .button { display: inline-block; background: #4F46E5; color: white; padding: 12px 30px; text-decoration: none; border-radius: 6px; margin: 20px 0; }
+        .footer { text-align: center; color: #666; font-size: 12px; margin-top: 20px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Bem-vindo(a) ao Aseno!</h1>
+        </div>
+        <div class="content">
+            <p>Seu email foi confirmado e sua conta esta pronta para uso.</p>
+            <p>Faca login para terminar de configurar sua clinica e comecar a receber agendamentos.</p>
+            <p style="text-align: center;">
+                <a href="{{.LoginLink}}" class="button">Acessar o Aseno</a>
+            </p>
+            <p style="margin-top: 24px;">Precisa de ajuda? Fale com a gente no WhatsApp:
+                <a href="https://wa.me/5575982947172">(75) 9 8294-7172</a>.
+            </p>
+        </div>
+        <div class="footer">
+            <p>Este email foi enviado automaticamente. Por favor, nao responda.</p>
+        </div>
+    </div>
+</body>
+</html>
+`
+	t, err := template.New("owner_welcome").Parse(tmpl)
 	if err != nil {
 		return "", err
 	}
@@ -354,11 +499,14 @@ func (s *smtpEmailService) renderEmailVerificationTemplate(data *EmailVerificati
             <h1>Verifique seu Email</h1>
         </div>
         <div class="content">
-            <p>Ola {{.RecipientName}},</p>
-            <p>Obrigado por se cadastrar! Para completar seu registro, por favor verifique seu endereco de email.</p>
+            <p>Obrigado por se cadastrar no Aseno!</p>
+            <p>Para completar seu registro, por favor verifique seu endereco de email.</p>
             <p>Clique no botao abaixo para verificar:</p>
             <p style="text-align: center;">
                 <a href="{{.VerificationLink}}" class="button">Verificar Email</a>
+            </p>
+            <p style="margin-top: 16px;">Problemas para confirmar? Fale com a gente no WhatsApp:
+                <a href="https://wa.me/5575982947172">(75) 9 8294-7172</a>.
             </p>
             <p><small>Este link expira em 24 horas.</small></p>
             <p><small>Se voce nao criou uma conta, ignore este email.</small></p>
@@ -383,6 +531,216 @@ func (s *smtpEmailService) renderEmailVerificationTemplate(data *EmailVerificati
 	return buf.String(), nil
 }
 
+// SendLeadIsca sends the lead isca email with spreadsheet attachments via SMTP
+func (s *smtpEmailService) SendLeadIsca(ctx context.Context, data *LeadIscaEmailData) error {
+	subject := "Seu Kit de Planilhas para Clínicas — Aseno"
+	body := fmt.Sprintf(`
+<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"></head>
+<body style="font-family:Arial,sans-serif;">
+	<div style="max-width:520px;margin:0 auto;padding:32px 24px;">
+		<h2 style="color:#0d1b2a;">Olá, %s!</h2>
+		<p style="color:#607d94;font-size:15px;line-height:1.6;">
+			Obrigado por baixar o <strong>Kit de Planilhas para Clínicas</strong> da Aseno.
+		</p>
+		<p style="color:#607d94;font-size:15px;line-height:1.6;">
+			Em anexo você encontra as 3 planilhas prontas para usar.
+		</p>
+		<p style="color:#a0aec0;font-size:12px;text-align:center;">
+			Enviado por <strong>Aseno</strong> — Software de gestão para clínicas
+		</p>
+	</div>
+</body>
+</html>`, data.RecipientName)
+
+	return s.sendEmail(data.RecipientEmail, subject, body)
+}
+
+// SendContactForm sends a contact form submission to the support email via SMTP
+func (s *smtpEmailService) SendContactForm(ctx context.Context, data *ContactFormData) error {
+	subject := fmt.Sprintf("Contato via site — %s", data.Name)
+	body := fmt.Sprintf(`
+<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"></head>
+<body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
+    <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
+        <h2>Nova mensagem de contato</h2>
+        <p><strong>Nome:</strong> %s</p>
+        <p><strong>Email:</strong> %s</p>
+        <p><strong>Mensagem:</strong></p>
+        <p style="background: #f9fafb; padding: 15px; border-radius: 8px;">%s</p>
+    </div>
+</body>
+</html>`, data.Name, data.Email, data.Message)
+
+	return s.sendEmail(s.config.From, subject, body)
+}
+
+// SendBookingConfirmation sends a booking confirmation email
+func (s *smtpEmailService) SendBookingConfirmation(ctx context.Context, data *BookingConfirmationEmailData) error {
+	subject := "Agendamento confirmado — " + data.ClinicName
+
+	body, err := s.renderBookingConfirmationTemplate(data)
+	if err != nil {
+		return fmt.Errorf("failed to render booking confirmation template: %w", err)
+	}
+
+	return s.sendEmail(data.RecipientEmail, subject, body)
+}
+
+func (s *smtpEmailService) renderBookingConfirmationTemplate(data *BookingConfirmationEmailData) (string, error) {
+	tmpl := `
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <style>
+        body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+        .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+        .header { background: #0891b2; color: white; padding: 20px; text-align: center; border-radius: 8px 8px 0 0; }
+        .content { background: #f9fafb; padding: 30px; border-radius: 0 0 8px 8px; }
+        .button { display: inline-block; background: #0891b2; color: white; padding: 12px 30px; text-decoration: none; border-radius: 6px; margin: 20px 0; }
+        .footer { text-align: center; color: #666; font-size: 12px; margin-top: 20px; }
+        .detail { margin: 8px 0; }
+        .label { color: #666; font-size: 14px; }
+        .value { font-weight: bold; color: #333; font-size: 15px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1 style="margin:0;font-size:22px;">Agendamento Confirmado</h1>
+            <p style="margin:4px 0 0;opacity:0.85;font-size:14px;">{{.ClinicName}}</p>
+        </div>
+        <div class="content">
+            <p>Olá, <strong>{{.RecipientName}}</strong>!</p>
+            <p>Seu agendamento foi realizado com sucesso. Confira os detalhes:</p>
+
+            <div style="background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:16px;margin:20px 0;">
+                <div class="detail">
+                    <span class="label">Profissional:</span><br>
+                    <span class="value">{{.ProfessionalName}}</span>
+                </div>
+                <div class="detail">
+                    <span class="label">Data:</span><br>
+                    <span class="value">{{.DateFormatted}}</span>
+                </div>
+                <div class="detail">
+                    <span class="label">Horário:</span><br>
+                    <span class="value">{{.TimeFormatted}}</span>
+                </div>
+            </div>
+
+            <p style="color:#607d94;font-size:14px;">
+                Aguarde a confirmação da clínica. Você receberá uma notificação quando o agendamento for confirmado.
+            </p>
+
+            {{if .PaymentURL}}
+            <div style="background:#fffbeb;border:1px solid #fbbf24;border-radius:8px;padding:16px;margin:20px 0;text-align:center;">
+                <p style="margin:0 0 12px;font-size:14px;color:#92400e;font-weight:600;">Pagamento pendente</p>
+                <p style="margin:0 0 16px;font-size:13px;color:#a16207;">Realize o pagamento para confirmar seu agendamento.</p>
+                <a href="{{.PaymentURL}}" style="display:inline-block;background:#0891b2;color:white;padding:12px 30px;text-decoration:none;border-radius:6px;font-weight:600;font-size:14px;">Pagar agora</a>
+            </div>
+            {{end}}
+
+            {{if .PortalLink}}
+            <p style="text-align:center;margin:28px 0 12px;">
+                <a href="{{.PortalLink}}" class="button">Gerenciar meus agendamentos</a>
+            </p>
+            <p style="text-align:center;color:#a0aec0;font-size:12px;">
+                Crie sua conta para visualizar e gerenciar seus agendamentos online.
+            </p>
+            {{end}}
+        </div>
+        <div class="footer">
+            <p>Agendamento online por <strong>Aseno</strong></p>
+        </div>
+    </div>
+</body>
+</html>`
+
+	t, err := template.New("booking_confirmation").Parse(tmpl)
+	if err != nil {
+		return "", err
+	}
+
+	templateData := struct {
+		RecipientName    string
+		ClinicName       string
+		ProfessionalName string
+		DateFormatted    string
+		TimeFormatted    string
+		PortalLink       string
+	}{
+		RecipientName:    data.RecipientName,
+		ClinicName:       data.ClinicName,
+		ProfessionalName: data.ProfessionalName,
+		DateFormatted:    data.StartTime.Format("02/01/2006"),
+		TimeFormatted:    data.StartTime.Format("15:04") + " - " + data.EndTime.Format("15:04"),
+		PortalLink:       data.PortalLink,
+	}
+
+	var buf bytes.Buffer
+	if err := t.Execute(&buf, templateData); err != nil {
+		return "", err
+	}
+	return buf.String(), nil
+}
+
+// SendPortalEmailVerification sends a portal email verification email
+func (s *smtpEmailService) SendPortalEmailVerification(ctx context.Context, data *PortalEmailVerificationData) error {
+	subject := "Verifique seu email — " + data.ClinicName
+
+	tmpl := `
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <style>
+        body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+        .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+        .header { background: #0891b2; color: white; padding: 20px; text-align: center; border-radius: 8px 8px 0 0; }
+        .content { background: #f9fafb; padding: 30px; border-radius: 0 0 8px 8px; }
+        .button { display: inline-block; background: #0891b2; color: white; padding: 12px 30px; text-decoration: none; border-radius: 6px; margin: 20px 0; }
+        .footer { text-align: center; color: #666; font-size: 12px; margin-top: 20px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1 style="margin:0;font-size:22px;">Verifique seu Email</h1>
+            <p style="margin:4px 0 0;opacity:0.85;font-size:14px;">{{.ClinicName}}</p>
+        </div>
+        <div class="content">
+            <p>Olá!</p>
+            <p>Para ativar sua conta no portal de agendamentos, clique no botão abaixo:</p>
+            <p style="text-align:center;">
+                <a href="{{.VerifyLink}}" class="button">Verificar Email</a>
+            </p>
+            <p style="color:#666;font-size:13px;">Se você não solicitou esta verificação, ignore este email.</p>
+        </div>
+        <div class="footer">
+            <p>Agendamento online por <strong>Aseno</strong></p>
+        </div>
+    </div>
+</body>
+</html>`
+
+	t, err := template.New("portal_verify").Parse(tmpl)
+	if err != nil {
+		return err
+	}
+
+	var buf bytes.Buffer
+	if err := t.Execute(&buf, data); err != nil {
+		return err
+	}
+
+	return s.sendEmail(data.RecipientEmail, subject, buf.String())
+}
+
 // NoOpEmailService is a no-operation email service for development
 type noOpEmailService struct{}
 
@@ -392,25 +750,121 @@ func NewNoOpEmailService() EmailService {
 }
 
 func (s *noOpEmailService) SendInvite(ctx context.Context, data *InviteEmailData) error {
-	fmt.Printf("[EMAIL] Would send invite to %s for %s (link: %s)\n",
-		data.RecipientEmail, data.ClinicName, data.InviteLink)
+	fmt.Printf("[EMAIL] NoOp: invite email to %s for clinic %s (role: %s)\n",
+		data.RecipientEmail, data.ClinicName, data.Role)
 	return nil
 }
 
 func (s *noOpEmailService) SendWelcome(ctx context.Context, data *WelcomeEmailData) error {
-	fmt.Printf("[EMAIL] Would send welcome to %s (%s) for %s\n",
-		data.RecipientEmail, data.RecipientName, data.ClinicName)
+	fmt.Printf("[EMAIL] NoOp: welcome email to %s for clinic %s\n",
+		data.RecipientEmail, data.ClinicName)
 	return nil
 }
 
 func (s *noOpEmailService) SendPasswordReset(ctx context.Context, data *ResetPasswordEmailData) error {
-	fmt.Printf("[EMAIL] Would send password reset to %s (link: %s)\n",
-		data.RecipientEmail, data.ResetLink)
+	fmt.Printf("[EMAIL] NoOp: password reset email to %s\n", data.RecipientEmail)
 	return nil
 }
 
 func (s *noOpEmailService) SendEmailVerification(ctx context.Context, data *EmailVerificationData) error {
-	fmt.Printf("[EMAIL] Would send email verification to %s (%s) (link: %s)\n",
-		data.RecipientEmail, data.RecipientName, data.VerificationLink)
+	fmt.Printf("[EMAIL] NoOp: verification email to %s\n", data.RecipientEmail)
 	return nil
+}
+
+func (s *noOpEmailService) SendOwnerWelcome(ctx context.Context, data *OwnerWelcomeEmailData) error {
+	fmt.Printf("[EMAIL] NoOp: owner welcome email to %s\n", data.RecipientEmail)
+	return nil
+}
+
+func (s *noOpEmailService) SendContactForm(ctx context.Context, data *ContactFormData) error {
+	fmt.Printf("[EMAIL] NoOp: contact form from %s (%s)\n", data.Name, data.Email)
+	return nil
+}
+
+func (s *noOpEmailService) SendBookingConfirmation(ctx context.Context, data *BookingConfirmationEmailData) error {
+	fmt.Printf("[EMAIL] NoOp: booking confirmation to %s at %s with %s\n",
+		data.RecipientEmail, data.ClinicName, data.ProfessionalName)
+	return nil
+}
+
+func (s *noOpEmailService) SendPortalEmailVerification(ctx context.Context, data *PortalEmailVerificationData) error {
+	fmt.Printf("[EMAIL] NoOp: portal verification to %s for %s (link: %s)\n",
+		data.RecipientEmail, data.ClinicName, data.VerifyLink)
+	return nil
+}
+
+func (s *noOpEmailService) SendLeadIsca(ctx context.Context, data *LeadIscaEmailData) error {
+	fmt.Printf("[EMAIL] NoOp: lead isca email to %s (%s) with %d attachments\n",
+		data.RecipientName, data.RecipientEmail, len(data.Attachments))
+	return nil
+}
+
+func (s *noOpEmailService) SendPaymentReminder(ctx context.Context, data *PaymentReminderEmailData) error {
+	fmt.Printf("[EMAIL] NoOp: payment reminder to %s (%s) for plan %s due %s\n",
+		data.RecipientName, data.RecipientEmail, data.PlanTitle, data.DueDate.Format("02/01/2006"))
+	return nil
+}
+
+func (s *noOpEmailService) SendOnboardingLink(ctx context.Context, data *OnboardingLinkEmailData) error {
+	fmt.Printf("[EMAIL] NoOp: onboarding link to %s (%s) -> %s (expires %s)\n",
+		data.RecipientName, data.RecipientEmail, data.OnboardingLink, data.ExpiresAt.Format(time.RFC3339))
+	return nil
+}
+
+// SendOnboardingLink (SMTP) — fallback path used when Brevo isn't configured.
+// We send a minimal HTML body with the magic link so the flow keeps working.
+func (s *smtpEmailService) SendOnboardingLink(ctx context.Context, data *OnboardingLinkEmailData) error {
+	subject := "Seu link de acesso ao Aseno"
+	body := fmt.Sprintf(`<!doctype html><html><body style="font-family:Arial,sans-serif;color:#0B1D2E;">
+<p>Olá%s,</p>
+<p>Clique no link abaixo para criar sua conta e começar seu teste de 14 dias:</p>
+<p><a href="%s" style="display:inline-block;background:#006BFF;color:#fff;padding:12px 20px;border-radius:8px;text-decoration:none;font-weight:600;">Criar minha conta</a></p>
+<p style="font-size:13px;color:#607d94;">Ou copie o endereço: %s</p>
+<p style="font-size:12px;color:#a0aec0;">Este link expira em %s.</p>
+</body></html>`,
+		nameSuffix(data.RecipientName),
+		data.OnboardingLink,
+		data.OnboardingLink,
+		data.ExpiresAt.Format("02/01/2006 15:04"),
+	)
+	return s.sendEmail(data.RecipientEmail, subject, body)
+}
+
+func nameSuffix(name string) string {
+	if name == "" {
+		return ""
+	}
+	return ", " + name
+}
+
+// SendPaymentReminder sends a monthly payment due-date reminder via SMTP.
+func (s *smtpEmailService) SendPaymentReminder(ctx context.Context, data *PaymentReminderEmailData) error {
+	dateFormatted := data.DueDate.Format("02/01/2006")
+	amountLine := ""
+	if data.Amount > 0 {
+		amountLine = fmt.Sprintf(`<p style="margin:4px 0;color:#334155;font-size:14px;"><strong>Valor:</strong> R$ %.2f</p>`, data.Amount)
+	}
+	subject := fmt.Sprintf("Lembrete de mensalidade — %s", data.ClinicName)
+	body := fmt.Sprintf(`
+<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"></head>
+<body style="font-family:Arial,sans-serif;">
+	<div style="max-width:520px;margin:0 auto;padding:32px 24px;">
+		<h2 style="color:#0d1b2a;">Olá, %s!</h2>
+		<p style="color:#607d94;font-size:15px;line-height:1.6;">
+			Lembrete da mensalidade do plano <strong>%s</strong> da <strong>%s</strong>.
+		</p>
+		<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:16px;margin:20px 0;">
+			<p style="margin:4px 0;color:#334155;font-size:14px;"><strong>Vencimento:</strong> %s</p>
+			%s
+		</div>
+		<p style="color:#a0aec0;font-size:12px;text-align:center;">
+			Enviado por <strong>aseno</strong>
+		</p>
+	</div>
+</body>
+</html>`, data.RecipientName, data.PlanTitle, data.ClinicName, dateFormatted, amountLine)
+
+	return s.sendEmail(data.RecipientEmail, subject, body)
 }

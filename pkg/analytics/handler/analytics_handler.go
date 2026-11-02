@@ -19,6 +19,7 @@ type AnalyticsHandler interface {
 	GetBestSlots(c *gin.Context)
 	GetWorstSlots(c *gin.Context)
 	GetReportMetrics(c *gin.Context)
+	GetFinancialReport(c *gin.Context)
 }
 
 // analyticsHandler implements AnalyticsHandler
@@ -39,6 +40,7 @@ func (h *analyticsHandler) RegisterRoutes(router gin.IRouter) {
 		analytics.GET("/slots/best", h.GetBestSlots)
 		analytics.GET("/slots/worst", h.GetWorstSlots)
 		analytics.GET("/reports", h.GetReportMetrics)
+		analytics.GET("/financial", h.GetFinancialReport)
 	}
 }
 
@@ -162,4 +164,31 @@ func (h *analyticsHandler) GetReportMetrics(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, metrics)
+}
+
+// GetFinancialReport handles getting the financial report
+func (h *analyticsHandler) GetFinancialReport(c *gin.Context) {
+	clinicID, _ := c.Get("clinic_id")
+
+	filter := &model.FinancialFilter{
+		Month: c.Query("month"),
+	}
+
+	if professionalIDStr := c.Query("professional_id"); professionalIDStr != "" {
+		professionalID, err := uuid.Parse(professionalIDStr)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, errors.ToResponse(errors.ErrValidationInstance.WithMessage("Indentificador de profissional inválido")))
+			return
+		}
+		filter.ProfessionalID = &professionalID
+	}
+
+	report, err := h.service.GetFinancialReport(c.Request.Context(), clinicID.(uuid.UUID), filter)
+	if err != nil {
+		statusCode := errors.GetStatusCode(err)
+		c.JSON(statusCode, errors.ToResponse(err))
+		return
+	}
+
+	c.JSON(http.StatusOK, report)
 }

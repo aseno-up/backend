@@ -16,14 +16,12 @@ type ClinicRepository interface {
 	GetByID(ctx context.Context, id uuid.UUID) (*model.Clinic, error)
 	GetBySlug(ctx context.Context, slug string) (*model.Clinic, error)
 	GetByEmail(ctx context.Context, email string) (*model.Clinic, error)
-	GetByWhatsAppInstance(ctx context.Context, instance string) (*model.Clinic, error)
 	Update(ctx context.Context, clinic *model.Clinic) error
 	Delete(ctx context.Context, id uuid.UUID) error
 	List(ctx context.Context, limit, offset int) ([]*model.Clinic, int64, error)
 	ExistsBySlug(ctx context.Context, slug string) (bool, error)
 	ExistsByEmail(ctx context.Context, email string) (bool, error)
-	UpdateWhatsAppInstance(ctx context.Context, id uuid.UUID, instance string) error
-	UpdateWhatsAppConnected(ctx context.Context, id uuid.UUID, connected bool) error
+	CountByAccountID(ctx context.Context, accountID uuid.UUID) (int64, error)
 }
 
 // clinicRepository implements ClinicRepository
@@ -36,6 +34,48 @@ func NewClinicRepository(db *gorm.DB) ClinicRepository {
 	return &clinicRepository{db: db}
 }
 
+// clinicWithConnections is a helper struct for scanning JOIN results
+type clinicWithConnections struct {
+	model.Clinic
+	WaConnected *bool `gorm:"column:wa_connected"`
+	GcConnected *bool `gorm:"column:gc_connected"`
+}
+
+// getWithConnections executes a JOIN query to populate computed connection fields
+func (r *clinicRepository) getWithConnections(ctx context.Context, whereClause string, args ...any) (*model.Clinic, error) {
+	var row clinicWithConnections
+	result := r.db.WithContext(ctx).
+		Table("clinics c").
+		Preload("Account").
+		Preload("Account.Plan").
+		Select(`c.*,
+			(SELECT connected FROM whatsapp_connections wc
+			 WHERE wc.clinic_id = c.id AND wc.is_active = true AND wc.deleted_at IS NULL
+			 LIMIT 1) AS wa_connected,
+			(SELECT CASE WHEN COUNT(*) > 0 THEN true ELSE false END
+			 FROM calendar_integrations ci
+			 WHERE ci.clinic_id = c.id AND ci.deleted_at IS NULL) AS gc_connected`).
+		Where(whereClause, args...).
+		Where("c.deleted_at IS NULL").
+		First(&row)
+
+	if result.Error != nil {
+		if result.Error == gorm.ErrRecordNotFound {
+			return nil, errors.ErrClinicNotFoundInstance
+		}
+		return nil, errors.ErrInternalInstance.WithError(result.Error)
+	}
+
+	clinic := &row.Clinic
+	if row.WaConnected != nil {
+		clinic.WhatsAppConnected = *row.WaConnected
+	}
+	if row.GcConnected != nil {
+		clinic.GoogleConnected = *row.GcConnected
+	}
+	return clinic, nil
+}
+
 // Create creates a new clinic
 func (r *clinicRepository) Create(ctx context.Context, clinic *model.Clinic) error {
 	result := r.db.WithContext(ctx).Create(clinic)
@@ -45,36 +85,20 @@ func (r *clinicRepository) Create(ctx context.Context, clinic *model.Clinic) err
 	return nil
 }
 
-// GetByID retrieves a clinic by ID
+// GetByID retrieves a clinic by ID (with computed WhatsAppConnected and GoogleConnected)
 func (r *clinicRepository) GetByID(ctx context.Context, id uuid.UUID) (*model.Clinic, error) {
-	var clinic model.Clinic
-	result := r.db.WithContext(ctx).Where("id = ? AND deleted_at IS NULL", id).First(&clinic)
-	if result.Error != nil {
-		if result.Error == gorm.ErrRecordNotFound {
-			return nil, errors.ErrClinicNotFoundInstance
-		}
-		return nil, errors.ErrInternalInstance.WithError(result.Error)
-	}
-	return &clinic, nil
+	return r.getWithConnections(ctx, "c.id = ?", id)
 }
 
-// GetBySlug retrieves a clinic by slug
+// GetBySlug retrieves a clinic by slug (with computed WhatsAppConnected and GoogleConnected)
 func (r *clinicRepository) GetBySlug(ctx context.Context, slug string) (*model.Clinic, error) {
-	var clinic model.Clinic
-	result := r.db.WithContext(ctx).Where("slug = ? AND deleted_at IS NULL", slug).First(&clinic)
-	if result.Error != nil {
-		if result.Error == gorm.ErrRecordNotFound {
-			return nil, errors.ErrClinicNotFoundInstance
-		}
-		return nil, errors.ErrInternalInstance.WithError(result.Error)
-	}
-	return &clinic, nil
+	return r.getWithConnections(ctx, "c.slug = ?", slug)
 }
 
 // GetByEmail retrieves a clinic by email
 func (r *clinicRepository) GetByEmail(ctx context.Context, email string) (*model.Clinic, error) {
 	var clinic model.Clinic
-	result := r.db.WithContext(ctx).Where("email = ? AND deleted_at IS NULL", email).First(&clinic)
+	result := r.db.WithContext(ctx).Preload("Account").Where("email = ? AND deleted_at IS NULL", email).First(&clinic)
 	if result.Error != nil {
 		if result.Error == gorm.ErrRecordNotFound {
 			return nil, errors.ErrClinicNotFoundInstance
@@ -115,8 +139,8 @@ func (r *clinicRepository) List(ctx context.Context, limit, offset int) ([]*mode
 		return nil, 0, errors.ErrInternalInstance.WithError(err)
 	}
 
-	// Get paginated results
 	result := r.db.WithContext(ctx).
+		Preload("Account").
 		Where("deleted_at IS NULL").
 		Order("created_at DESC").
 		Limit(limit).
@@ -128,6 +152,16 @@ func (r *clinicRepository) List(ctx context.Context, limit, offset int) ([]*mode
 	}
 
 	return clinics, total, nil
+}
+
+// CountByAccountID counts clinics belonging to an account
+func (r *clinicRepository) CountByAccountID(ctx context.Context, accountID uuid.UUID) (int64, error) {
+	var count int64
+	result := r.db.WithContext(ctx).Model(&model.Clinic{}).Where("account_id = ? AND deleted_at IS NULL", accountID).Count(&count)
+	if result.Error != nil {
+		return 0, errors.ErrInternalInstance.WithError(result.Error)
+	}
+	return count, nil
 }
 
 // ExistsBySlug checks if a clinic with the given slug exists
@@ -148,35 +182,4 @@ func (r *clinicRepository) ExistsByEmail(ctx context.Context, email string) (boo
 		return false, errors.ErrInternalInstance.WithError(result.Error)
 	}
 	return count > 0, nil
-}
-
-// GetByWhatsAppInstance retrieves a clinic by WhatsApp instance name
-func (r *clinicRepository) GetByWhatsAppInstance(ctx context.Context, instance string) (*model.Clinic, error) {
-	var clinic model.Clinic
-	result := r.db.WithContext(ctx).Where("whats_app_instance = ? AND deleted_at IS NULL", instance).First(&clinic)
-	if result.Error != nil {
-		if result.Error == gorm.ErrRecordNotFound {
-			return nil, errors.ErrClinicNotFoundInstance
-		}
-		return nil, errors.ErrInternalInstance.WithError(result.Error)
-	}
-	return &clinic, nil
-}
-
-// UpdateWhatsAppInstance updates the clinic's WhatsApp instance name
-func (r *clinicRepository) UpdateWhatsAppInstance(ctx context.Context, id uuid.UUID, instance string) error {
-	result := r.db.WithContext(ctx).Model(&model.Clinic{}).Where("id = ?", id).Update("whats_app_instance", instance)
-	if result.Error != nil {
-		return errors.ErrInternalInstance.WithError(result.Error)
-	}
-	return nil
-}
-
-// UpdateWhatsAppConnected updates the clinic's WhatsApp connection status
-func (r *clinicRepository) UpdateWhatsAppConnected(ctx context.Context, id uuid.UUID, connected bool) error {
-	result := r.db.WithContext(ctx).Model(&model.Clinic{}).Where("id = ?", id).Update("whats_app_connected", connected)
-	if result.Error != nil {
-		return errors.ErrInternalInstance.WithError(result.Error)
-	}
-	return nil
 }

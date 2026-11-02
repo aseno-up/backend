@@ -26,6 +26,18 @@ const (
 	ConversationStateExpired           ConversationState = "EXPIRED"
 )
 
+// Conversation turn roles. "user" and "assistant" are the OpenAI/OpenRouter
+// wire-format names and must stay as such for compatibility with provider
+// payloads. "human_agent" is internal-only — set when a clinic attendant
+// replies to the patient directly via the WhatsApp app, so the prompt builder
+// can render those turns under a distinct label and the LLM doesn't mistake
+// them for the patient nor for itself.
+const (
+	RoleUser       = "user"
+	RoleAssistant  = "assistant"
+	RoleHumanAgent = "human_agent"
+)
+
 // ToolCall represents a function/tool call made by the AI agent
 type ToolCall struct {
 	ID         string                 `json:"id"`               // Unique ID for this tool call
@@ -38,7 +50,7 @@ type ToolCall struct {
 
 // ConversationTurn represents a single turn in the conversation
 type ConversationTurn struct {
-	Role      string     `json:"role"`                 // "user" or "assistant"
+	Role      string     `json:"role"`                 // RoleUser, RoleAssistant or RoleHumanAgent
 	Content   string     `json:"content"`              // Message content
 	ToolCalls []ToolCall `json:"tool_calls,omitempty"` // Tool calls made in this turn
 	Timestamp time.Time  `json:"timestamp"`            // When this turn occurred
@@ -49,10 +61,15 @@ type ConversationHistory []ConversationTurn
 
 // Value implements driver.Valuer for ConversationHistory
 func (h ConversationHistory) Value() (driver.Value, error) {
+	var v interface{} = h
 	if h == nil {
-		return json.Marshal([]ConversationTurn{})
+		v = []ConversationTurn{}
 	}
-	return json.Marshal(h)
+	b, err := json.Marshal(v)
+	if err != nil {
+		return nil, err
+	}
+	return string(b), nil
 }
 
 // Scan implements sql.Scanner for ConversationHistory
@@ -80,10 +97,15 @@ type PendingActions map[string]interface{}
 
 // Value implements driver.Valuer for PendingActions
 func (p PendingActions) Value() (driver.Value, error) {
+	var v interface{} = p
 	if p == nil {
-		return json.Marshal(map[string]interface{}{})
+		v = map[string]interface{}{}
 	}
-	return json.Marshal(p)
+	b, err := json.Marshal(v)
+	if err != nil {
+		return nil, err
+	}
+	return string(b), nil
 }
 
 // Scan implements sql.Scanner for PendingActions
@@ -111,10 +133,15 @@ type ConversationMetadata map[string]interface{}
 
 // Value implements driver.Valuer for ConversationMetadata
 func (m ConversationMetadata) Value() (driver.Value, error) {
+	var v interface{} = m
 	if m == nil {
-		return json.Marshal(map[string]interface{}{})
+		v = map[string]interface{}{}
 	}
-	return json.Marshal(m)
+	b, err := json.Marshal(v)
+	if err != nil {
+		return nil, err
+	}
+	return string(b), nil
 }
 
 // Scan implements sql.Scanner for ConversationMetadata
@@ -167,7 +194,7 @@ func (c *ConversationContext) IsExpired() bool {
 // AddUserTurn adds a user message to the conversation history
 func (c *ConversationContext) AddUserTurn(content string, maxTurns int) {
 	turn := ConversationTurn{
-		Role:      "user",
+		Role:      RoleUser,
 		Content:   content,
 		Timestamp: time.Now(),
 	}
@@ -178,9 +205,22 @@ func (c *ConversationContext) AddUserTurn(content string, maxTurns int) {
 // AddAssistantTurn adds an assistant message to the conversation history
 func (c *ConversationContext) AddAssistantTurn(content string, toolCalls []ToolCall, maxTurns int) {
 	turn := ConversationTurn{
-		Role:      "assistant",
+		Role:      RoleAssistant,
 		Content:   content,
 		ToolCalls: toolCalls,
+		Timestamp: time.Now(),
+	}
+	c.History = append(c.History, turn)
+	c.trimHistory(maxTurns)
+}
+
+// AddHumanAgentTurn records a message that a clinic attendant typed directly
+// to the patient via the WhatsApp app while the AI was paused. Stored under
+// RoleHumanAgent so the prompt builder can render it under a distinct label.
+func (c *ConversationContext) AddHumanAgentTurn(content string, maxTurns int) {
+	turn := ConversationTurn{
+		Role:      RoleHumanAgent,
+		Content:   content,
 		Timestamp: time.Now(),
 	}
 	c.History = append(c.History, turn)
@@ -201,7 +241,7 @@ func (c *ConversationContext) trimHistory(maxTurns int) {
 // GetLastUserMessage returns the last user message content
 func (c *ConversationContext) GetLastUserMessage() string {
 	for i := len(c.History) - 1; i >= 0; i-- {
-		if c.History[i].Role == "user" {
+		if c.History[i].Role == RoleUser {
 			return c.History[i].Content
 		}
 	}
@@ -255,14 +295,14 @@ func (r ToolCallResult) MarshalJSON() ([]byte, error) {
 
 // ToolCallLog represents a log of tool execution for monitoring
 type ToolCallLog struct {
-	ID             uuid.UUID              `json:"id" gorm:"type:uuid;primary_key;default:gen_random_uuid()"`
-	ConversationID uuid.UUID              `json:"conversation_id" gorm:"type:uuid;not null;index"`
-	ToolName       string                 `json:"tool_name" gorm:"type:varchar(100);not null;index"`
-	Parameters     map[string]interface{} `json:"parameters" gorm:"type:jsonb"`
-	Result         ToolCallResult         `json:"result" gorm:"type:jsonb"`
-	Error          string                 `json:"error" gorm:"type:text"`
-	DurationMS     int                    `json:"duration_ms" gorm:"type:int"`
-	CreatedAt      time.Time              `json:"created_at" gorm:"index"`
+	ID             uuid.UUID          `json:"id" gorm:"type:uuid;primary_key;default:gen_random_uuid()"`
+	ConversationID uuid.UUID          `json:"conversation_id" gorm:"type:uuid;not null;index"`
+	ToolName       string             `json:"tool_name" gorm:"type:varchar(100);not null;index"`
+	Parameters     ToolCallParameters `json:"parameters" gorm:"type:jsonb"`
+	Result         ToolCallResult     `json:"result" gorm:"type:jsonb"`
+	Error          string             `json:"error" gorm:"type:text"`
+	DurationMS     int                `json:"duration_ms" gorm:"type:int"`
+	CreatedAt      time.Time          `json:"created_at" gorm:"index"`
 }
 
 // TableName returns the table name for GORM
@@ -275,10 +315,15 @@ type ToolCallParameters map[string]interface{}
 
 // Value implements driver.Valuer for ToolCallParameters
 func (p ToolCallParameters) Value() (driver.Value, error) {
+	var v interface{} = p
 	if p == nil {
-		return json.Marshal(map[string]interface{}{})
+		v = map[string]interface{}{}
 	}
-	return json.Marshal(p)
+	b, err := json.Marshal(v)
+	if err != nil {
+		return nil, err
+	}
+	return string(b), nil
 }
 
 // Scan implements sql.Scanner for ToolCallParameters

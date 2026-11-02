@@ -37,6 +37,9 @@ WORKDIR /app
 # Copy binary from builder
 COPY --from=builder /app/api .
 
+# Copy spreadsheet assets for lead isca emails
+COPY --from=builder /app/sheets ./sheets
+
 # Copy timezone data
 COPY --from=builder /usr/share/zoneinfo /usr/share/zoneinfo
 

@@ -105,6 +105,38 @@ func (r *RateLimiter) RecordMessageSent(ctx context.Context, clinicID string, ph
 	return r.client.Set(ctx, key, value, ttl).Err()
 }
 
+// RecordSentMessageID stores the provider's message ID so that the fromMe
+// webhook echo can be recognized as "sent by us" rather than "human takeover".
+// Uses a short TTL (typically 5 minutes) because the echo arrives within
+// seconds of sending.
+func (r *RateLimiter) RecordSentMessageID(ctx context.Context, externalID string, ttl time.Duration) error {
+	if r.client == nil || externalID == "" {
+		return nil
+	}
+	key := sentMessageKey(externalID)
+	return r.client.Set(ctx, key, "1", ttl).Err()
+}
+
+// IsOurSentMessage reports whether the given externalID was recorded by this
+// system as an outbound message. When Redis is unavailable returns (false,
+// false) — callers must treat "unavailable" as "don't pause" to avoid false
+// positives where every AI reply looks like a human takeover.
+func (r *RateLimiter) IsOurSentMessage(ctx context.Context, externalID string) (found bool, redisAvailable bool) {
+	if r.client == nil || externalID == "" {
+		return false, false
+	}
+	n, err := r.client.Exists(ctx, sentMessageKey(externalID)).Result()
+	if err != nil {
+		logger.Printf("[Redis] Error checking sent message ID: %v", err)
+		return false, false
+	}
+	return n > 0, true
+}
+
+func sentMessageKey(externalID string) string {
+	return fmt.Sprintf("whatsapp:sent:%s", externalID)
+}
+
 // Close closes the Redis connection
 func (r *RateLimiter) Close() error {
 	if r.client != nil {

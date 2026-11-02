@@ -8,6 +8,8 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/aseno/backend/internal/errors"
+	audit_model "github.com/aseno/backend/pkg/audit/model"
+	audit_service "github.com/aseno/backend/pkg/audit/service"
 	"github.com/aseno/backend/pkg/clinic/model"
 	"github.com/aseno/backend/pkg/clinic/service"
 )
@@ -15,19 +17,25 @@ import (
 // ClinicHandler defines the interface for clinic handlers
 type ClinicHandler interface {
 	RegisterRoutes(router gin.IRouter)
+	RegisterAdminLookupRoutes(router gin.IRouter)
 	GetClinic(c *gin.Context)
 	UpdateClinic(c *gin.Context)
+	ListLookup(c *gin.Context)
 }
 
 // clinicHandler implements ClinicHandler
 type clinicHandler struct {
-	service service.ClinicService
+	service  service.ClinicService
+	auditSvc audit_service.AuditService
 }
 
-// NewClinicHandler creates a new clinic handler
-func NewClinicHandler(service service.ClinicService) ClinicHandler {
+// NewClinicHandler creates a new clinic handler. The audit service may be nil
+// in test wiring; when set, settings changes emit an AuditEntitySettings
+// UPDATE record with old and new values so the trail is auditable.
+func NewClinicHandler(service service.ClinicService, auditSvc audit_service.AuditService) ClinicHandler {
 	return &clinicHandler{
-		service: service,
+		service:  service,
+		auditSvc: auditSvc,
 	}
 }
 
@@ -38,6 +46,23 @@ func (h *clinicHandler) RegisterRoutes(router gin.IRouter) {
 		clinic.GET("", h.GetClinic)
 		clinic.PUT("", h.UpdateClinic)
 	}
+}
+
+// RegisterAdminLookupRoutes exposes the {id, name} lookup used by admin
+// tooling (Usage Metrics page). Mount this on the admin (dev-only) group;
+// it returns ALL clinics, so it must NOT be reachable by tenant users.
+func (h *clinicHandler) RegisterAdminLookupRoutes(router gin.IRouter) {
+	router.GET("/clinics", h.ListLookup)
+}
+
+// ListLookup returns a flat {id, name} list of all clinics.
+func (h *clinicHandler) ListLookup(c *gin.Context) {
+	list, err := h.service.ListLookup(c.Request.Context())
+	if err != nil {
+		c.JSON(errors.GetStatusCode(err), errors.ToResponse(err))
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": list})
 }
 
 // GetClinic returns the current clinic information
@@ -93,11 +118,26 @@ func (h *clinicHandler) UpdateClinic(c *gin.Context) {
 		return
 	}
 
+	var oldData interface{}
+	if h.auditSvc != nil {
+		if old, err := h.service.GetByID(c.Request.Context(), clinicID.(uuid.UUID)); err == nil {
+			oldData = old
+		}
+	}
+
 	clinic, err := h.service.Update(c.Request.Context(), clinicID.(uuid.UUID), &req)
 	if err != nil {
 		statusCode := errors.GetStatusCode(err)
 		c.JSON(statusCode, errors.ToResponse(err))
 		return
+	}
+
+	if h.auditSvc != nil {
+		entity := audit_model.AuditEntityClinic
+		if req.Settings != nil {
+			entity = audit_model.AuditEntitySettings
+		}
+		_ = h.auditSvc.LogFromGin(c, audit_model.AuditActionUpdate, entity, clinicID.(uuid.UUID).String(), oldData, clinic)
 	}
 
 	c.JSON(http.StatusOK, clinic)

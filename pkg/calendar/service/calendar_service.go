@@ -8,6 +8,8 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/aseno/backend/internal/errors"
+	"github.com/aseno/backend/internal/planlimit"
+	account_model "github.com/aseno/backend/pkg/account/model"
 	"github.com/aseno/backend/pkg/calendar/model"
 	clinic_model "github.com/aseno/backend/pkg/clinic/model"
 	clinic_repository "github.com/aseno/backend/pkg/clinic/repository"
@@ -36,6 +38,7 @@ type IntegrationRepository interface {
 	Delete(ctx context.Context, clinicID uuid.UUID) error
 	UpdateTokens(ctx context.Context, clinicID uuid.UUID, accessToken, refreshToken string, expiry time.Time) error
 	UpdateLastSync(ctx context.Context, clinicID uuid.UUID, lastSyncAt time.Time, syncError string) error
+	CountByClinicID(ctx context.Context, clinicID uuid.UUID) (int64, error)
 }
 
 // SyncRepository defines the interface for calendar sync persistence
@@ -103,17 +106,70 @@ func NewCalendarService(
 	}
 }
 
+// checkCalendarLimit validates that the account has not exceeded its Google Calendar integration limit.
+// Trial users bypass plan restrictions. Existing integrations always pass (reconnect flow), so
+// admin overrides survive plan downgrades. Gating is purely on MaxGoogleCalendars (not plan slug),
+// so a manual bump on a basic-plan account lets the user connect.
+func (s *calendarService) checkCalendarLimit(ctx context.Context, clinic *clinic_model.Clinic) error {
+	if clinic.Account == nil {
+		return nil
+	}
+
+	if clinic.Account.SubscriptionStatus == account_model.SubscriptionStatusTrial {
+		return nil
+	}
+
+	limit := clinic.Account.MaxGoogleCalendars
+	if planlimit.IsUnlimited(limit) {
+		return nil
+	}
+
+	_, existingErr := s.integrationRepo.GetByClinicID(ctx, clinic.ID)
+	hasExisting := existingErr == nil
+
+	count, err := s.integrationRepo.CountByClinicID(ctx, clinic.ID)
+	if err != nil {
+		return err
+	}
+
+	return classifyCalendarLimitError(limit, count, hasExisting)
+}
+
+// classifyCalendarLimitError returns the user-facing error when a new Google Calendar
+// integration would exceed the account's allotment. Returns nil when the connection
+// should proceed.
+//
+// Why two distinct messages: limit==0 means the plan tier doesn't include the feature
+// (action: upgrade), while count>=limit on a paid plan means the user hit their
+// allotment (action: upgrade or disconnect an existing one). The previous version
+// collapsed both into a single VALIDATION error whose message the frontend's
+// errorMap swallowed and replaced with "Dados inválidos.". Both cases now surface
+// as UPGRADE_REQUIRED (403), which has no frontend translation override, so the
+// specific message reaches the toast.
+func classifyCalendarLimitError(limit int, count int64, hasExisting bool) error {
+	if hasExisting {
+		return nil
+	}
+	if limit == 0 {
+		return errors.ErrUpgradeRequiredInstance.WithMessage(
+			"Seu plano atual não inclui a integração com o Google Calendar. Faça upgrade para o plano Profissional ou superior para liberar.")
+	}
+	if int(count) >= limit {
+		return errors.ErrUpgradeRequiredInstance.WithMessage(fmt.Sprintf(
+			"Você já atingiu o limite de %d integração(ões) com Google Calendar do seu plano. Desconecte uma integração existente ou faça upgrade para adicionar outra.", limit))
+	}
+	return nil
+}
+
 // GetAuthURL returns the Google OAuth authorization URL
 func (s *calendarService) GetAuthURL(ctx context.Context, clinicID uuid.UUID) (string, error) {
-	// Check plan limit (trial users have full access)
 	clinic, err := s.clinicRepo.GetByID(ctx, clinicID)
 	if err != nil {
 		return "", err
 	}
 
-	// Allow access for trial users or non-basic plans
-	if clinic.Plan == clinic_model.PlanTypeBasic && clinic.SubscriptionStatus != clinic_model.SubscriptionStatusTrial {
-		return "", errors.ErrValidationInstance.WithMessage("Integração com Google Calendar disponível apenas nos planos Profissional e Avançado.")
+	if err := s.checkCalendarLimit(ctx, clinic); err != nil {
+		return "", err
 	}
 
 	return s.client.GetAuthURL(clinicID.String()), nil
@@ -121,15 +177,13 @@ func (s *calendarService) GetAuthURL(ctx context.Context, clinicID uuid.UUID) (s
 
 // HandleCallback handles the OAuth callback and saves the integration
 func (s *calendarService) HandleCallback(ctx context.Context, clinicID uuid.UUID, code string) (*model.CalendarIntegration, error) {
-	// Check plan limit (trial users have full access)
 	clinic, err := s.clinicRepo.GetByID(ctx, clinicID)
 	if err != nil {
 		return nil, err
 	}
 
-	// Allow access for trial users or non-basic plans
-	if clinic.Plan == clinic_model.PlanTypeBasic && clinic.SubscriptionStatus != clinic_model.SubscriptionStatusTrial {
-		return nil, errors.ErrValidationInstance.WithMessage("Integração com Google Calendar disponível apenas nos planos Profissional e Avançado.")
+	if err := s.checkCalendarLimit(ctx, clinic); err != nil {
+		return nil, err
 	}
 
 	// Exchange code for tokens

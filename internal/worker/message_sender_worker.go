@@ -13,17 +13,25 @@ import (
 	"github.com/aseno/backend/internal/queue"
 	"github.com/aseno/backend/internal/redis"
 	clinic_repository "github.com/aseno/backend/pkg/clinic/repository"
+	whatsapp_model "github.com/aseno/backend/pkg/whatsapp/model"
 	whatsapp_service "github.com/aseno/backend/pkg/whatsapp/service"
 )
 
+// whatsAppSender captures the sending capability used by MessageSenderWorker,
+// so tests don't need to implement the full WhatsAppService interface.
+type whatsAppSender interface {
+	SendTextMessage(ctx context.Context, instance, phone, message string) (*whatsapp_model.SendMessageResponse, error)
+}
+
 // MessageSenderWorker consumes messages from the queue and sends them via WhatsApp
 type MessageSenderWorker struct {
-	config          *config.WorkerConfig
-	queue           queue.Queue
-	whatsappService whatsapp_service.WhatsAppService
-	rateLimiter     *redis.RateLimiter
-	clinicRepo      clinic_repository.ClinicRepository
-	stopCh          chan struct{}
+	config              *config.WorkerConfig
+	queue               queue.Queue
+	whatsappService     whatsAppSender
+	rateLimiter         *redis.RateLimiter
+	clinicRepo          clinic_repository.ClinicRepository
+	subscriptionChecker ClinicSubscriptionChecker
+	stopCh              chan struct{}
 
 	// Stats
 	messagesSent    int64
@@ -31,11 +39,15 @@ type MessageSenderWorker struct {
 	messagesRetried int64
 }
 
+// Compile-time check: the concrete whatsapp service must satisfy the narrow
+// sender interface.
+var _ whatsAppSender = (whatsapp_service.WhatsAppService)(nil)
+
 // NewMessageSenderWorker creates a new message sender worker
 func NewMessageSenderWorker(
 	cfg *config.WorkerConfig,
 	q queue.Queue,
-	whatsappService whatsapp_service.WhatsAppService,
+	whatsappService whatsAppSender,
 	rateLimiter *redis.RateLimiter,
 	clinicRepo clinic_repository.ClinicRepository,
 ) *MessageSenderWorker {
@@ -47,6 +59,12 @@ func NewMessageSenderWorker(
 		clinicRepo:      clinicRepo,
 		stopCh:          make(chan struct{}),
 	}
+}
+
+// SetSubscriptionChecker wires a checker so messages for clinics without an
+// active subscription are dropped instead of being sent to patients.
+func (w *MessageSenderWorker) SetSubscriptionChecker(checker ClinicSubscriptionChecker) {
+	w.subscriptionChecker = checker
 }
 
 // Start starts the message sender worker
@@ -80,6 +98,23 @@ func (w *MessageSenderWorker) Stop() {
 func (w *MessageSenderWorker) processMessage(job *queue.MessageJob) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+
+	// Subscription gate: drop messages for clinics without an active
+	// subscription. Return nil to ack/consume so the job doesn't requeue; if
+	// the clinic reactivates, new messages will be enqueued from scratch.
+	if w.subscriptionChecker != nil {
+		if clinicID, err := uuid.Parse(job.ClinicID); err == nil {
+			active, checkErr := w.subscriptionChecker.IsSubscriptionActive(ctx, clinicID)
+			if checkErr != nil {
+				logger.Printf("[MessageSender] Subscription check failed for clinic %s: %v — dropping message", clinicID, checkErr)
+				return nil
+			}
+			if !active {
+				logger.Printf("[MessageSender] Clinic %s has no active subscription, dropping %s message to %s", clinicID, job.MessageType, job.Phone)
+				return nil
+			}
+		}
+	}
 
 	// Get clinic-specific delay settings (clinic overrides env default)
 	minDelaySeconds := w.config.MinDelayBetweenPatientsSeconds

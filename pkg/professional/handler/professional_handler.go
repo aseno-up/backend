@@ -2,14 +2,19 @@ package handler
 
 import (
 	"net/http"
-	"strconv"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 
 	"github.com/aseno/backend/internal/errors"
+	audit_model "github.com/aseno/backend/pkg/audit/model"
+	audit_service "github.com/aseno/backend/pkg/audit/service"
+	invite_model "github.com/aseno/backend/pkg/invite/model"
+	invite_service "github.com/aseno/backend/pkg/invite/service"
+	"github.com/aseno/backend/pkg/pagination"
 	"github.com/aseno/backend/pkg/professional/model"
 	"github.com/aseno/backend/pkg/professional/service"
+	user_model "github.com/aseno/backend/pkg/user/model"
 )
 
 // ProfessionalHandler defines the interface for professional handlers
@@ -20,16 +25,20 @@ type ProfessionalHandler interface {
 	List(c *gin.Context)
 	Update(c *gin.Context)
 	Delete(c *gin.Context)
+	Restore(c *gin.Context)
+	BulkDelete(c *gin.Context)
 }
 
 // professionalHandler implements ProfessionalHandler
 type professionalHandler struct {
-	service service.ProfessionalService
+	service   service.ProfessionalService
+	inviteSvc invite_service.InviteService
+	auditSvc  audit_service.AuditService
 }
 
 // NewProfessionalHandler creates a new professional handler
-func NewProfessionalHandler(service service.ProfessionalService) ProfessionalHandler {
-	return &professionalHandler{service: service}
+func NewProfessionalHandler(service service.ProfessionalService, inviteSvc invite_service.InviteService, auditSvc audit_service.AuditService) ProfessionalHandler {
+	return &professionalHandler{service: service, inviteSvc: inviteSvc, auditSvc: auditSvc}
 }
 
 // RegisterRoutes registers professional routes
@@ -41,27 +50,92 @@ func (h *professionalHandler) RegisterRoutes(router gin.IRouter) {
 		professionals.GET("/:id", h.GetByID)
 		professionals.PUT("/:id", h.Update)
 		professionals.DELETE("/:id", h.Delete)
+		professionals.POST("/:id/restore", h.Restore)
+		professionals.POST("/bulk-delete", h.BulkDelete)
 	}
 }
 
-// Create handles creating a new professional
-func (h *professionalHandler) Create(c *gin.Context) {
+// Restore re-activates a previously deactivated professional.
+func (h *professionalHandler) Restore(c *gin.Context) {
 	clinicID, _ := c.Get("clinic_id")
 
-	var req model.CreateProfessionalRequest
+	id, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, errors.ToResponse(errors.ErrValidationInstance.WithMessage("Invalid professional ID")))
+		return
+	}
+
+	if err := h.service.Restore(c.Request.Context(), id, clinicID.(uuid.UUID)); err != nil {
+		statusCode := errors.GetStatusCode(err)
+		c.JSON(statusCode, errors.ToResponse(err))
+		return
+	}
+
+	if h.auditSvc != nil {
+		_ = h.auditSvc.LogFromGin(c, audit_model.AuditActionUpdate, audit_model.AuditEntityProfessional, id.String(), nil, map[string]interface{}{"is_active": true})
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Professional restored successfully"})
+}
+
+// createProfessionalRequest represents the new POST /professionals request
+// Either email (sends invite) or user_id (links to existing user) must be provided
+type createProfessionalRequest struct {
+	Email  string     `json:"email" binding:"omitempty,email"`
+	UserID *uuid.UUID `json:"user_id"`
+}
+
+// Create handles creating a new professional via invite (email) or linking to existing user (user_id)
+func (h *professionalHandler) Create(c *gin.Context) {
+	clinicID, _ := c.Get("clinic_id")
+	userID, _ := c.Get("user_id")
+
+	var req createProfessionalRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, errors.ToResponse(errors.ErrValidationInstance.WithError(err)))
 		return
 	}
 
-	professional, err := h.service.Create(c.Request.Context(), clinicID.(uuid.UUID), &req)
+	if req.Email == "" && req.UserID == nil {
+		c.JSON(http.StatusBadRequest, errors.ToResponse(errors.ErrValidationInstance.WithMessage(
+			"Informe o email para enviar convite ou o user_id para vincular a um usuário existente")))
+		return
+	}
+
+	ctx := c.Request.Context()
+
+	if req.UserID != nil {
+		// Option 2: Link to existing user (owner/admin)
+		professional, err := h.service.CreateForExistingUser(ctx, clinicID.(uuid.UUID), *req.UserID)
+		if err != nil {
+			statusCode := errors.GetStatusCode(err)
+			c.JSON(statusCode, errors.ToResponse(err))
+			return
+		}
+
+		if h.auditSvc != nil {
+			_ = h.auditSvc.LogFromGin(c, audit_model.AuditActionCreate, audit_model.AuditEntityProfessional, professional.ID.String(), nil, professional)
+		}
+
+		c.JSON(http.StatusCreated, professional)
+		return
+	}
+
+	// Option 1: Send invite by email
+	inviteReq := &invite_model.CreateInviteRequest{
+		Email:               req.Email,
+		Role:                user_model.UserRoleProfessional,
+		NewProfessionalName: req.Email, // Will be updated when user accepts invite
+	}
+
+	invite, err := h.inviteSvc.CreateInvite(ctx, clinicID.(uuid.UUID), userID.(uuid.UUID), inviteReq)
 	if err != nil {
 		statusCode := errors.GetStatusCode(err)
 		c.JSON(statusCode, errors.ToResponse(err))
 		return
 	}
 
-	c.JSON(http.StatusCreated, professional)
+	c.JSON(http.StatusCreated, invite)
 }
 
 // GetByID handles getting a professional by ID
@@ -89,11 +163,19 @@ func (h *professionalHandler) GetByID(c *gin.Context) {
 func (h *professionalHandler) List(c *gin.Context) {
 	clinicID, _ := c.Get("clinic_id")
 
-	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	perPage, _ := strconv.Atoi(c.DefaultQuery("per_page", "20"))
-	activeOnly := c.DefaultQuery("active_only", "false") == "true"
+	var filter pagination.Filter
+	if err := c.ShouldBindQuery(&filter); err != nil {
+		c.JSON(http.StatusBadRequest, errors.ToResponse(errors.ErrValidationInstance.WithError(err)))
+		return
+	}
 
-	result, err := h.service.List(c.Request.Context(), clinicID.(uuid.UUID), activeOnly, page, perPage)
+	// Legacy support for activeOnly (if front-end didn't send ?status=active)
+	activeOnly := c.DefaultQuery("active_only", "")
+	if activeOnly == "true" && filter.Status == "" {
+		filter.Status = "active"
+	}
+
+	result, err := h.service.List(c.Request.Context(), clinicID.(uuid.UUID), filter)
 	if err != nil {
 		statusCode := errors.GetStatusCode(err)
 		c.JSON(statusCode, errors.ToResponse(err))
@@ -120,11 +202,22 @@ func (h *professionalHandler) Update(c *gin.Context) {
 		return
 	}
 
+	// Get old data for audit
+	var oldData interface{}
+	if h.auditSvc != nil {
+		old, _ := h.service.GetByID(c.Request.Context(), id, clinicID.(uuid.UUID))
+		oldData = old
+	}
+
 	professional, err := h.service.Update(c.Request.Context(), id, clinicID.(uuid.UUID), &req)
 	if err != nil {
 		statusCode := errors.GetStatusCode(err)
 		c.JSON(statusCode, errors.ToResponse(err))
 		return
+	}
+
+	if h.auditSvc != nil {
+		_ = h.auditSvc.LogFromGin(c, audit_model.AuditActionUpdate, audit_model.AuditEntityProfessional, id.String(), oldData, professional)
 	}
 
 	c.JSON(http.StatusOK, professional)
@@ -141,11 +234,50 @@ func (h *professionalHandler) Delete(c *gin.Context) {
 		return
 	}
 
+	// Get old data for audit
+	var oldData interface{}
+	if h.auditSvc != nil {
+		old, _ := h.service.GetByID(c.Request.Context(), id, clinicID.(uuid.UUID))
+		oldData = old
+	}
+
 	if err := h.service.Delete(c.Request.Context(), id, clinicID.(uuid.UUID)); err != nil {
 		statusCode := errors.GetStatusCode(err)
 		c.JSON(statusCode, errors.ToResponse(err))
 		return
 	}
 
+	if h.auditSvc != nil {
+		_ = h.auditSvc.LogFromGin(c, audit_model.AuditActionDelete, audit_model.AuditEntityProfessional, id.String(), oldData, nil)
+	}
+
 	c.JSON(http.StatusOK, gin.H{"message": "Professional deleted successfully"})
+}
+
+// BulkDelete handles deleting multiple professionals
+func (h *professionalHandler) BulkDelete(c *gin.Context) {
+	clinicID, _ := c.Get("clinic_id")
+
+	var req struct {
+		IDs []uuid.UUID `json:"ids" binding:"required,min=1"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, errors.ToResponse(errors.ErrValidationInstance.WithError(err)))
+		return
+	}
+
+	if err := h.service.BulkDelete(c.Request.Context(), req.IDs, clinicID.(uuid.UUID)); err != nil {
+		statusCode := errors.GetStatusCode(err)
+		c.JSON(statusCode, errors.ToResponse(err))
+		return
+	}
+
+	if h.auditSvc != nil {
+		for _, id := range req.IDs {
+			_ = h.auditSvc.LogFromGin(c, audit_model.AuditActionDelete, audit_model.AuditEntityProfessional, id.String(), nil, nil)
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Professionals deleted successfully"})
 }

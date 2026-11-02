@@ -22,6 +22,9 @@ type Config struct {
 	JWTAccessTokenTTL  int // minutes
 	JWTRefreshTokenTTL int // days
 
+	// Portal JWT (separate secret for patient portal)
+	portalJWTSecret string
+
 	// Google OAuth (private - sensitive)
 	googleClientID        string
 	googleClientSecret    string
@@ -39,6 +42,10 @@ type Config struct {
 	wahaAPIURL string
 	wahaAPIKey string
 
+	// Gupshup Official API (partner-level credentials)
+	gupshupAPIURL string
+	gupshupAPIKey string
+
 	whatsappWebhookSecret string
 	whatsappWebhookURL    string
 
@@ -55,11 +62,13 @@ type Config struct {
 	LogLevel string
 
 	// SMTP (private - sensitive)
-	smtpHost     string
-	smtpPort     int
-	smtpUser     string
-	smtpPassword string
-	smtpFrom     string
+	smtpHost                  string
+	smtpPort                  int
+	smtpUser                  string
+	smtpPassword              string
+	smtpFrom                  string
+	emailSenderSupportAddress string
+	emailSenderName           string
 
 	// Frontend URL
 	frontendURL string
@@ -74,6 +83,34 @@ type Config struct {
 	anthropicAPIKey                 string
 	openaiAPIKey                    string
 	brevoAPIKey                     string
+
+	// OpenRouter Configs
+	openrouterAPIKey           string
+	openrouterAPIURL           string
+	openrouterHTTPReferer      string
+	openrouterClassifierTitle  string
+	openrouterTranscriberTitle string
+
+	// Notion CRM
+	notionAPIKey        string
+	notionCRMDatabaseID string
+
+	// Marketplace (subcontas Asaas)
+	encryptionKey                string
+	asenoWalletID                string
+	marketplaceDefaultFeePercent float64
+	marketplaceWebhookSecret     string
+	bookingPaymentTimeoutMinutes int
+	marketplaceWebhookURL        string
+
+	// Meta Conversions API (server-side pixel mirror)
+	metaPixelID            string
+	metaCAPIAccessToken    string
+	metaCAPIAPIVersion     string
+	metaCAPITestEventCode  string
+
+	// Landing-page magic-link onboarding
+	onboardingTokenTTLHours int
 }
 
 // NewConfig creates a new configuration from environment variables
@@ -82,46 +119,76 @@ func NewConfig() *Config {
 	_ = godotenv.Load()
 
 	return &Config{
-		Port:                  getEnv("PORT", "4901"),
-		Environment:           getEnv("ENVIRONMENT", "development"),
-		databaseURL:           getEnv("DATABASE_URL", ""),
-		jwtSecret:             getEnv("JWT_SECRET", ""),
-		JWTAccessTokenTTL:     getEnvAsInt("JWT_ACCESS_TOKEN_TTL", 15),
-		JWTRefreshTokenTTL:    getEnvAsInt("JWT_REFRESH_TOKEN_TTL", 7),
-		googleClientID:        getEnv("GOOGLE_CLIENT_ID", ""),
-		googleClientSecret:    getEnv("GOOGLE_CLIENT_SECRET", ""),
-		GoogleRedirectURL:     getEnv("GOOGLE_REDIRECT_URL", ""),
-		GoogleAuthRedirectURL: getEnv("GOOGLE_AUTH_REDIRECT_URL", ""),
-		whatsappProvider:      getEnv("WHATSAPP_PROVIDER", "evolution"), // Default to evolution for backwards compatibility
-		evolutionAPIURL:       getEnv("EVOLUTION_API_URL", ""),
-		evolutionAPIKey:       getEnv("EVOLUTION_API_KEY", ""),
-		wahaAPIURL:            getEnv("WAHA_API_URL", ""),
-		wahaAPIKey:            getEnv("WAHA_API_KEY", ""),
-		whatsappWebhookSecret: getEnv("WHATSAPP_WEBHOOK_SECRET", ""),
-		whatsappWebhookURL:    getEnv("WHATSAPP_WEBHOOK_URL", ""),
-		asaasAPIURL:           getEnv("ASAAS_API_URL", "https://sandbox.asaas.com/api/v3"),
-		asaasAPIKey:           getEnv("ASAAS_API_KEY", ""),
-		asaasWebhookSecret:    getEnv("ASAAS_WEBHOOK_SECRET", ""),
-		AsaasSandbox:          getEnvAsBool("ASAAS_SANDBOX", true),
-		AllowedOrigins:        getEnvAsSlice("ALLOWED_ORIGINS", []string{"http://localhost:3000"}),
-		LogLevel:              getEnv("LOG_LEVEL", "info"),
-		smtpHost:              getEnv("SMTP_HOST", ""),
-		smtpPort:              getEnvAsInt("SMTP_PORT", 587),
-		smtpUser:              getEnv("SMTP_USER", ""),
-		smtpPassword:          getEnv("SMTP_PASSWORD", ""),
-		smtpFrom:              getEnv("SMTP_FROM", ""),
-		frontendURL:           getEnv("FRONTEND_URL", "http://localhost:3000"),
+		Port:                      getEnv("PORT", "4901"),
+		Environment:               getEnv("ENVIRONMENT", "development"),
+		databaseURL:               getEnv("DATABASE_URL", ""),
+		jwtSecret:                 getEnv("JWT_SECRET", ""),
+		JWTAccessTokenTTL:         getEnvAsInt("JWT_ACCESS_TOKEN_TTL", 15),
+		JWTRefreshTokenTTL:        getEnvAsInt("JWT_REFRESH_TOKEN_TTL", 7),
+		portalJWTSecret:           getEnv("PORTAL_JWT_SECRET", ""),
+		googleClientID:            getEnv("GOOGLE_CLIENT_ID", ""),
+		googleClientSecret:        getEnv("GOOGLE_CLIENT_SECRET", ""),
+		GoogleRedirectURL:         getEnv("GOOGLE_REDIRECT_URL", ""),
+		GoogleAuthRedirectURL:     getEnv("GOOGLE_AUTH_REDIRECT_URL", ""),
+		whatsappProvider:          getEnv("WHATSAPP_PROVIDER", "evolution"), // Default to evolution for backwards compatibility
+		evolutionAPIURL:           getEnv("EVOLUTION_API_URL", ""),
+		evolutionAPIKey:           getEnv("EVOLUTION_API_KEY", ""),
+		wahaAPIURL:                getEnv("WAHA_API_URL", ""),
+		wahaAPIKey:                getEnv("WAHA_API_KEY", ""),
+		gupshupAPIURL:             getEnv("GUPSHUP_API_URL", "https://api.gupshup.io"),
+		gupshupAPIKey:             getEnv("GUPSHUP_API_KEY", ""),
+		whatsappWebhookSecret:     getEnv("WHATSAPP_WEBHOOK_SECRET", ""),
+		whatsappWebhookURL:        getEnv("WHATSAPP_WEBHOOK_URL", ""),
+		asaasAPIURL:               getEnv("ASAAS_API_URL", "https://sandbox.asaas.com/api/v3"),
+		asaasAPIKey:               getEnv("ASAAS_API_KEY", ""),
+		asaasWebhookSecret:        getEnv("ASAAS_WEBHOOK_SECRET", ""),
+		AsaasSandbox:              getEnvAsBool("ASAAS_SANDBOX", true),
+		AllowedOrigins:            getEnvAsSlice("ALLOWED_ORIGINS", []string{"http://localhost:3000"}),
+		LogLevel:                  getEnv("LOG_LEVEL", "info"),
+		smtpHost:                  getEnv("SMTP_HOST", ""),
+		smtpPort:                  getEnvAsInt("SMTP_PORT", 587),
+		smtpUser:                  getEnv("SMTP_USER", ""),
+		smtpPassword:              getEnv("SMTP_PASSWORD", ""),
+		smtpFrom:                  getEnv("SMTP_FROM", ""),
+		emailSenderSupportAddress: getEnv("EMAIL_SENDER_SUPORT_ADDRESS", ""),
+		emailSenderName:           getEnv("EMAIL_SENDER_NAME", "Aseno"),
+		frontendURL:               getEnv("FRONTEND_URL", "http://localhost:3001"),
 
 		// AI Classifier defaults
 		aiClassifierEnabled:             getEnvAsBool("AI_CLASSIFIER_ENABLED", false),
-		aiClassifierProvider:            getEnv("AI_CLASSIFIER_PROVIDER", "gemini"),
-		aiClassifierModel:               getEnv("AI_CLASSIFIER_MODEL", "gemini-1.5-flash"),
+		aiClassifierProvider:            getEnv("AI_CLASSIFIER_PROVIDER", "openrouter"),
+		aiClassifierModel:               getEnv("AI_CLASSIFIER_MODEL", "google/gemini-2.0-flash-001"),
 		aiClassifierTimeout:             getEnvAsInt("AI_CLASSIFIER_TIMEOUT", 5),
 		aiClassifierConfidenceThreshold: getEnvAsFloat64("AI_CLASSIFIER_CONFIDENCE_THRESHOLD", 0.7),
-		geminiAPIKey:                    getEnv("GEMINI_API_KEY", ""),
+		geminiAPIKey:                    getEnv("GEMINI_API_KEY", ""), // kept for backwards compatibility
 		anthropicAPIKey:                 getEnv("ANTHROPIC_API_KEY", ""),
 		openaiAPIKey:                    getEnv("OPENAI_API_KEY", ""),
 		brevoAPIKey:                     getEnv("BREVO_API_KEY", ""),
+		openrouterAPIKey:                getEnv("OPENROUTER_API_KEY", ""),
+		openrouterAPIURL:                getEnv("OPENROUTER_API_URL", "https://openrouter.ai/api/v1/chat/completions"),
+		openrouterHTTPReferer:           getEnv("OPENROUTER_HTTP_REFERER", "https://github.com/aseno/backend"),
+		openrouterClassifierTitle:       getEnv("OPENROUTER_CLASSIFIER_TITLE", "Aseno WhatsApp Classifier"),
+		openrouterTranscriberTitle:      getEnv("OPENROUTER_TRANSCRIBER_TITLE", "Aseno WhatsApp Transcriber"),
+		notionAPIKey:                    getEnv("NOTION_API_KEY", ""),
+		notionCRMDatabaseID:             getEnv("NOTION_CRM_DATABASE_ID", ""),
+
+		// Marketplace
+		encryptionKey:                getEnv("ENCRYPTION_KEY", ""),
+		asenoWalletID:                getEnv("ASENO_WALLET_ID", ""),
+		marketplaceDefaultFeePercent: getEnvAsFloat64("MARKETPLACE_DEFAULT_FEE_PERCENT", 0.0),
+		marketplaceWebhookSecret:     getEnv("MARKETPLACE_WEBHOOK_SECRET", ""),
+		bookingPaymentTimeoutMinutes: getEnvAsInt("BOOKING_PAYMENT_TIMEOUT_MINUTES", 15),
+		marketplaceWebhookURL:        getEnv("MARKETPLACE_WEBHOOK_URL", ""),
+
+		// Meta Conversions API
+		metaPixelID:           getEnv("META_PIXEL_ID", ""),
+		metaCAPIAccessToken:   getEnv("META_CAPI_ACCESS_TOKEN", ""),
+		metaCAPIAPIVersion:    getEnv("META_CAPI_API_VERSION", "v21.0"),
+		metaCAPITestEventCode: getEnv("META_CAPI_TEST_EVENT_CODE", ""),
+
+		// Landing-page magic-link onboarding — controls how long the e-mailed
+		// link stays usable. 168h = 7 days.
+		onboardingTokenTTLHours: getEnvAsInt("ONBOARDING_TOKEN_TTL_HOURS", 168),
 	}
 }
 
@@ -155,6 +222,14 @@ func (c *Config) ValidateForProduction() error {
 // GetDatabaseURL returns the database connection string
 func (c *Config) GetDatabaseURL() string {
 	return c.databaseURL
+}
+
+// GetPortalJWTSecret returns the portal JWT signing secret (falls back to JWT_SECRET if not set)
+func (c *Config) GetPortalJWTSecret() string {
+	if c.portalJWTSecret != "" {
+		return c.portalJWTSecret
+	}
+	return c.jwtSecret + "-portal"
 }
 
 // GetJWTSecret returns the JWT signing secret
@@ -195,6 +270,16 @@ func (c *Config) GetWahaAPIURL() string {
 // GetWahaAPIKey returns the WAHA API key
 func (c *Config) GetWahaAPIKey() string {
 	return c.wahaAPIKey
+}
+
+// GetGupshupAPIURL returns the Gupshup API base URL
+func (c *Config) GetGupshupAPIURL() string {
+	return c.gupshupAPIURL
+}
+
+// GetGupshupAPIKey returns the Gupshup partner API key
+func (c *Config) GetGupshupAPIKey() string {
+	return c.gupshupAPIKey
 }
 
 // GetWhatsAppWebhookSecret returns the WhatsApp webhook secret
@@ -256,6 +341,14 @@ func (c *Config) GetSMTPFrom() string {
 	return c.smtpFrom
 }
 
+func (c *Config) GetEmailSenderSupportAddress() string {
+	return c.emailSenderSupportAddress
+}
+
+func (c *Config) GetEmailSenderName() string {
+	return c.emailSenderName
+}
+
 // GetFrontendURL returns the frontend URL
 func (c *Config) GetFrontendURL() string {
 	return c.frontendURL
@@ -266,7 +359,7 @@ func (c *Config) AIClassifierEnabled() bool {
 	return c.aiClassifierEnabled
 }
 
-// AIClassifierProvider returns the AI provider (gemini, claude, openai)
+// AIClassifierProvider returns the AI provider (openrouter, claude, openai)
 func (c *Config) AIClassifierProvider() string {
 	return c.aiClassifierProvider
 }
@@ -303,6 +396,90 @@ func (c *Config) GetOpenAIAPIKey() string {
 
 func (c *Config) GetBrevoAPIKey() string {
 	return c.brevoAPIKey
+}
+
+func (c *Config) GetOpenRouterAPIKey() string {
+	return c.openrouterAPIKey
+}
+
+func (c *Config) GetOpenRouterAPIURL() string {
+	return c.openrouterAPIURL
+}
+
+func (c *Config) GetOpenRouterHTTPReferer() string {
+	return c.openrouterHTTPReferer
+}
+
+func (c *Config) GetOpenRouterClassifierTitle() string {
+	return c.openrouterClassifierTitle
+}
+
+func (c *Config) GetOpenRouterTranscriberTitle() string {
+	return c.openrouterTranscriberTitle
+}
+
+func (c *Config) GetNotionAPIKey() string {
+	return c.notionAPIKey
+}
+
+func (c *Config) GetNotionCRMDatabaseID() string {
+	return c.notionCRMDatabaseID
+}
+
+func (c *Config) GetEncryptionKey() string {
+	return c.encryptionKey
+}
+
+func (c *Config) GetAsenoWalletID() string {
+	return c.asenoWalletID
+}
+
+func (c *Config) GetMarketplaceDefaultFeePercent() float64 {
+	return c.marketplaceDefaultFeePercent
+}
+
+func (c *Config) GetMarketplaceWebhookSecret() string {
+	return c.marketplaceWebhookSecret
+}
+
+func (c *Config) GetBookingPaymentTimeoutMinutes() int {
+	return c.bookingPaymentTimeoutMinutes
+}
+
+func (c *Config) GetMarketplaceWebhookURL() string {
+	return c.marketplaceWebhookURL
+}
+
+// GetMetaPixelID returns the Meta Pixel / dataset ID (same ID used by the
+// browser fbq init). Empty when the integration is not configured.
+func (c *Config) GetMetaPixelID() string {
+	return c.metaPixelID
+}
+
+// GetMetaCAPIAccessToken returns the system-user / dataset access token from
+// Meta Events Manager. Empty when the integration is not configured.
+func (c *Config) GetMetaCAPIAccessToken() string {
+	return c.metaCAPIAccessToken
+}
+
+// GetMetaCAPIAPIVersion returns the Graph API version (e.g. "v21.0").
+func (c *Config) GetMetaCAPIAPIVersion() string {
+	return c.metaCAPIAPIVersion
+}
+
+// GetMetaCAPITestEventCode returns the Test Events code; empty in production.
+// When set, events route to "Test Events" without affecting attribution.
+func (c *Config) GetMetaCAPITestEventCode() string {
+	return c.metaCAPITestEventCode
+}
+
+// GetOnboardingTokenTTLHours returns how long a magic-link onboarding token
+// stays usable. Tuned via ONBOARDING_TOKEN_TTL_HOURS (default 168 = 7 days).
+func (c *Config) GetOnboardingTokenTTLHours() int {
+	if c.onboardingTokenTTLHours <= 0 {
+		return 168
+	}
+	return c.onboardingTokenTTLHours
 }
 
 func getEnv(key, defaultValue string) string {

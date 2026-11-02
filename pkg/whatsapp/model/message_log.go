@@ -40,7 +40,11 @@ func (p MessageLogPayload) Value() (driver.Value, error) {
 	if p == nil {
 		return nil, nil
 	}
-	return json.Marshal(p)
+	b, err := json.Marshal(p)
+	if err != nil {
+		return nil, err
+	}
+	return string(b), nil
 }
 
 // Scan implements sql.Scanner for MessageLogPayload

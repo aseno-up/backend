@@ -8,6 +8,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/aseno/backend/internal/errors"
+	"github.com/aseno/backend/pkg/pagination"
 	"github.com/aseno/backend/pkg/sessionplan/model"
 )
 
@@ -15,15 +16,17 @@ import (
 type SessionPlanRepository interface {
 	Create(ctx context.Context, plan *model.SessionPlan) error
 	GetByID(ctx context.Context, clinicID, id uuid.UUID) (*model.SessionPlan, error)
-	GetByClinic(ctx context.Context, clinicID uuid.UUID, page, perPage int, status *model.PlanStatus) ([]*model.SessionPlan, int64, error)
+	GetByClinic(ctx context.Context, clinicID uuid.UUID, filter pagination.Filter) ([]*model.SessionPlan, int64, error)
 	GetByPatient(ctx context.Context, clinicID, patientID uuid.UUID) ([]*model.SessionPlan, error)
 	GetByProfessional(ctx context.Context, clinicID, professionalID uuid.UUID) ([]*model.SessionPlan, error)
 	GetActivePlansForGeneration(ctx context.Context, generateBefore time.Time) ([]*model.SessionPlan, error)
+	GetAllActive(ctx context.Context, clinicID uuid.UUID) ([]*model.SessionPlan, error)
 	Update(ctx context.Context, plan *model.SessionPlan) error
 	UpdateStatus(ctx context.Context, clinicID, id uuid.UUID, status model.PlanStatus) error
 	IncrementSessionsDone(ctx context.Context, clinicID, id uuid.UUID) error
-	UpdateLastGenerated(ctx context.Context, id uuid.UUID, lastGenerated time.Time) error
+	UpdateLastGenerated(ctx context.Context, clinicID, id uuid.UUID, lastGenerated time.Time) error
 	Delete(ctx context.Context, clinicID, id uuid.UUID) error
+	BulkCancel(ctx context.Context, clinicID uuid.UUID, ids []uuid.UUID) error
 }
 
 // sessionPlanRepository implements SessionPlanRepository
@@ -65,22 +68,40 @@ func (r *sessionPlanRepository) GetByID(ctx context.Context, clinicID, id uuid.U
 }
 
 // GetByClinic retrieves all session plans for a clinic with pagination
-func (r *sessionPlanRepository) GetByClinic(ctx context.Context, clinicID uuid.UUID, page, perPage int, status *model.PlanStatus) ([]*model.SessionPlan, int64, error) {
+func (r *sessionPlanRepository) GetByClinic(ctx context.Context, clinicID uuid.UUID, filter pagination.Filter) ([]*model.SessionPlan, int64, error) {
 	var plans []*model.SessionPlan
 	var total int64
 
 	query := r.db.WithContext(ctx).Model(&model.SessionPlan{}).Where("clinic_id = ?", clinicID)
 
-	if status != nil {
-		query = query.Where("status = ?", *status)
+	if filter.Status != "" && filter.Status != "all" {
+		query = query.Where("status = ?", filter.Status)
+	}
+
+	if filter.Search != "" {
+		searchQuery := "%" + filter.Search + "%"
+		query = query.Where("title ILIKE ?", searchQuery)
 	}
 
 	if err := query.Count(&total).Error; err != nil {
 		return nil, 0, errors.ErrInternalInstance.WithError(err)
 	}
 
-	offset := (page - 1) * perPage
-	if err := query.Order("created_at DESC").Offset(offset).Limit(perPage).Find(&plans).Error; err != nil {
+	// Sorting
+	switch filter.SortBy {
+	case "created_desc":
+		query = query.Order("created_at DESC")
+	case "created_asc":
+		query = query.Order("created_at ASC")
+	case "title_asc":
+		query = query.Order("title ASC")
+	case "title_desc":
+		query = query.Order("title DESC")
+	default:
+		query = query.Order("created_at DESC")
+	}
+
+	if err := query.Scopes(pagination.Paginate(&filter)).Find(&plans).Error; err != nil {
 		return nil, 0, errors.ErrInternalInstance.WithError(err)
 	}
 
@@ -111,11 +132,11 @@ func (r *sessionPlanRepository) GetByPatient(ctx context.Context, clinicID, pati
 	return plans, nil
 }
 
-// GetByProfessional retrieves all session plans for a professional
+// GetByProfessional retrieves active session plans for a professional
 func (r *sessionPlanRepository) GetByProfessional(ctx context.Context, clinicID, professionalID uuid.UUID) ([]*model.SessionPlan, error) {
 	var plans []*model.SessionPlan
 	err := r.db.WithContext(ctx).
-		Where("clinic_id = ? AND professional_id = ?", clinicID, professionalID).
+		Where("clinic_id = ? AND professional_id = ? AND status = ?", clinicID, professionalID, model.PlanStatusActive).
 		Order("created_at DESC").
 		Find(&plans).Error
 
@@ -200,15 +221,15 @@ func (r *sessionPlanRepository) IncrementSessionsDone(ctx context.Context, clini
 		return errors.ErrInternalInstance.WithError(result.Error)
 	}
 
-	// Check if plan is now complete
+	// Check if plan is now complete (only for determinate plans)
 	var plan model.SessionPlan
 	if err := r.db.WithContext(ctx).Where("clinic_id = ? AND id = ?", clinicID, id).First(&plan).Error; err == nil {
-		if plan.SessionsDone >= plan.TotalSessions {
+		if !plan.IsIndeterminate() && plan.SessionsDone >= plan.TotalSessions {
 			now := time.Now()
 			r.db.WithContext(ctx).
 				Model(&model.SessionPlan{}).
-				Where("id = ?", id).
-				Updates(map[string]interface{}{
+				Where("clinic_id = ? AND id = ?", clinicID, id).
+				Updates(map[string]any{
 					"status":       model.PlanStatusCompleted,
 					"completed_at": now,
 				})
@@ -219,10 +240,10 @@ func (r *sessionPlanRepository) IncrementSessionsDone(ctx context.Context, clini
 }
 
 // UpdateLastGenerated updates the last_generated_at timestamp
-func (r *sessionPlanRepository) UpdateLastGenerated(ctx context.Context, id uuid.UUID, lastGenerated time.Time) error {
+func (r *sessionPlanRepository) UpdateLastGenerated(ctx context.Context, clinicID, id uuid.UUID, lastGenerated time.Time) error {
 	return r.db.WithContext(ctx).
 		Model(&model.SessionPlan{}).
-		Where("id = ?", id).
+		Where("clinic_id = ? AND id = ?", clinicID, id).
 		Update("last_generated_at", lastGenerated).Error
 }
 
@@ -262,4 +283,45 @@ func (r *sessionPlanRepository) loadRelations(ctx context.Context, plan *model.S
 		Where("id = ?", plan.ProfessionalID).
 		Scan(&professionalName)
 	plan.ProfessionalName = professionalName
+
+	// Load procedure name
+	if plan.ProcedureID != nil {
+		var procedureName string
+		r.db.WithContext(ctx).
+			Table("procedures").
+			Select("name").
+			Where("id = ?", plan.ProcedureID).
+			Scan(&procedureName)
+		plan.ProcedureName = procedureName
+	}
+}
+
+// GetAllActive retrieves all active session plans for a clinic
+func (r *sessionPlanRepository) GetAllActive(ctx context.Context, clinicID uuid.UUID) ([]*model.SessionPlan, error) {
+	var plans []*model.SessionPlan
+	err := r.db.WithContext(ctx).
+		Where("clinic_id = ? AND status = ?", clinicID, model.PlanStatusActive).
+		Order("created_at DESC").
+		Find(&plans).Error
+
+	if err != nil {
+		return nil, errors.ErrInternalInstance.WithError(err)
+	}
+
+	for _, plan := range plans {
+		r.loadRelations(ctx, plan)
+	}
+
+	return plans, nil
+}
+
+// BulkCancel cancels multiple session plans
+func (r *sessionPlanRepository) BulkCancel(ctx context.Context, clinicID uuid.UUID, ids []uuid.UUID) error {
+	if err := r.db.WithContext(ctx).
+		Model(&model.SessionPlan{}).
+		Where("clinic_id = ? AND id IN ? AND status NOT IN ?", clinicID, ids, []model.PlanStatus{model.PlanStatusCancelled, model.PlanStatusCompleted}).
+		Update("status", model.PlanStatusCancelled).Error; err != nil {
+		return errors.ErrInternalInstance.WithError(err)
+	}
+	return nil
 }

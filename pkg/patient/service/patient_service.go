@@ -2,13 +2,12 @@ package service
 
 import (
 	"context"
-	"math"
 
 	"github.com/google/uuid"
 
 	"github.com/aseno/backend/internal/errors"
-	clinic_model "github.com/aseno/backend/pkg/clinic/model"
 	clinic_repository "github.com/aseno/backend/pkg/clinic/repository"
+	"github.com/aseno/backend/pkg/pagination"
 	"github.com/aseno/backend/pkg/patient/model"
 	"github.com/aseno/backend/pkg/patient/repository"
 )
@@ -17,14 +16,22 @@ import (
 type PatientService interface {
 	Create(ctx context.Context, clinicID uuid.UUID, req *model.CreatePatientRequest) (*model.PatientResponse, error)
 	GetByID(ctx context.Context, id, clinicID uuid.UUID) (*model.PatientResponse, error)
-	List(ctx context.Context, clinicID uuid.UUID, page, perPage int) (*model.PatientListResponse, error)
-	Search(ctx context.Context, clinicID uuid.UUID, query string, page, perPage int) (*model.PatientListResponse, error)
+	List(ctx context.Context, clinicID uuid.UUID, filter pagination.Filter) (pagination.Response[*model.PatientResponse], error)
 	Update(ctx context.Context, id, clinicID uuid.UUID, req *model.UpdatePatientRequest) (*model.PatientResponse, error)
 	Delete(ctx context.Context, id, clinicID uuid.UUID) error
+	BulkDelete(ctx context.Context, ids []uuid.UUID, clinicID uuid.UUID) error
+	GetDeletePreview(ctx context.Context, id, clinicID uuid.UUID) (*model.PatientDeletePreview, error)
 	// Risk assessment methods
 	GetRisk(ctx context.Context, id, clinicID uuid.UUID) (*model.PatientRiskResponse, error)
 	CalculateRiskScore(ctx context.Context, patientID, clinicID uuid.UUID) error
 	RecalculateAllRiskScores(ctx context.Context, clinicID uuid.UUID) (int, error)
+	// Self-registered patient management
+	ListSelfRegistered(ctx context.Context, clinicID uuid.UUID, filter pagination.Filter) (pagination.Response[*model.PatientResponse], error)
+	MergePatients(ctx context.Context, clinicID, targetID, sourceID uuid.UUID) error
+	// Patient merge (bulk) methods
+	ListUnlinkedProvisional(ctx context.Context, clinicID uuid.UUID) ([]*model.UnlinkedPatientResponse, error)
+	SearchExcludingProvisional(ctx context.Context, clinicID uuid.UUID, query string) ([]*model.PatientSearchResult, error)
+	MergePatientsBulk(ctx context.Context, clinicID uuid.UUID, actorID uuid.UUID, req *model.BulkMergePatientRequest) (*model.BulkMergePatientResponse, error)
 }
 
 // patientService implements PatientService
@@ -49,7 +56,10 @@ func (s *patientService) checkPlanForRiskData(ctx context.Context, clinicID uuid
 	}
 
 	// Risk data is available for Professional and Advanced plans
-	return clinic.Plan != clinic_model.PlanTypeBasic, nil
+	if clinic.Account != nil && clinic.Account.Plan != nil {
+		return clinic.Account.Plan.HasApiAccess, nil
+	}
+	return false, nil
 }
 
 // maskRiskData hides risk data from the response
@@ -63,6 +73,16 @@ func maskRiskData(resp *model.PatientResponse) {
 
 // Create creates a new patient
 func (s *patientService) Create(ctx context.Context, clinicID uuid.UUID, req *model.CreatePatientRequest) (*model.PatientResponse, error) {
+	source := req.Source
+	if source == "" {
+		source = model.PatientSourceInternal
+	}
+
+	birthDate, err := model.ParseBirthDate(req.BirthDate)
+	if err != nil {
+		return nil, errors.ErrValidationInstance.WithMessage(err.Error())
+	}
+
 	patient := &model.Patient{
 		ClinicID:  clinicID,
 		Name:      req.Name,
@@ -70,7 +90,7 @@ func (s *patientService) Create(ctx context.Context, clinicID uuid.UUID, req *mo
 		Phone:     req.Phone,
 		WhatsApp:  req.WhatsApp,
 		Document:  req.Document,
-		BirthDate: req.BirthDate,
+		BirthDate: birthDate,
 		Gender:    req.Gender,
 		Address:   req.Address,
 		City:      req.City,
@@ -78,6 +98,7 @@ func (s *patientService) Create(ctx context.Context, clinicID uuid.UUID, req *mo
 		ZipCode:   req.ZipCode,
 		Notes:     req.Notes,
 		IsActive:  true,
+		Source:    source,
 	}
 
 	// If WhatsApp not provided, use phone
@@ -111,19 +132,10 @@ func (s *patientService) GetByID(ctx context.Context, id, clinicID uuid.UUID) (*
 }
 
 // List retrieves a paginated list of patients
-func (s *patientService) List(ctx context.Context, clinicID uuid.UUID, page, perPage int) (*model.PatientListResponse, error) {
-	if page < 1 {
-		page = 1
-	}
-	if perPage < 1 || perPage > 100 {
-		perPage = 20
-	}
-
-	offset := (page - 1) * perPage
-
-	patients, total, err := s.repo.GetByClinicID(ctx, clinicID, perPage, offset)
+func (s *patientService) List(ctx context.Context, clinicID uuid.UUID, filter pagination.Filter) (pagination.Response[*model.PatientResponse], error) {
+	patients, total, err := s.repo.List(ctx, clinicID, filter)
 	if err != nil {
-		return nil, err
+		return pagination.Response[*model.PatientResponse]{}, err
 	}
 
 	data := make([]*model.PatientResponse, len(patients))
@@ -139,54 +151,9 @@ func (s *patientService) List(ctx context.Context, clinicID uuid.UUID, page, per
 		data[i] = resp
 	}
 
-	totalPages := int(math.Ceil(float64(total) / float64(perPage)))
-
-	return &model.PatientListResponse{
-		Data:       data,
-		Total:      total,
-		Page:       page,
-		PerPage:    perPage,
-		TotalPages: totalPages,
-	}, nil
-}
-
-// Search searches patients by name, phone, or email
-func (s *patientService) Search(ctx context.Context, clinicID uuid.UUID, query string, page, perPage int) (*model.PatientListResponse, error) {
-	if page < 1 {
-		page = 1
-	}
-	if perPage < 1 || perPage > 100 {
-		perPage = 20
-	}
-
-	offset := (page - 1) * perPage
-
-	patients, total, err := s.repo.Search(ctx, clinicID, query, perPage, offset)
-	if err != nil {
-		return nil, err
-	}
-
-	data := make([]*model.PatientResponse, len(patients))
-
-	// Check plan once for the list
-	allowed, _ := s.checkPlanForRiskData(ctx, clinicID)
-
-	for i, p := range patients {
-		resp := p.ToResponse()
-		if !allowed {
-			maskRiskData(resp)
-		}
-		data[i] = resp
-	}
-
-	totalPages := int(math.Ceil(float64(total) / float64(perPage)))
-
-	return &model.PatientListResponse{
-		Data:       data,
-		Total:      total,
-		Page:       page,
-		PerPage:    perPage,
-		TotalPages: totalPages,
+	return pagination.Response[*model.PatientResponse]{
+		Data: data,
+		Meta: pagination.NewMeta(filter.GetPage(), filter.GetLimit(), total),
 	}, nil
 }
 
@@ -197,43 +164,32 @@ func (s *patientService) Update(ctx context.Context, id, clinicID uuid.UUID, req
 		return nil, err
 	}
 
-	// Update fields if provided
+	// Full-PUT semantics: whatever the client sends replaces the current
+	// value, including empty strings for explicit clears. The frontend sends
+	// the complete form on every save, so we don't need to guess which fields
+	// are meant to stay untouched.
 	if req.Name != "" {
 		patient.Name = req.Name
 	}
-	if req.Email != "" {
-		patient.Email = req.Email
-	}
-	if req.Phone != "" {
-		patient.Phone = req.Phone
-	}
-	if req.WhatsApp != "" {
-		patient.WhatsApp = req.WhatsApp
-	}
-	if req.Document != "" {
-		patient.Document = req.Document
-	}
+	patient.Email = req.Email
+	patient.Phone = req.Phone
+	patient.WhatsApp = req.WhatsApp
+	patient.Document = req.Document
 	if req.BirthDate != nil {
-		patient.BirthDate = req.BirthDate
+		birthDate, err := model.ParseBirthDate(req.BirthDate)
+		if err != nil {
+			return nil, errors.ErrValidationInstance.WithMessage(err.Error())
+		}
+		patient.BirthDate = birthDate
 	}
 	if req.Gender != "" {
 		patient.Gender = req.Gender
 	}
-	if req.Address != "" {
-		patient.Address = req.Address
-	}
-	if req.City != "" {
-		patient.City = req.City
-	}
-	if req.State != "" {
-		patient.State = req.State
-	}
-	if req.ZipCode != "" {
-		patient.ZipCode = req.ZipCode
-	}
-	if req.Notes != "" {
-		patient.Notes = req.Notes
-	}
+	patient.Address = req.Address
+	patient.City = req.City
+	patient.State = req.State
+	patient.ZipCode = req.ZipCode
+	patient.Notes = req.Notes
 	if req.IsActive != nil {
 		patient.IsActive = *req.IsActive
 	}
@@ -248,6 +204,20 @@ func (s *patientService) Update(ctx context.Context, id, clinicID uuid.UUID, req
 // Delete deletes a patient
 func (s *patientService) Delete(ctx context.Context, id, clinicID uuid.UUID) error {
 	return s.repo.Delete(ctx, id, clinicID)
+}
+
+// GetDeletePreview exposes counts of linked history so the UI can warn the
+// user before confirming the deletion.
+func (s *patientService) GetDeletePreview(ctx context.Context, id, clinicID uuid.UUID) (*model.PatientDeletePreview, error) {
+	return s.repo.GetDeletePreview(ctx, id, clinicID)
+}
+
+// BulkDelete soft deletes multiple patients
+func (s *patientService) BulkDelete(ctx context.Context, ids []uuid.UUID, clinicID uuid.UUID) error {
+	if err := s.repo.BulkDelete(ctx, ids, clinicID); err != nil {
+		return err
+	}
+	return nil
 }
 
 // GetRisk retrieves the risk assessment for a patient
@@ -300,6 +270,103 @@ func (s *patientService) RecalculateAllRiskScores(ctx context.Context, clinicID 
 	}
 
 	return updated, nil
+}
+
+// ListSelfRegistered returns patients with source=SELF_REGISTERED
+func (s *patientService) ListSelfRegistered(ctx context.Context, clinicID uuid.UUID, filter pagination.Filter) (pagination.Response[*model.PatientResponse], error) {
+	patients, total, err := s.repo.ListBySource(ctx, clinicID, model.PatientSourceSelfRegistered, filter)
+	if err != nil {
+		return pagination.Response[*model.PatientResponse]{}, errors.ErrInternalInstance.WithError(err)
+	}
+
+	responses := make([]*model.PatientResponse, len(patients))
+	for i, p := range patients {
+		responses[i] = p.ToResponse()
+	}
+
+	return pagination.Response[*model.PatientResponse]{
+		Data: responses,
+		Meta: pagination.NewMeta(filter.GetPage(), filter.GetLimit(), total),
+	}, nil
+}
+
+// MergePatients merges a self-registered patient into an existing patient
+func (s *patientService) MergePatients(ctx context.Context, clinicID, targetID, sourceID uuid.UUID) error {
+	if targetID == sourceID {
+		return errors.ErrValidationInstance.WithMessage("Paciente de origem e destino não podem ser o mesmo")
+	}
+
+	if err := s.repo.MergePatients(ctx, clinicID, targetID, sourceID); err != nil {
+		return errors.ErrInternalInstance.WithError(err)
+	}
+	return nil
+}
+
+// ListUnlinkedProvisional returns provisional patients pending verification
+func (s *patientService) ListUnlinkedProvisional(ctx context.Context, clinicID uuid.UUID) ([]*model.UnlinkedPatientResponse, error) {
+	patients, err := s.repo.GetUnlinkedProvisionalPatients(ctx, clinicID)
+	if err != nil {
+		return nil, err
+	}
+
+	results := make([]*model.UnlinkedPatientResponse, len(patients))
+	for i, p := range patients {
+		results[i] = &model.UnlinkedPatientResponse{
+			ID:        p.ID,
+			Name:      p.Name,
+			Email:     p.Email,
+			CPF:       p.Document,
+			Phone:     p.Phone,
+			CreatedAt: p.CreatedAt,
+		}
+	}
+	return results, nil
+}
+
+// SearchExcludingProvisional searches for confirmed patients by name or CPF
+func (s *patientService) SearchExcludingProvisional(ctx context.Context, clinicID uuid.UUID, query string) ([]*model.PatientSearchResult, error) {
+	patients, err := s.repo.SearchPatientsExcludingProvisional(ctx, clinicID, query, 10)
+	if err != nil {
+		return nil, err
+	}
+
+	results := make([]*model.PatientSearchResult, len(patients))
+	for i, p := range patients {
+		results[i] = &model.PatientSearchResult{
+			ID:     p.ID,
+			Name:   p.Name,
+			CPF:    p.Document,
+			Email:  p.Email,
+			Phone:  p.Phone,
+			Source: p.Source,
+		}
+	}
+	return results, nil
+}
+
+// MergePatientsBulk merges multiple provisional patients into a target patient
+func (s *patientService) MergePatientsBulk(ctx context.Context, clinicID uuid.UUID, actorID uuid.UUID, req *model.BulkMergePatientRequest) (*model.BulkMergePatientResponse, error) {
+	if len(req.ProvisionalIDs) == 0 {
+		return nil, errors.ErrValidationInstance.WithMessage("provisional_ids cannot be empty")
+	}
+
+	// Check none of the provisional IDs is the same as the target
+	for _, pid := range req.ProvisionalIDs {
+		if pid == req.TargetPatientID {
+			return nil, errors.ErrValidationInstance.WithMessage("Target patient cannot be in the provisional list")
+		}
+	}
+
+	reassigned, err := s.repo.MergePatientsBulk(ctx, clinicID, req.TargetPatientID, req.ProvisionalIDs, actorID)
+	if err != nil {
+		return nil, err
+	}
+
+	return &model.BulkMergePatientResponse{
+		AppointmentsReassigned: reassigned,
+		TargetPatientID:        req.TargetPatientID,
+		MergedCount:            len(req.ProvisionalIDs),
+	}, nil
 }
 
 // calculateRisk determines the risk level based on attendance statistics

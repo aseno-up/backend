@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -19,7 +20,7 @@ const (
 
 // User represents a user in the system
 type User struct {
-	ID             uuid.UUID  `json:"id" gorm:"type:uuid;primary_key;default:gen_random_uuid()"`
+	ID             uuid.UUID  `json:"id" gorm:"type:uuid;primary_key"`
 	ClinicID       uuid.UUID  `json:"clinic_id" gorm:"type:uuid;not null;index"`
 	Email          string     `json:"email" gorm:"uniqueIndex;not null"`
 	PasswordHash   string     `json:"-" gorm:"column:password_hash"` // Hidden from JSON
@@ -32,10 +33,14 @@ type User struct {
 	EmailVerified  bool       `json:"email_verified" gorm:"default:false"`
 	IsActive       bool       `json:"is_active" gorm:"default:true"`
 	LastLoginAt    *time.Time `json:"last_login_at"`
-	ProfessionalID *uuid.UUID `json:"professional_id,omitempty" gorm:"type:uuid"` // Link to professional if applicable
-	CreatedAt      time.Time  `json:"created_at"`
-	UpdatedAt      time.Time  `json:"updated_at"`
-	DeletedAt      *time.Time `json:"deleted_at,omitempty" gorm:"index"`
+	ProfessionalID *uuid.UUID `json:"professional_id,omitempty" gorm:"-"` // Populated from professionals table (source of truth is Professional.UserID)
+	// TutorialsCompleted stores which tutorial pages this user has finished at least once,
+	// so the in-app tour is shown only to users who haven't seen it yet — tracked per user,
+	// not per browser (localStorage was previously shared across users of the same device).
+	TutorialsCompleted pq.StringArray `json:"tutorials_completed" gorm:"type:text[];default:'{}'"`
+	CreatedAt          time.Time      `json:"created_at"`
+	UpdatedAt          time.Time      `json:"updated_at"`
+	DeletedAt          *time.Time     `json:"deleted_at,omitempty" gorm:"index"`
 }
 
 // TableName returns the table name for GORM

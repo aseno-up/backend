@@ -2,10 +2,11 @@ package worker
 
 import (
 	"context"
-	"github.com/aseno/backend/internal/logger"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/aseno/backend/internal/logger"
 
 	"github.com/aseno/backend/internal/config"
 	clinic_repository "github.com/aseno/backend/pkg/clinic/repository"
@@ -16,15 +17,17 @@ import (
 
 // ScheduledMessageWorker processes scheduled messages
 type ScheduledMessageWorker struct {
-	config           *config.WorkerConfig
-	scheduledMsgRepo whatsapp_repository.ScheduledMessageRepository
-	clinicRepo       clinic_repository.ClinicRepository
-	whatsappService  whatsapp_service.WhatsAppService
-	stopCh           chan struct{}
+	config              *config.WorkerConfig
+	scheduledMsgRepo    whatsapp_repository.ScheduledMessageRepository
+	clinicRepo          clinic_repository.ClinicRepository
+	whatsappService     whatsapp_service.WhatsAppService
+	subscriptionChecker ClinicSubscriptionChecker
+	stopCh              chan struct{}
 
 	// Stats
 	messagesProcessed int64
 	messagesFailed    int64
+	messagesDropped   int64
 }
 
 // NewScheduledMessageWorker creates a new scheduled message worker
@@ -72,6 +75,12 @@ func (w *ScheduledMessageWorker) Start() {
 // Stop stops the scheduled message worker
 func (w *ScheduledMessageWorker) Stop() {
 	close(w.stopCh)
+}
+
+// SetSubscriptionChecker wires a checker so scheduled messages for clinics
+// without an active subscription are dropped instead of delivered.
+func (w *ScheduledMessageWorker) SetSubscriptionChecker(checker ClinicSubscriptionChecker) {
+	w.subscriptionChecker = checker
 }
 
 // processScheduledMessages processes pending messages (1 patient per clinic)
@@ -125,6 +134,26 @@ func (w *ScheduledMessageWorker) processPatientMessages(ctx context.Context, mes
 		return
 	}
 
+	// Subscription gate: if the clinic has no active subscription, mark all
+	// pending messages as sent with an error note so they exit the queue
+	// instead of looping. MarkAsSent is the only signal the repository uses
+	// to stop returning a row from GetPendingMessages.
+	if w.subscriptionChecker != nil {
+		active, err := w.subscriptionChecker.IsSubscriptionActive(ctx, messages[0].ClinicID)
+		if err != nil {
+			logger.Printf("[ScheduledMessageWorker] Subscription check failed for clinic %s: %v — dropping %d messages",
+				messages[0].ClinicID, err, len(messages))
+			w.dropMessages(ctx, messages, "subscription check error")
+			return
+		}
+		if !active {
+			logger.Printf("[ScheduledMessageWorker] Clinic %s has no active subscription, dropping %d messages",
+				messages[0].ClinicID, len(messages))
+			w.dropMessages(ctx, messages, "clinic subscription inactive")
+			return
+		}
+	}
+
 	// Get clinic settings for delay configuration
 	var minDelayBetweenMessages int = 3 // default
 	if w.clinicRepo != nil {
@@ -148,16 +177,37 @@ func (w *ScheduledMessageWorker) processPatientMessages(ctx context.Context, mes
 	}
 }
 
+// dropMessages marks the given messages as sent with the provided reason so
+// they stop being returned by GetPendingMessages. They are not actually
+// delivered.
+func (w *ScheduledMessageWorker) dropMessages(ctx context.Context, messages []*whatsapp_model.ScheduledMessage, reason string) {
+	for _, msg := range messages {
+		if err := w.scheduledMsgRepo.MarkAsFailed(ctx, msg.ID, reason); err != nil {
+			logger.Printf("[ScheduledMessageWorker] Failed to annotate dropped message %s: %v", msg.ID, err)
+		}
+		if err := w.scheduledMsgRepo.MarkAsSent(ctx, msg.ID); err != nil {
+			logger.Printf("[ScheduledMessageWorker] Failed to mark dropped message %s as sent: %v", msg.ID, err)
+		}
+		atomic.AddInt64(&w.messagesDropped, 1)
+	}
+}
+
 // processSingleMessage processes a single scheduled message
 func (w *ScheduledMessageWorker) processSingleMessage(ctx context.Context, msg *whatsapp_model.ScheduledMessage) {
-	logger.Printf("[ScheduledMessageWorker] Sending scheduled message %s to %s (scheduled at: %s)",
-		msg.ID, msg.Phone, msg.ScheduledAt.Format(time.RFC3339))
+	logger.Printf("[ScheduledMessageWorker] Handling msg %s to %s (type: %s, scheduled at: %s)",
+		msg.ID, msg.Phone, msg.MessageType, msg.ScheduledAt.Format(time.RFC3339))
 
-	// Send the message via WhatsApp
-	_, err := w.whatsappService.SendTextMessage(ctx, msg.Instance, msg.Phone, msg.Message)
+	var err error
+	if msg.MessageType == "ai_processing" {
+		err = w.whatsappService.ProcessDelayedAI(ctx, msg)
+	} else {
+		// Normal scheduled text message
+		_, err = w.whatsappService.SendTextMessage(ctx, msg.Instance, msg.Phone, msg.Message)
+	}
+
 	if err != nil {
 		atomic.AddInt64(&w.messagesFailed, 1)
-		logger.Printf("[ScheduledMessageWorker] Failed to send message %s: %v", msg.ID, err)
+		logger.Printf("[ScheduledMessageWorker] Failed to process message %s: %v", msg.ID, err)
 
 		// Mark as failed (but don't mark as sent, so it can be retried)
 		if markErr := w.scheduledMsgRepo.MarkAsFailed(ctx, msg.ID, err.Error()); markErr != nil {

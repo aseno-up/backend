@@ -2,8 +2,17 @@ package migrations
 
 import (
 	"fmt"
+
 	"github.com/aseno/backend/internal/logger"
 
+	appointmentModel "github.com/aseno/backend/pkg/appointment/model"
+	clinicModel "github.com/aseno/backend/pkg/clinic/model"
+	patientModel "github.com/aseno/backend/pkg/patient/model"
+	paymentModel "github.com/aseno/backend/pkg/payment/model"
+	planModel "github.com/aseno/backend/pkg/plan/model"
+	procedureModel "github.com/aseno/backend/pkg/procedure/model"
+	professionalModel "github.com/aseno/backend/pkg/professional/model"
+	sessionPlanModel "github.com/aseno/backend/pkg/sessionplan/model"
 	"github.com/aseno/backend/pkg/whatsapp/conversation"
 	"gorm.io/gorm"
 )
@@ -16,6 +25,37 @@ func MigrateConversations(db *gorm.DB) error {
 	if err := db.AutoMigrate(
 		&conversation.ConversationContext{},
 		&conversation.ToolCallLog{},
+
+		// Plan models
+		&planModel.Plan{},
+		&planModel.PlanCycle{},
+		&planModel.Offer{},
+		&planModel.OfferCycle{},
+
+		// Clinic models
+		&clinicModel.Clinic{},
+
+		// Patient models
+		&patientModel.Patient{},
+
+		// Professional models
+		&professionalModel.Professional{},
+		&professionalModel.ProfessionalProcedure{},
+
+		// Session Plan models
+		&sessionPlanModel.SessionPlan{},
+
+		// Payment models
+		&paymentModel.Payment{},
+		&paymentModel.Customer{},
+		&paymentModel.Subscription{},
+
+		// Procedure models
+		&procedureModel.Procedure{},
+		&appointmentModel.AppointmentProcedure{},
+
+		// Appointment models
+		&appointmentModel.Appointment{},
 	); err != nil {
 		return fmt.Errorf("failed to migrate conversation tables: %w", err)
 	}
@@ -54,27 +94,5 @@ func MigrateConversations(db *gorm.DB) error {
 	}
 
 	logger.Println("[Migration] Conversation tables migrated successfully")
-	return nil
-}
-
-// RollbackConversations rolls back conversation-related tables
-func RollbackConversations(db *gorm.DB) error {
-	logger.Println("[Migration] Rolling back conversation_contexts and tool_call_logs migrations...")
-
-	// Drop trigger and function
-	if err := db.Exec(`DROP TRIGGER IF EXISTS trigger_conversation_updated_at ON conversation_contexts`).Error; err != nil {
-		logger.Printf("[Migration] Warning: failed to drop trigger: %v", err)
-	}
-
-	if err := db.Exec(`DROP FUNCTION IF EXISTS update_conversation_updated_at()`).Error; err != nil {
-		logger.Printf("[Migration] Warning: failed to drop function: %v", err)
-	}
-
-	// Drop tables
-	if err := db.Migrator().DropTable(&conversation.ToolCallLog{}, &conversation.ConversationContext{}); err != nil {
-		return fmt.Errorf("failed to drop conversation tables: %w", err)
-	}
-
-	logger.Println("[Migration] Conversation tables rolled back successfully")
 	return nil
 }

@@ -18,13 +18,12 @@ type SettingsService interface {
 	Update(ctx context.Context, key, value string) error
 	RefreshCache(ctx context.Context) error
 
-	// Typed helpers for plan configuration
+	// Typed helpers for plan configuration (display/fallback only — NOT for limit enforcement)
 	GetPlanLimit(ctx context.Context, planType string) int
 	GetPlanPrice(ctx context.Context, planType string) int
 	GetTrialDays(ctx context.Context) int
 	GetExcessPrice(ctx context.Context) int
 	IsExcessBillingEnabled(ctx context.Context) bool
-	IsUnlimited(limit int) bool
 }
 
 // settingsService implements SettingsService with in-memory cache
@@ -238,9 +237,4 @@ func (s *settingsService) IsExcessBillingEnabled(ctx context.Context) bool {
 	}
 
 	return val == "true"
-}
-
-// IsUnlimited checks if a limit value represents unlimited
-func (s *settingsService) IsUnlimited(limit int) bool {
-	return limit < 0
 }

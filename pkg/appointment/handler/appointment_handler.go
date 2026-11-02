@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"net/http"
 	"strconv"
 	"time"
@@ -9,8 +10,11 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/aseno/backend/internal/errors"
+	"github.com/aseno/backend/internal/logger"
 	"github.com/aseno/backend/pkg/appointment/model"
 	"github.com/aseno/backend/pkg/appointment/service"
+	audit_model "github.com/aseno/backend/pkg/audit/model"
+	audit_service "github.com/aseno/backend/pkg/audit/service"
 	"github.com/aseno/backend/pkg/auth/middleware"
 )
 
@@ -24,20 +28,46 @@ type AppointmentHandler interface {
 	GetByWeek(c *gin.Context)
 	Update(c *gin.Context)
 	Delete(c *gin.Context)
+	GetDeletePreview(c *gin.Context)
 	Confirm(c *gin.Context)
 	Cancel(c *gin.Context)
 	Complete(c *gin.Context)
 	MarkNoShow(c *gin.Context)
 }
 
+// AttendanceAutoRecorder is an optional interface for auto-recording attendance on completion
+type AttendanceAutoRecorder interface {
+	AutoRecordPresent(ctx context.Context, clinicID, appointmentID uuid.UUID) error
+}
+
 // appointmentHandler implements AppointmentHandler
 type appointmentHandler struct {
-	service service.AppointmentService
+	service            service.AppointmentService
+	attendanceRecorder AttendanceAutoRecorder
+	auditSvc           audit_service.AuditService
 }
 
 // NewAppointmentHandler creates a new appointment handler
-func NewAppointmentHandler(service service.AppointmentService) AppointmentHandler {
-	return &appointmentHandler{service: service}
+func NewAppointmentHandler(service service.AppointmentService, opts ...func(*appointmentHandler)) AppointmentHandler {
+	h := &appointmentHandler{service: service}
+	for _, opt := range opts {
+		opt(h)
+	}
+	return h
+}
+
+// WithAuditService wires an audit service so mutating actions leave a trail.
+func WithAuditService(svc audit_service.AuditService) func(*appointmentHandler) {
+	return func(h *appointmentHandler) {
+		h.auditSvc = svc
+	}
+}
+
+// WithAttendanceRecorder sets the attendance auto-recorder (called on appointment completion)
+func WithAttendanceRecorder(recorder AttendanceAutoRecorder) func(*appointmentHandler) {
+	return func(h *appointmentHandler) {
+		h.attendanceRecorder = recorder
+	}
 }
 
 // RegisterRoutes registers appointment routes
@@ -50,6 +80,7 @@ func (h *appointmentHandler) RegisterRoutes(router gin.IRouter) {
 		appointments.GET("/week/:date", h.GetByWeek)
 		appointments.GET("/:id", h.GetByID)
 		appointments.PUT("/:id", h.Update)
+		appointments.GET("/:id/delete-preview", h.GetDeletePreview)
 		appointments.DELETE("/:id", h.Delete)
 		appointments.POST("/:id/confirm", h.Confirm)
 		appointments.POST("/:id/cancel", h.Cancel)
@@ -73,6 +104,10 @@ func (h *appointmentHandler) Create(c *gin.Context) {
 		statusCode := errors.GetStatusCode(err)
 		c.JSON(statusCode, errors.ToResponse(err))
 		return
+	}
+
+	if h.auditSvc != nil {
+		_ = h.auditSvc.LogFromGin(c, audit_model.AuditActionCreate, audit_model.AuditEntityAppointment, appointment.ID.String(), nil, appointment)
 	}
 
 	c.JSON(http.StatusCreated, appointment)
@@ -234,11 +269,18 @@ func (h *appointmentHandler) Update(c *gin.Context) {
 		return
 	}
 
+	// Capture old data before mutation so the audit diff shows both sides.
+	oldData, _ := h.service.GetByID(c.Request.Context(), id, clinicID.(uuid.UUID))
+
 	appointment, err := h.service.Update(c.Request.Context(), id, clinicID.(uuid.UUID), &req)
 	if err != nil {
 		statusCode := errors.GetStatusCode(err)
 		c.JSON(statusCode, errors.ToResponse(err))
 		return
+	}
+
+	if h.auditSvc != nil {
+		_ = h.auditSvc.LogFromGin(c, audit_model.AuditActionUpdate, audit_model.AuditEntityAppointment, id.String(), oldData, appointment)
 	}
 
 	c.JSON(http.StatusOK, appointment)
@@ -255,13 +297,44 @@ func (h *appointmentHandler) Delete(c *gin.Context) {
 		return
 	}
 
-	if err := h.service.Delete(c.Request.Context(), id, clinicID.(uuid.UUID)); err != nil {
+	deletePayments := c.Query("delete_payments") == "true"
+
+	// Capture old data so the audit trail records what was deleted.
+	oldData, _ := h.service.GetByID(c.Request.Context(), id, clinicID.(uuid.UUID))
+
+	if err := h.service.Delete(c.Request.Context(), id, clinicID.(uuid.UUID), deletePayments); err != nil {
 		statusCode := errors.GetStatusCode(err)
 		c.JSON(statusCode, errors.ToResponse(err))
 		return
 	}
 
+	if h.auditSvc != nil {
+		_ = h.auditSvc.LogFromGin(c, audit_model.AuditActionDelete, audit_model.AuditEntityAppointment, id.String(), oldData, nil)
+	}
+
 	c.JSON(http.StatusOK, gin.H{"message": "Appointment deleted successfully"})
+}
+
+// GetDeletePreview returns the counts the UI needs to show before deleting
+// an appointment (procedures to cascade, payments kept by default).
+func (h *appointmentHandler) GetDeletePreview(c *gin.Context) {
+	clinicID, _ := c.Get("clinic_id")
+
+	idParam := c.Param("id")
+	id, err := uuid.Parse(idParam)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, errors.ToResponse(errors.ErrValidationInstance.WithMessage("Invalid appointment ID")))
+		return
+	}
+
+	preview, err := h.service.GetDeletePreview(c.Request.Context(), id, clinicID.(uuid.UUID))
+	if err != nil {
+		statusCode := errors.GetStatusCode(err)
+		c.JSON(statusCode, errors.ToResponse(err))
+		return
+	}
+
+	c.JSON(http.StatusOK, preview)
 }
 
 // Confirm handles confirming an appointment
@@ -328,6 +401,13 @@ func (h *appointmentHandler) Complete(c *gin.Context) {
 		statusCode := errors.GetStatusCode(err)
 		c.JSON(statusCode, errors.ToResponse(err))
 		return
+	}
+
+	// Auto-record attendance for session plan appointments (if not already recorded)
+	if h.attendanceRecorder != nil {
+		if err := h.attendanceRecorder.AutoRecordPresent(c.Request.Context(), clinicID.(uuid.UUID), id); err != nil {
+			logger.Printf("[Appointment] Error auto-recording attendance for %s: %v", id, err)
+		}
 	}
 
 	c.JSON(http.StatusOK, appointment)

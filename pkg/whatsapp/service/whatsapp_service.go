@@ -16,9 +16,13 @@ import (
 	"github.com/aseno/backend/internal/queue"
 	aptModel "github.com/aseno/backend/pkg/appointment/model"
 	clinic_model "github.com/aseno/backend/pkg/clinic/model"
+	systemlog_model "github.com/aseno/backend/pkg/systemlog/model"
+	systemlog_service "github.com/aseno/backend/pkg/systemlog/service"
 	"github.com/aseno/backend/pkg/whatsapp/agent"
 	"github.com/aseno/backend/pkg/whatsapp/classifier"
+	"github.com/aseno/backend/pkg/whatsapp/conversation"
 	"github.com/aseno/backend/pkg/whatsapp/model"
+	"github.com/aseno/backend/pkg/whatsapp/transcriber"
 )
 
 // WhatsAppClient defines the interface for WhatsApp API operations
@@ -45,12 +49,17 @@ type WhatsAppClient interface {
 
 	// DeleteInstance removes a WhatsApp instance
 	DeleteInstance(ctx context.Context, instance string) error
+
+	// DownloadMedia downloads audio/media content from the WhatsApp provider
+	// Returns the raw bytes, MIME type, and any error
+	DownloadMedia(ctx context.Context, instance, messageID string) ([]byte, string, error)
 }
 
 // MessageRepository defines the interface for message persistence
 type MessageRepository interface {
 	Create(ctx context.Context, message *model.Message) error
 	GetByID(ctx context.Context, id uuid.UUID) (*model.Message, error)
+	GetByExternalID(ctx context.Context, externalID string) (*model.Message, error)
 	UpdateStatus(ctx context.Context, id uuid.UUID, status model.MessageStatus) error
 	GetByAppointmentID(ctx context.Context, appointmentID uuid.UUID) ([]*model.Message, error)
 	GetPendingReminders(ctx context.Context, before time.Time) ([]*model.Message, error)
@@ -90,6 +99,7 @@ type ClinicRepository interface {
 type ScheduledMessageRepository interface {
 	Create(ctx context.Context, msg *model.ScheduledMessage) error
 	GetLastScheduledForClinic(ctx context.Context, clinicID uuid.UUID) (*model.ScheduledMessage, error)
+	DeletePendingByPhoneAndType(ctx context.Context, clinicID uuid.UUID, phone string, messageType string) error
 }
 
 // WhatsAppService defines the interface for WhatsApp business logic
@@ -108,6 +118,9 @@ type WhatsAppService interface {
 
 	// HandleIncomingMessage processes an incoming message from webhook
 	HandleIncomingMessage(ctx context.Context, clinicID uuid.UUID, msg *model.ParsedIncomingMessage) error
+
+	// ProcessDelayedAI processes a delayed AI response that was scheduled due to being outside business hours
+	ProcessDelayedAI(ctx context.Context, msg *model.ScheduledMessage) error
 
 	// ClassifyMessage classifies the intent of an incoming message
 	ClassifyMessage(content string) model.MessageIntent
@@ -178,6 +191,68 @@ type WhatsAppService interface {
 	// SetDebounceDelay sets the idle window before the AI processes a patient's message.
 	// Any new message received within the window resets the timer.
 	SetDebounceDelay(d time.Duration)
+
+	// SetAudioTranscriber sets the audio transcriber for voice message transcription
+	SetAudioTranscriber(t transcriber.AudioTranscriber)
+
+	// SetPatientAIPreferenceChecker sets the checker for per-patient AI scheduling preference
+	SetPatientAIPreferenceChecker(checker PatientAIPreferenceChecker)
+
+	// SetPlanGateChecker wires the plan gate that decides if the AI agent is
+	// enabled for the clinic's current subscription/plan.
+	SetPlanGateChecker(checker PlanGateChecker)
+
+	// SetPatientEnsurer sets the patient ensurer for early patient creation on WhatsApp contact
+	SetPatientEnsurer(ensurer PatientEnsurer)
+
+	// SetSystemLogService sets the system log service for persistent event logging
+	SetSystemLogService(svc systemlog_service.SystemLogService)
+
+	// SetInstanceClinicResolver injects the lookup used by SendTextMessage to
+	// resolve an instance name into its owning clinic ID — required for
+	// centralized outbound message logging.
+	SetInstanceClinicResolver(r InstanceClinicResolver)
+
+	// SetSentMessageCache injects the Redis-backed cache that records
+	// outbound message IDs so the fromMe webhook echo can be recognized as
+	// our own message and not a human takeover.
+	SetSentMessageCache(c SentMessageCache)
+
+	// SetConversationManager wires the conversation manager used to persist
+	// user/assistant turns; consumed only for history bookkeeping now that
+	// takeover state lives on patient_whatsapp_connections.
+	SetConversationManager(mgr conversation.Manager)
+
+	// SetHumanTakeoverTracker wires the persistence that the gate uses to
+	// mark and read the takeover pause timestamp for a patient phone.
+	SetHumanTakeoverTracker(t HumanTakeoverTracker)
+
+	// HandleOutgoingMessage processes a fromMe webhook event. Either recognizes
+	// the message as our own outbound (via the sent-message cache) or records
+	// a human takeover for the conversation when it looks like an external send.
+	HandleOutgoingMessage(ctx context.Context, clinicID uuid.UUID, msg *model.ParsedIncomingMessage) error
+}
+
+// InstanceClinicResolver resolves an instance name to its owning clinic ID.
+// Implemented by the WhatsApp connection repository.
+type InstanceClinicResolver interface {
+	GetClinicIDByInstance(ctx context.Context, instance string) (uuid.UUID, error)
+}
+
+// SentMessageCache records outbound provider message IDs with a short TTL so
+// the service can later distinguish its own message echoes (fromMe webhooks)
+// from human takeover events.
+type SentMessageCache interface {
+	RecordSentMessageID(ctx context.Context, externalID string, ttl time.Duration) error
+	IsOurSentMessage(ctx context.Context, externalID string) (found bool, redisAvailable bool)
+}
+
+// HumanTakeoverTracker persists and reads per-patient takeover state. Backed
+// by the patient_whatsapp_connections table (not conversation_contexts) so
+// the pause survives conversation expiry/rotation.
+type HumanTakeoverTracker interface {
+	Mark(ctx context.Context, clinicID uuid.UUID, phone string, at time.Time) error
+	GetTakeoverAt(ctx context.Context, clinicID uuid.UUID, phone string) (*time.Time, error)
 }
 
 // whatsAppService implements WhatsAppService
@@ -212,7 +287,41 @@ type whatsAppService struct {
 	// Debouncer: delays AI processing until patient stops typing
 	debouncer     *messageDebouncer
 	debounceDelay time.Duration
+	// Audio transcriber for voice message transcription
+	audioTranscriber transcriber.AudioTranscriber
+	// Patient AI preference checker for per-patient AI toggle
+	patientAIPrefChecker PatientAIPreferenceChecker
+	// Plan gate: blocks AI agent when the clinic's subscription/plan doesn't cover it
+	planGateChecker PlanGateChecker
+	// Patient ensurer: creates patient on first WhatsApp contact
+	patientEnsurer PatientEnsurer
+	// System log service for persistent event logging
+	systemLogSvc systemlog_service.SystemLogService
+	// Resolver + cache for centralized outbound message logging
+	instanceResolver    InstanceClinicResolver
+	instanceClinicCache sync.Map // instance (string) → resolvedInstance
+	sentMessageCache    SentMessageCache
+	// conversationMgr is used for history bookkeeping (not takeover state).
+	conversationMgr conversation.Manager
+	// takeoverTracker owns human-takeover persistence; backed by
+	// patient_whatsapp_connections in production.
+	takeoverTracker HumanTakeoverTracker
 }
+
+// resolvedInstance caches an instance→clinic lookup with a freshness stamp.
+// Entries expire 5 minutes after the last refresh; avoids hitting the DB on
+// every send while still picking up clinic reassignments within minutes.
+type resolvedInstance struct {
+	clinicID uuid.UUID
+	storedAt time.Time
+}
+
+const instanceClinicCacheTTL = 5 * time.Minute
+
+// sentMessageTTL is long enough to cover provider echo latency but short
+// enough to limit Redis pressure. 5 minutes is generous — most echoes come
+// within seconds.
+const sentMessageTTL = 5 * time.Minute
 
 // AppointmentStatusUpdater interface for updating appointment status
 type AppointmentStatusUpdater interface {
@@ -222,14 +331,16 @@ type AppointmentStatusUpdater interface {
 
 // AppointmentInfo represents appointment info for WhatsApp messages
 type AppointmentInfo struct {
-	ID             uuid.UUID
-	PatientID      uuid.UUID
-	ProfessionalID uuid.UUID
-	PatientName    string
-	PatientPhone   string
-	Professional   string
-	StartTime      time.Time
-	EndTime        time.Time
+	ID                    uuid.UUID
+	PatientID             uuid.UUID
+	ProfessionalID        uuid.UUID
+	PatientName           string
+	PatientPhone          string
+	Professional          string
+	StartTime             time.Time
+	EndTime               time.Time
+	Status                string     // pending, confirmed, no_response, canceled, etc.
+	ConfirmationExpiresAt *time.Time // non-nil and in the future == patient is "awaiting confirmation"
 }
 
 // SlotSuggester interface for suggesting reschedule slots
@@ -252,6 +363,17 @@ type PatientInfo struct {
 // PatientFinderCreator interface for finding or creating patients
 type PatientFinderCreator interface {
 	FindOrCreateByPhone(ctx context.Context, clinicID uuid.UUID, phone, name string) (*PatientInfo, error)
+}
+
+// PatientAIPreferenceChecker checks whether AI scheduling is enabled for a patient
+type PatientAIPreferenceChecker interface {
+	IsAISchedulingEnabledByPhone(ctx context.Context, clinicID uuid.UUID, phone string) (bool, error)
+}
+
+// PatientEnsurer ensures a patient record exists for a given phone number.
+// If no patient exists, one is created with Source = WHATSAPP_INBOUND.
+type PatientEnsurer interface {
+	EnsureByPhone(ctx context.Context, clinicID uuid.UUID, phone, senderName string) error
 }
 
 // ProfessionalInfo represents professional info for scheduling
@@ -396,9 +518,13 @@ type AppointmentFinder interface {
 	GetPendingByPhone(ctx context.Context, clinicID uuid.UUID, phone string) (*AppointmentInfo, error)
 }
 
-// WaitlistResponseHandler interface for handling waitlist responses
+// WaitlistResponseHandler interface for handling waitlist responses.
+// handled=true means the response consumed an existing waitlist entry and no
+// further processing is needed; handled=false means the phone is not on the
+// waitlist and the caller should try the regular appointment path. err only
+// signals actual failures (DB errors, etc.), never "entry not found".
 type WaitlistResponseHandler interface {
-	HandlePatientResponse(ctx context.Context, clinicID uuid.UUID, phone string, accepted bool) error
+	HandlePatientResponse(ctx context.Context, clinicID uuid.UUID, phone string, accepted bool) (bool, error)
 }
 
 // NewWhatsAppService creates a new WhatsApp service
@@ -420,6 +546,154 @@ func NewWhatsAppService(
 // SetDebounceDelay sets the idle window before message processing.
 func (s *whatsAppService) SetDebounceDelay(d time.Duration) {
 	s.debounceDelay = d
+}
+
+// SetAudioTranscriber sets the audio transcriber for voice message transcription
+func (s *whatsAppService) SetAudioTranscriber(t transcriber.AudioTranscriber) {
+	s.audioTranscriber = t
+}
+
+// SetPatientAIPreferenceChecker sets the checker for per-patient AI scheduling preference
+func (s *whatsAppService) SetPatientAIPreferenceChecker(checker PatientAIPreferenceChecker) {
+	s.patientAIPrefChecker = checker
+}
+
+// SetPlanGateChecker sets the plan gate used to enforce that the clinic's
+// current subscription and plan allow the AI agent to respond.
+func (s *whatsAppService) SetPlanGateChecker(checker PlanGateChecker) {
+	s.planGateChecker = checker
+}
+
+// SetPatientEnsurer sets the patient ensurer for early patient creation on WhatsApp contact
+func (s *whatsAppService) SetPatientEnsurer(ensurer PatientEnsurer) {
+	s.patientEnsurer = ensurer
+}
+
+// SetSystemLogService sets the system log service for persistent event logging
+func (s *whatsAppService) SetSystemLogService(svc systemlog_service.SystemLogService) {
+	s.systemLogSvc = svc
+}
+
+func (s *whatsAppService) SetInstanceClinicResolver(r InstanceClinicResolver) {
+	s.instanceResolver = r
+}
+
+func (s *whatsAppService) SetSentMessageCache(c SentMessageCache) {
+	s.sentMessageCache = c
+}
+
+func (s *whatsAppService) SetHumanTakeoverTracker(t HumanTakeoverTracker) {
+	s.takeoverTracker = t
+}
+
+func (s *whatsAppService) SetConversationManager(mgr conversation.Manager) {
+	s.conversationMgr = mgr
+}
+
+// HandleOutgoingMessage handles a fromMe webhook echo. The goal is to decide
+// whether the message came from this system (our own send looping back) or
+// from a human at the clinic typing directly in the WhatsApp app.
+//
+// Detection order:
+//  1. Redis sent-cache (fast path, ~ms). Set right after each outbound send.
+//  2. DB fallback (messageRepo.GetByExternalID). Used when Redis is
+//     unavailable OR returns miss — covers the race window where logMessage
+//     committed but the Redis push hadn't propagated, and keeps the feature
+//     working when Redis is down instead of silently disabling it.
+//
+// Gupshup (WABA) never emits fromMe via parsers, so this path is only
+// exercised by Evolution/WAHA.
+func (s *whatsAppService) HandleOutgoingMessage(ctx context.Context, clinicID uuid.UUID, msg *model.ParsedIncomingMessage) error {
+	if msg == nil {
+		return nil
+	}
+
+	// Fast path: Redis cache.
+	redisFound := false
+	redisAvailable := false
+	if s.sentMessageCache != nil {
+		redisFound, redisAvailable = s.sentMessageCache.IsOurSentMessage(ctx, msg.MessageID)
+		if redisAvailable && redisFound {
+			return nil
+		}
+	}
+
+	// Fallback: DB lookup by external_id. Also covers the race where the
+	// webhook echo arrives between client.SendTextMessage returning and the
+	// Redis push completing — logMessage ran first, so the row is already
+	// persisted.
+	if s.messageRepo != nil && msg.MessageID != "" {
+		if dbMsg, err := s.messageRepo.GetByExternalID(ctx, msg.MessageID); err == nil && dbMsg != nil {
+			if !redisAvailable {
+				logger.Printf("[WhatsApp] fromMe echo for %s matched via DB fallback (Redis unavailable)", msg.Phone)
+			}
+			return nil
+		}
+	} else if !redisAvailable {
+		logger.Printf("[WhatsApp] fromMe echo for %s skipped: Redis unavailable and no message repo wired", msg.Phone)
+		return nil
+	}
+
+	if s.takeoverTracker == nil {
+		return nil
+	}
+	now := time.Now()
+	if err := s.takeoverTracker.Mark(ctx, clinicID, msg.Phone, now); err != nil {
+		logger.Printf("[WhatsApp] Failed to mark human takeover for %s: %v", msg.Phone, err)
+		return err
+	}
+	logger.Printf("[WhatsApp] Human takeover recorded for clinic %s phone %s", clinicID, msg.Phone)
+
+	// Persist the attendant's message to the conversation history under
+	// RoleHumanAgent. Without this the LLM, when the pause expires, sees a
+	// gap in the dialogue and re-asks information the human already
+	// gathered (e.g. patient says "sim" after the human confirmed a slot,
+	// and the AI replies "qual horário?"). Best-effort: a persistence error
+	// must not block the takeover detection — log and continue.
+	if s.conversationMgr != nil && msg.Content != "" {
+		if conv, cerr := s.conversationMgr.GetOrCreate(ctx, clinicID, msg.Phone, msg.SenderName); cerr == nil {
+			if addErr := s.conversationMgr.AddHumanAgentMessage(ctx, conv.ID, msg.Content); addErr != nil {
+				logger.Printf("[WhatsApp] Warning: failed to persist human-agent message for %s: %v", msg.Phone, addErr)
+			}
+		} else {
+			logger.Printf("[WhatsApp] Warning: failed to load conversation for human-agent message persistence (%s): %v", msg.Phone, cerr)
+		}
+	}
+
+	if s.systemLogSvc != nil {
+		_ = s.systemLogSvc.Log(ctx, systemlog_service.SystemLogEntry{
+			ClinicID: &clinicID,
+			Service:  "whatsapp",
+			Event:    "human_takeover_detected",
+			Status:   systemlog_model.LogStatusWarning,
+			Payload: map[string]interface{}{
+				"phone":       msg.Phone,
+				"external_id": msg.MessageID,
+			},
+		})
+	}
+	return nil
+}
+
+// resolveClinicIDForInstance returns the clinic ID that owns the given
+// instance, using an in-memory cache to avoid hitting the DB on every send.
+// Returns uuid.Nil + false if resolver is not wired or the instance is unknown.
+func (s *whatsAppService) resolveClinicIDForInstance(ctx context.Context, instance string) (uuid.UUID, bool) {
+	if instance == "" || s.instanceResolver == nil {
+		return uuid.Nil, false
+	}
+	if v, ok := s.instanceClinicCache.Load(instance); ok {
+		if entry, ok := v.(resolvedInstance); ok && time.Since(entry.storedAt) < instanceClinicCacheTTL {
+			return entry.clinicID, true
+		}
+	}
+	id, err := s.instanceResolver.GetClinicIDByInstance(ctx, instance)
+	if err != nil {
+		logger.Printf("[WhatsApp] resolve clinic for instance %s failed: %v", instance, err)
+		return uuid.Nil, false
+	}
+	s.instanceClinicCache.Store(instance, resolvedInstance{clinicID: id, storedAt: time.Now()})
+	return id, true
 }
 
 // SetAppointmentFinder sets the appointment finder for WhatsApp response handling
@@ -513,10 +787,63 @@ func (s *whatsAppService) CreateInstance(ctx context.Context, instance string) (
 	return s.client.CreateInstance(ctx, instance)
 }
 
-// SendTextMessage sends a simple text message
+// recordOutboundEcho pushes the provider's message ID to the Redis sent-cache
+// and (if clinicID resolves from the instance) logs the outbound message in
+// the DB. Used by code paths that call the low-level client.Send* directly
+// instead of routing through SendTextMessage — without this, a fromMe webhook
+// echo of our own message can be mis-classified as a human takeover.
+//
+// Caller passes appointmentID when known (reminder/confirmation flows) so the
+// DB row is linked to the appointment; otherwise nil.
+func (s *whatsAppService) recordOutboundEcho(ctx context.Context, instance, phone, message, externalID string, appointmentID *uuid.UUID, clinicHint *uuid.UUID) {
+	if externalID == "" {
+		return
+	}
+	if s.sentMessageCache != nil {
+		if err := s.sentMessageCache.RecordSentMessageID(ctx, externalID, sentMessageTTL); err != nil {
+			logger.Printf("[WhatsApp] failed to record sent ID in cache: %v", err)
+		}
+	}
+	if s.messageRepo == nil {
+		return
+	}
+	var clinicID uuid.UUID
+	if clinicHint != nil {
+		clinicID = *clinicHint
+	} else if id, ok := s.resolveClinicIDForInstance(ctx, instance); ok {
+		clinicID = id
+	} else {
+		return
+	}
+	s.logMessage(ctx, clinicID, appointmentID, phone, model.MessageDirectionOutbound, message, model.MessageStatusSent, externalID)
+}
+
+// SendTextMessage sends a simple text message. All outbound traffic that
+// flows through this method is logged to the messages table and the
+// provider's message ID is pushed to the Redis sent cache so the fromMe
+// webhook echo can be recognized as ours (and not a human takeover event).
 func (s *whatsAppService) SendTextMessage(ctx context.Context, instance, phone, message string) (*model.SendMessageResponse, error) {
 	formattedPhone := formatPhoneNumber(phone)
-	return s.client.SendTextMessage(ctx, instance, formattedPhone, message)
+	resp, err := s.client.SendTextMessage(ctx, instance, formattedPhone, message)
+
+	clinicID, resolved := s.resolveClinicIDForInstance(ctx, instance)
+
+	if err != nil {
+		if resolved && s.messageRepo != nil {
+			s.logMessage(ctx, clinicID, nil, formattedPhone, model.MessageDirectionOutbound, message, model.MessageStatusFailed, err.Error())
+		}
+		return nil, err
+	}
+
+	if resolved && s.messageRepo != nil {
+		s.logMessage(ctx, clinicID, nil, formattedPhone, model.MessageDirectionOutbound, message, model.MessageStatusSent, resp.ExternalID)
+	}
+	if s.sentMessageCache != nil && resp != nil && resp.ExternalID != "" {
+		if cacheErr := s.sentMessageCache.RecordSentMessageID(ctx, resp.ExternalID, sentMessageTTL); cacheErr != nil {
+			logger.Printf("[WhatsApp] failed to record sent message ID in cache: %v", cacheErr)
+		}
+	}
+	return resp, nil
 }
 
 // SendConfirmationFeedback sends a message confirming the appointment was confirmed
@@ -566,8 +893,14 @@ func (s *whatsAppService) SendRescheduleOptions(ctx context.Context, instance, p
 
 	message += "\nOu responda NAO se nao quiser reagendar."
 
-	_, err := s.client.SendButtonMessage(ctx, instance, phone, message, buttons)
-	return err
+	resp, err := s.client.SendButtonMessage(ctx, instance, phone, message, buttons)
+	if err != nil {
+		return err
+	}
+	if resp != nil {
+		s.recordOutboundEcho(ctx, instance, phone, message, resp.ExternalID, nil, nil)
+	}
+	return nil
 }
 
 // handleRescheduleResponse handles a reschedule button response
@@ -657,6 +990,10 @@ func (s *whatsAppService) SendConfirmationMessage(ctx context.Context, instance 
 
 	// Log successful message
 	s.logMessage(ctx, msg.ClinicID, &msg.AppointmentID, phone, model.MessageDirectionOutbound, message, model.MessageStatusSent, resp.ExternalID)
+	// Register in sent-cache so the fromMe echo isn't misread as takeover.
+	if s.sentMessageCache != nil {
+		_ = s.sentMessageCache.RecordSentMessageID(ctx, resp.ExternalID, sentMessageTTL)
+	}
 
 	return nil
 }
@@ -671,13 +1008,13 @@ func (s *whatsAppService) SendReminderMessage(ctx context.Context, instance stri
 	var reminderText string
 	switch msg.ReminderType {
 	case model.ReminderType48Hours:
-		reminderText = "Lembrete: sua consulta e em 2 dias!"
+		reminderText = "Lembrete: sua consulta é em 2 dias!"
 	case model.ReminderType24Hours:
-		reminderText = "Lembrete: sua consulta e amanha!"
+		reminderText = "Lembrete: sua consulta é amanhã!"
 	case model.ReminderType2Hours:
-		reminderText = "Lembrete: sua consulta e em 2 horas!"
+		reminderText = "Lembrete: sua consulta é em 2 horas!"
 	case model.ReminderType1Hour:
-		reminderText = "Lembrete: sua consulta e em 1 hora!"
+		reminderText = "Lembrete: sua consulta é em 1 hora!"
 	default:
 		reminderText = "Lembrete de consulta"
 	}
@@ -692,7 +1029,8 @@ func (s *whatsAppService) SendReminderMessage(ctx context.Context, instance stri
 			"🕐 Horario: %s\n"+
 			"👨‍⚕️ Profissional: %s\n"+
 			"🏥 Local: %s\n\n"+
-			"Caso precise remarcar ou cancelar, responda esta mensagem.",
+			"Confirme sua presença?\n"+
+			"Se precisar remarcar ou cancelar, responda esta mensagem.",
 		reminderText,
 		greeting,
 		dateStr,
@@ -708,61 +1046,152 @@ func (s *whatsAppService) SendReminderMessage(ctx context.Context, instance stri
 	}
 
 	s.logMessage(ctx, msg.ClinicID, &msg.AppointmentID, phone, model.MessageDirectionOutbound, message, model.MessageStatusSent, resp.ExternalID)
+	if s.sentMessageCache != nil {
+		_ = s.sentMessageCache.RecordSentMessageID(ctx, resp.ExternalID, sentMessageTTL)
+	}
 
 	return nil
 }
 
 // HandleIncomingMessage processes an incoming message
 func (s *whatsAppService) HandleIncomingMessage(ctx context.Context, clinicID uuid.UUID, msg *model.ParsedIncomingMessage) error {
-	// Log incoming message
+	logger.Printf("[WhatsApp] Message received from %s (clinic: %s): %s", msg.Phone, clinicID, msg.Content)
+
+	// Se for áudio, tenta transcrever antes de processar
+	if msg.IsAudio && s.audioTranscriber != nil {
+		logger.Printf("[WhatsApp] Audio message detected from %s, downloading...", msg.Phone)
+
+		audioBytes, mimeType, err := s.client.DownloadMedia(ctx, msg.Instance, msg.MessageID)
+		if err != nil {
+			logger.Printf("[WhatsApp] Failed to download audio from %s: %v", msg.Phone, err)
+			msg.Content = "[Mensagem de áudio não pôde ser baixada]"
+		} else {
+			transcribed, err := s.audioTranscriber.Transcribe(ctx, audioBytes, mimeType)
+			if err != nil {
+				logger.Printf("[WhatsApp] Failed to transcribe audio from %s: %v", msg.Phone, err)
+				msg.Content = "[Mensagem de áudio inaudível]"
+			} else {
+				msg.Content = transcribed
+				logger.Printf("[WhatsApp] Transcribed audio from %s: %s", msg.Phone, transcribed)
+			}
+		}
+	} else if msg.IsAudio {
+		logger.Printf("[WhatsApp] Audio message ignored from %s (transcriber disabled)", msg.Phone)
+		msg.Content = "[Mensagem de áudio]"
+	}
+
+	// Log incoming message (logs original text or transcribed text)
 	s.logMessage(ctx, clinicID, nil, msg.Phone, model.MessageDirectionInbound, msg.Content, model.MessageStatusDelivered, msg.MessageID)
 
-	// Se o AI Agent está habilitado, debounce antes de processar.
-	// Evita respostas instantâneas que podem acionar bloqueio pelo WhatsApp.
-	if s.aiAgentService != nil {
-		logger.Printf("[Debounce] Message from %s received — waiting %v idle before processing",
-			msg.Phone, s.debounceDelay)
-
-		bgCtx := context.Background()
-		capClinicID := clinicID
-
-		s.debouncer.schedule(clinicID, msg, s.debounceDelay, func(lastMsg *model.ParsedIncomingMessage) {
-			logger.Printf("[Debounce] Idle window elapsed for %s — processing with AI Agent: %q",
-				lastMsg.Phone, lastMsg.Content)
-			if err := s.handleWithAIAgent(bgCtx, capClinicID, lastMsg); err != nil {
-				logger.Printf("[Debounce] Error handling AI Agent message from %s: %v", lastMsg.Phone, err)
-			}
-		})
-		return nil
-	}
-
-	// Check for reschedule button response first (rsch_0, rsch_1, etc.)
-	if msg.ButtonID != "" && strings.HasPrefix(msg.ButtonID, "rsch_") {
-		return s.handleRescheduleResponse(ctx, msg)
-	}
-
-	// Classify intent
-	intent := s.ClassifyMessage(msg.Content)
-
-	// If it's a button response, use the button ID directly
-	if msg.ButtonID != "" {
-		switch msg.ButtonID {
-		case "confirm":
-			intent = model.MessageIntentConfirm
-		case "cancel":
-			intent = model.MessageIntentCancel
-		case "reschedule":
-			intent = model.MessageIntentReschedule
+	// Ensure patient record exists before AI preference check.
+	// This allows the clinic to disable AI for this contact immediately.
+	if s.patientEnsurer != nil {
+		if err := s.patientEnsurer.EnsureByPhone(ctx, clinicID, msg.Phone, msg.SenderName); err != nil {
+			logger.Printf("[WhatsApp] Warning: failed to ensure patient for %s: %v", msg.Phone, err)
 		}
 	}
 
-	// Handle the response based on intent
+	// Debounce + dispatch. Debouncing is done for BOTH paths (Pro AI Agent and
+	// basic reactive classifier) because WhatsApp clients split long replies
+	// into several rapid messages; coalescing them into one processing event
+	// keeps us from firing multiple confirmations in a row.
+	//
+	// Plan gate is resolved here — before scheduling — so the debounced
+	// callback does not need to re-query. Pro (gate allows) runs the full
+	// AI Agent; basic (gate denies) runs the reactive classifier.
+	if s.aiAgentService != nil {
+		aiEnabled := true
+		var clinic *clinic_model.Clinic
+		if s.clinicRepo != nil {
+			c, err := s.clinicRepo.GetByID(ctx, clinicID)
+			if err != nil {
+				logger.Printf("[AI Agent] Warning: failed to fetch clinic settings: %v", err)
+			} else if !c.Settings.AIAgentEnabled {
+				aiEnabled = false
+				logger.Printf("[AI Agent] Clinic %s has AIAgentEnabled=false, using reactive flow", clinicID)
+			} else {
+				clinic = c
+			}
+		} else {
+			logger.Printf("[AI Agent] Clinic %s not found, using reactive flow", clinicID)
+		}
+
+		if aiEnabled {
+			useAIAgent := true
+			if s.planGateChecker != nil && clinic != nil {
+				allowed, err := s.planGateChecker.IsAIAgentAllowed(ctx, clinic)
+				if err != nil {
+					useAIAgent = false
+					logger.Printf("[AI Agent] Plan gate error for clinic %s: %v — using reactive flow", clinicID, err)
+				} else if !allowed {
+					useAIAgent = false
+					logger.Printf("[AI Agent] Clinic %s plan does not include AI agent, using reactive flow", clinicID)
+				}
+			}
+
+			logger.Printf("[Debounce] Message from %s received — waiting %v idle before processing",
+				msg.Phone, s.debounceDelay)
+
+			bgCtx := context.Background()
+			capClinicID := clinicID
+
+			s.debouncer.schedule(clinicID, msg, s.debounceDelay, func(lastMsg *model.ParsedIncomingMessage) {
+				if useAIAgent {
+					logger.Printf("[Debounce] Idle window elapsed for %s — processing with AI Agent: %q",
+						lastMsg.Phone, lastMsg.Content)
+					if err := s.handleWithAIAgent(bgCtx, capClinicID, lastMsg); err != nil {
+						logger.Printf("[Debounce] Error handling AI Agent message from %s: %v", lastMsg.Phone, err)
+					}
+				} else {
+					logger.Printf("[Debounce] Idle window elapsed for %s — processing with reactive classifier: %q",
+						lastMsg.Phone, lastMsg.Content)
+					if err := s.handleReactiveIntent(bgCtx, capClinicID, lastMsg); err != nil {
+						logger.Printf("[Debounce] Error handling reactive message from %s: %v", lastMsg.Phone, err)
+					}
+				}
+			})
+			return nil
+		}
+	}
+
+	// AI agent service not wired (test/dev) — go straight to reactive flow.
+	return s.handleReactiveIntent(ctx, clinicID, msg)
+}
+
+// handleReactiveIntent processes a message without invoking the full AI Agent:
+// button-based intents map directly, and free text only acts if the patient is
+// inside a confirmation window (Confirm/Cancel). Anything else is ignored.
+func (s *whatsAppService) handleReactiveIntent(ctx context.Context, clinicID uuid.UUID, msg *model.ParsedIncomingMessage) error {
+	if strings.HasPrefix(msg.ButtonID, "rsch_") {
+		return s.handleRescheduleResponse(ctx, msg)
+	}
+
+	var intent model.MessageIntent
+	switch msg.ButtonID {
+	case "confirm":
+		intent = model.MessageIntentConfirm
+	case "cancel":
+		intent = model.MessageIntentCancel
+	case "reschedule":
+		intent = model.MessageIntentReschedule
+	case "":
+		intent = s.classifyWithinConfirmationWindow(ctx, clinicID, msg)
+		if intent != model.MessageIntentConfirm && intent != model.MessageIntentCancel {
+			return nil
+		}
+	default:
+		return nil
+	}
+
 	switch intent {
 	case model.MessageIntentConfirm:
 		// First check if this is a waitlist response
 		if s.waitlistHandler != nil {
-			if err := s.waitlistHandler.HandlePatientResponse(ctx, clinicID, msg.Phone, true); err == nil {
-				// Waitlist response handled successfully
+			handled, err := s.waitlistHandler.HandlePatientResponse(ctx, clinicID, msg.Phone, true)
+			if err != nil {
+				logger.Printf("[Waitlist] Error handling confirm response for %s: %v", msg.Phone, err)
+			}
+			if handled {
 				return nil
 			}
 		}
@@ -782,8 +1211,11 @@ func (s *whatsAppService) HandleIncomingMessage(ctx context.Context, clinicID uu
 	case model.MessageIntentCancel:
 		// First check if this is a waitlist response (declining a slot offer)
 		if s.waitlistHandler != nil {
-			if err := s.waitlistHandler.HandlePatientResponse(ctx, clinicID, msg.Phone, false); err == nil {
-				// Waitlist response handled successfully
+			handled, err := s.waitlistHandler.HandlePatientResponse(ctx, clinicID, msg.Phone, false)
+			if err != nil {
+				logger.Printf("[Waitlist] Error handling cancel response for %s: %v", msg.Phone, err)
+			}
+			if handled {
 				return nil
 			}
 		}
@@ -845,6 +1277,39 @@ func (s *whatsAppService) HandleIncomingMessage(ctx context.Context, clinicID uu
 	}
 
 	return nil
+}
+
+// classifyWithinConfirmationWindow returns an intent only when the patient
+// is currently awaiting confirmation of a pending appointment AND the clinic
+// has AI enabled. Returns Unknown (caller treats as "ignore") when:
+//   - no AppointmentFinder is wired
+//   - there is no pending appointment for this phone
+//   - the confirmation window is closed (expired or never opened)
+//   - the appointment status already resolved (confirmed/canceled)
+//   - the clinic disabled AIAgentEnabled — ClassifyMessage uses an AI provider
+//     (regex is only a fallback), so a clinic that opted out of AI should not
+//     consume any AI tokens for incoming messages.
+func (s *whatsAppService) classifyWithinConfirmationWindow(ctx context.Context, clinicID uuid.UUID, msg *model.ParsedIncomingMessage) model.MessageIntent {
+	if s.appointmentFinder == nil {
+		return model.MessageIntentUnknown
+	}
+	apt, err := s.appointmentFinder.GetPendingByPhone(ctx, clinicID, msg.Phone)
+	if err != nil || apt == nil {
+		return model.MessageIntentUnknown
+	}
+	if apt.ConfirmationExpiresAt == nil || !apt.ConfirmationExpiresAt.After(time.Now()) {
+		return model.MessageIntentUnknown
+	}
+	if apt.Status != "pending" && apt.Status != "no_response" {
+		return model.MessageIntentUnknown
+	}
+	if s.clinicRepo != nil {
+		clinic, err := s.clinicRepo.GetByID(ctx, clinicID)
+		if err == nil && !clinic.Settings.AIAgentEnabled {
+			return model.MessageIntentUnknown
+		}
+	}
+	return s.ClassifyMessage(msg.Content)
 }
 
 // ClassifyMessage classifies the intent of a message (uses AI with regex fallback)
@@ -1023,8 +1488,10 @@ func (s *whatsAppService) handleWithAIAgent(ctx context.Context, clinicID uuid.U
 	}
 
 	// Check if AI agent is enabled for this clinic
+	var clinic *clinic_model.Clinic
 	if s.clinicRepo != nil {
-		clinic, err := s.clinicRepo.GetByID(ctx, clinicID)
+		var err error
+		clinic, err = s.clinicRepo.GetByID(ctx, clinicID)
 		if err != nil {
 			logger.Printf("[AI Agent] Warning: failed to fetch clinic settings: %v", err)
 		} else if !clinic.Settings.AIAgentEnabled {
@@ -1033,7 +1500,121 @@ func (s *whatsAppService) handleWithAIAgent(ctx context.Context, clinicID uuid.U
 		}
 	}
 
-	// Removed business hours check - messages are processed and scheduled if outside hours
+	// Enforce plan gate: trial accounts (while valid) and subscribers on
+	// Professional/Advanced plans can use the AI agent. Fail-closed on error
+	// to avoid burning AI credits for accounts we cannot verify.
+	if s.planGateChecker != nil && clinic != nil {
+		allowed, err := s.planGateChecker.IsAIAgentAllowed(ctx, clinic)
+		if err != nil {
+			logger.Printf("[AI Agent] Plan gate check failed for clinic %s: %v — skipping", clinicID, err)
+			return nil
+		}
+		if !allowed {
+			logger.Printf("[AI Agent] Clinic %s plan does not include AI agent, skipping", clinicID)
+			return nil
+		}
+	}
+
+	// Human takeover gate: if a clinic user replied directly via the WhatsApp
+	// app within the configured pause window, stay silent. Nil tracker
+	// (takeover feature not wired) simply falls through. The tracker reads
+	// from patient_whatsapp_connections so state survives conversation
+	// expiry/rotation and is stored with the rest of the patient's
+	// per-patient preferences. Also records the skipped user message to the
+	// conversation history so the AI has context when the pause ends.
+	if s.takeoverTracker != nil && clinic != nil {
+		pause := clinic.Settings.GetHumanTakeoverPauseDuration()
+		if pause > 0 {
+			takeoverAt, err := s.takeoverTracker.GetTakeoverAt(ctx, clinicID, msg.Phone)
+			if err != nil {
+				logger.Printf("[AI Agent] Warning: failed to load takeover state: %v", err)
+			} else if takeoverAt != nil && time.Now().Before(takeoverAt.Add(pause)) {
+				logger.Printf("[AI Agent] Human takeover active for %s (until %s), skipping AI", msg.Phone, takeoverAt.Add(pause).Format(time.RFC3339))
+				// Persist the patient's message so the LLM has context when
+				// the pause ends — otherwise it wakes up to a conversation
+				// where the patient's intervening messages are invisible.
+				if s.conversationMgr != nil {
+					if conv, cerr := s.conversationMgr.GetOrCreate(ctx, clinicID, msg.Phone, msg.SenderName); cerr == nil {
+						if addErr := s.conversationMgr.AddUserMessage(ctx, conv.ID, msg.Content); addErr != nil {
+							logger.Printf("[AI Agent] Warning: failed to add user message during takeover: %v", addErr)
+						}
+					}
+				}
+				if s.systemLogSvc != nil {
+					_ = s.systemLogSvc.Log(ctx, systemlog_service.SystemLogEntry{
+						ClinicID: &clinicID,
+						Service:  "ai_agent",
+						Event:    "human_takeover_pause_active",
+						Status:   systemlog_model.LogStatusWarning,
+						Payload: map[string]interface{}{
+							"phone":             msg.Phone,
+							"takeover_at":       takeoverAt.Format(time.RFC3339),
+							"pause_duration_hr": int(pause / time.Hour),
+						},
+					})
+				}
+				return nil
+			}
+		}
+	}
+
+	// Check if AI scheduling is enabled for this patient
+	if s.patientAIPrefChecker != nil {
+		enabled, err := s.patientAIPrefChecker.IsAISchedulingEnabledByPhone(ctx, clinicID, msg.Phone)
+		if err != nil {
+			logger.Printf("[AI Agent] Warning: failed to check patient AI preference for %s: %v", msg.Phone, err)
+		} else if !enabled {
+			logger.Printf("[AI Agent] Patient %s has AI scheduling disabled, skipping AI agent", msg.Phone)
+			if s.systemLogSvc != nil {
+				_ = s.systemLogSvc.Log(ctx, systemlog_service.SystemLogEntry{
+					ClinicID: &clinicID,
+					Service:  "ai_agent",
+					Event:    "patient_ai_disabled",
+					Status:   systemlog_model.LogStatusWarning,
+					Payload: map[string]interface{}{
+						"phone":  msg.Phone,
+						"action": "skipped_ai_processing",
+					},
+				})
+			}
+			return nil
+		}
+	}
+
+	// Check if we're outside business hours
+	outsideHours := clinic != nil && !clinic.IsWithinBusinessHours(time.Now())
+
+	if outsideHours && s.scheduledMsgRepo != nil {
+		logger.Printf("[AI Agent] Outside business hours for clinic %s, scheduling AI processing instead", clinicID)
+
+		// Delete any pending AI processing intents for this patient
+		if err := s.scheduledMsgRepo.DeletePendingByPhoneAndType(ctx, clinicID, msg.Phone, "ai_processing"); err != nil {
+			logger.Printf("[AI Agent] Error deleting pending AI intents: %v", err)
+		}
+
+		// Calculate next business hour
+		nextBusinessHour := clinic.CalculateNextBusinessHour(time.Now())
+
+		// Save message content to process later
+		scheduledMsg := &model.ScheduledMessage{
+			ID:          uuid.New(),
+			ClinicID:    clinicID,
+			Instance:    msg.Instance,
+			Phone:       msg.Phone,
+			Message:     msg.Content, // For AI processing, this is the trigger context
+			MessageType: "ai_processing",
+			ScheduledAt: nextBusinessHour,
+			Sent:        false,
+			CreatedAt:   time.Now(),
+		}
+
+		if err := s.scheduledMsgRepo.Create(ctx, scheduledMsg); err != nil {
+			logger.Printf("[AI Agent] Error scheduling AI processing: %v", err)
+		} else {
+			logger.Printf("[AI Agent] Scheduled AI processing for %s at %s", msg.Phone, nextBusinessHour.Format(time.RFC3339))
+		}
+		return nil
+	}
 
 	// Classify message intent
 	intent := s.ClassifyMessage(msg.Content)
@@ -1041,7 +1622,7 @@ func (s *whatsAppService) handleWithAIAgent(ctx context.Context, clinicID uuid.U
 	// Create message request
 	req := &agent.MessageRequest{
 		ClinicID:     clinicID,
-		ClinicName:   "", // TODO: Fetch clinic name if needed
+		ClinicName:   "", // Fetch clinic name if needed
 		PatientPhone: msg.Phone,
 		PatientName:  msg.SenderName,
 		MessageText:  msg.Content,
@@ -1085,26 +1666,8 @@ func (s *whatsAppService) handleWithAIAgent(ctx context.Context, clinicID uuid.U
 	return nil
 }
 
-// sendAIResponseSegmented sends AI response segments through the message queue with delays or schedules for later
+// sendAIResponseSegmented sends AI response segments through the message queue with delays
 func (s *whatsAppService) sendAIResponseSegmented(ctx context.Context, clinicID uuid.UUID, instance, phone string, resp *agent.MessageResponse) error {
-	// Get clinic settings
-	var clinic *clinic_model.Clinic
-	if s.clinicRepo != nil {
-		var err error
-		clinic, err = s.clinicRepo.GetByID(ctx, clinicID)
-		if err != nil {
-			logger.Printf("[WhatsApp] Warning: failed to fetch clinic settings: %v", err)
-		}
-	}
-
-	// Check if we're outside business hours
-	outsideHours := clinic != nil && !clinic.IsWithinBusinessHours(time.Now())
-
-	if outsideHours && s.scheduledMsgRepo != nil {
-		// Schedule messages for next business hour
-		return s.scheduleMessagesForNextBusinessHour(ctx, clinicID, clinic, instance, phone, resp)
-	}
-
 	// Normal flow: send through queue
 	var cumulativeDelay time.Duration
 
@@ -1139,61 +1702,57 @@ func (s *whatsAppService) sendAIResponseSegmented(ctx context.Context, clinicID 
 	return nil
 }
 
-// scheduleMessagesForNextBusinessHour schedules AI response messages for the next business hour
-func (s *whatsAppService) scheduleMessagesForNextBusinessHour(
-	ctx context.Context,
-	clinicID uuid.UUID,
-	clinic *clinic_model.Clinic,
-	instance, phone string,
-	resp *agent.MessageResponse,
-) error {
-	// Get last scheduled message for this clinic
-	lastScheduled, err := s.scheduledMsgRepo.GetLastScheduledForClinic(ctx, clinicID)
+// ProcessDelayedAI processes a delayed AI response that was scheduled due to being outside business hours
+func (s *whatsAppService) ProcessDelayedAI(ctx context.Context, scheduledMsg *model.ScheduledMessage) error {
+	logger.Printf("[WhatsApp] Processing delayed AI for message %s from %s", scheduledMsg.ID, scheduledMsg.Phone)
+
+	// Build ParsedIncomingMessage to use existing logic
+	msg := &model.ParsedIncomingMessage{
+		Instance:   scheduledMsg.Instance,
+		MessageID:  uuid.New().String(), // Generate a new transaction ID
+		Phone:      scheduledMsg.Phone,
+		SenderName: "Paciente", // Best effort, AI agent will query past name usually
+		Content:    scheduledMsg.Message,
+		IsAudio:    false,
+		Timestamp:  time.Now(),
+	}
+
+	intent := s.ClassifyMessage(msg.Content)
+	req := &agent.MessageRequest{
+		ClinicID:     scheduledMsg.ClinicID,
+		ClinicName:   "", // Let AI agent resolve it
+		PatientPhone: msg.Phone,
+		PatientName:  msg.SenderName,
+		MessageText:  msg.Content,
+		Intent:       intent,
+	}
+
+	logger.Printf("[AI Agent] Processing delayed message from %s (intent: %s): %s", msg.Phone, intent, msg.Content)
+
+	resp, err := s.aiAgentService.ProcessMessage(ctx, req)
 	if err != nil {
-		logger.Printf("[WhatsApp] Warning: failed to get last scheduled message: %v", err)
+		logger.Printf("[AI Agent] Error processing delayed message: %v", err)
+		return err
 	}
 
-	// Calculate next business hour
-	nextBusinessHour := clinic.CalculateNextBusinessHour(time.Now())
-
-	// If there was a previous scheduled message, calculate next slot with delay
-	var nextSlot time.Time
-	if lastScheduled != nil && lastScheduled.ScheduledAt.After(nextBusinessHour) {
-		// Use clinic-specific delay or default
-		delay := clinic.GetMinDelayBetweenPatients(s.defaultDelayBetweenPatients)
-		nextSlot = lastScheduled.ScheduledAt.Add(time.Duration(delay) * time.Second)
-	} else {
-		nextSlot = nextBusinessHour
+	if resp == nil || len(resp.Segments) == 0 {
+		logger.Printf("[AI Agent] No response segments from delayed agent")
+		return nil
 	}
 
-	logger.Printf("[WhatsApp] Message outside business hours - scheduling %d segments starting at %s",
-		len(resp.Segments), nextSlot.Format(time.RFC3339))
+	if s.messageQueue != nil {
+		return s.sendAIResponseSegmented(ctx, scheduledMsg.ClinicID, msg.Instance, msg.Phone, resp)
+	}
 
-	// Schedule all segments
-	for _, segment := range resp.Segments {
-		scheduledMsg := &model.ScheduledMessage{
-			ID:          uuid.New(),
-			ClinicID:    clinicID,
-			Instance:    instance,
-			Phone:       phone,
-			Message:     segment.Content,
-			ScheduledAt: nextSlot,
-			Sent:        false,
-			CreatedAt:   time.Now(),
+	// Fallback
+	for i, segment := range resp.Segments {
+		if i > 0 && segment.DelayAfter > 0 {
+			time.Sleep(segment.DelayAfter)
 		}
-
-		if err := s.scheduledMsgRepo.Create(ctx, scheduledMsg); err != nil {
-			logger.Printf("[WhatsApp] Failed to create scheduled message: %v", err)
-			// Continue with next segment
-		} else {
-			logger.Printf("[WhatsApp] Scheduled message %s for %s at %s",
-				scheduledMsg.ID, phone, nextSlot.Format(time.RFC3339))
-		}
-
-		// Next segment gets scheduled after message-level delay
-		if segment.DelayAfter > 0 {
-			delay := clinic.GetMinDelayBetweenMessages(3) // default 3 seconds
-			nextSlot = nextSlot.Add(time.Duration(delay) * time.Second)
+		_, err := s.SendTextMessage(ctx, msg.Instance, msg.Phone, segment.Content)
+		if err != nil {
+			logger.Printf("[AI Agent] Failed to send delayed segment %d: %v", i, err)
+			return err
 		}
 	}
 
@@ -1382,10 +1941,13 @@ func (s *whatsAppService) sendSchedulingOptionsSimple(ctx context.Context, insta
 
 	// Send as text message (buttons have a limit of 3, we might have more slots)
 	formattedPhone := formatPhoneNumber(phone)
-	_, err := s.client.SendTextMessage(ctx, instance, formattedPhone, sb.String())
+	resp, err := s.client.SendTextMessage(ctx, instance, formattedPhone, sb.String())
 	if err != nil {
 		logger.Printf("[Schedule] Failed to send scheduling options: %v", err)
 		return err
+	}
+	if resp != nil {
+		s.recordOutboundEcho(ctx, instance, formattedPhone, sb.String(), resp.ExternalID, nil, nil)
 	}
 
 	logger.Printf("[Schedule] Sent %d slot options to %s", len(intent.SuggestedSlots), phone)
@@ -1489,9 +2051,11 @@ func (s *whatsAppService) handleSlotSelection(ctx context.Context, clinicID uuid
 	)
 
 	formattedPhone := formatPhoneNumber(msg.Phone)
-	_, err = s.client.SendTextMessage(ctx, msg.Instance, formattedPhone, message)
+	resp, err := s.client.SendTextMessage(ctx, msg.Instance, formattedPhone, message)
 	if err != nil {
 		logger.Printf("[Schedule] Failed to send confirmation: %v", err)
+	} else if resp != nil {
+		s.recordOutboundEcho(ctx, msg.Instance, formattedPhone, message, resp.ExternalID, nil, nil)
 	}
 
 	logger.Printf("[Schedule] Successfully scheduled appointment %s", appointment.ID)
@@ -1517,9 +2081,9 @@ func (s *whatsAppService) buildGreeting(patientName string) string {
 	timeOfDay := getTimeOfDay()
 
 	greetings := map[string]string{
-		"morning":   "Ola %s, bom dia! 😊",
-		"afternoon": "Ola %s, boa tarde! 😊",
-		"evening":   "Ola %s, boa noite! 😊",
+		"morning":   "Olá %s, bom dia! 😊",
+		"afternoon": "Olá %s, boa tarde! 😊",
+		"evening":   "Olá %s, boa noite! 😊",
 	}
 
 	greeting := greetings[timeOfDay]

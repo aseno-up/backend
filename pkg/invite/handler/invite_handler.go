@@ -8,6 +8,8 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/aseno/backend/internal/errors"
+	audit_model "github.com/aseno/backend/pkg/audit/model"
+	audit_service "github.com/aseno/backend/pkg/audit/service"
 	"github.com/aseno/backend/pkg/invite/model"
 	"github.com/aseno/backend/pkg/invite/service"
 )
@@ -27,12 +29,14 @@ type InviteHandler interface {
 // inviteHandler implements InviteHandler
 type inviteHandler struct {
 	inviteService service.InviteService
+	auditSvc      audit_service.AuditService
 }
 
 // NewInviteHandler creates a new invite handler
-func NewInviteHandler(inviteService service.InviteService) InviteHandler {
+func NewInviteHandler(inviteService service.InviteService, auditSvc audit_service.AuditService) InviteHandler {
 	return &inviteHandler{
 		inviteService: inviteService,
+		auditSvc:      auditSvc,
 	}
 }
 
@@ -93,6 +97,10 @@ func (h *inviteHandler) CreateInvite(c *gin.Context) {
 		statusCode := errors.GetStatusCode(err)
 		c.JSON(statusCode, errors.ToResponse(err))
 		return
+	}
+
+	if h.auditSvc != nil {
+		_ = h.auditSvc.LogFromGin(c, audit_model.AuditActionCreate, audit_model.AuditEntityInvite, response.ID.String(), nil, response)
 	}
 
 	c.JSON(http.StatusCreated, response)
@@ -157,6 +165,10 @@ func (h *inviteHandler) CancelInvite(c *gin.Context) {
 		statusCode := errors.GetStatusCode(err)
 		c.JSON(statusCode, errors.ToResponse(err))
 		return
+	}
+
+	if h.auditSvc != nil {
+		_ = h.auditSvc.LogFromGin(c, audit_model.AuditActionDelete, audit_model.AuditEntityInvite, inviteID.String(), nil, nil)
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "Invite canceled successfully"})

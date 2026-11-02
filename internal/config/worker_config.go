@@ -27,6 +27,12 @@ type WorkerConfig struct {
 	TimeoutWorkerInterval       time.Duration
 	ConfirmationTimeoutDuration time.Duration
 
+	// Payment Reminder Worker - monthly payment due-date reminders for session
+	// plans. The kill switches are per-channel so operations can shut down
+	// WhatsApp while leaving email working (or vice versa) without a deploy.
+	PaymentReminderWhatsAppEnabled bool
+	PaymentReminderEmailEnabled    bool
+
 	// Message Sender
 	MessageRateLimitSeconds int
 	MessageRetryMax         int
@@ -52,21 +58,32 @@ type WorkerConfig struct {
 	RabbitMQDLQ   string
 
 	// AI Agent Configuration
-	AIAgentEnabled          bool
-	AIAgentProvider         string // gemini, claude, openai
-	AIAgentModel            string
-	AIAgentFallbackModels   []string // List of fallback models to try in order
-	AIAgentMaxTokens        int
-	AIAgentTemperature      float32
-	AIAgentTimeout          time.Duration
-	ConversationMaxTurns    int
-	ConversationRedisTTL    time.Duration
-	ConversationPostgresTTL time.Duration
+	AIAgentEnabled        bool
+	AIAgentProvider       string // openrouter, gemini, claude, openai
+	AIAgentModel          string
+	AIAgentFallbackModels []string // List of fallback models to try in order
+	AIAgentMaxTokens      int
+	AIAgentTemperature    float32
+	// AIAgentHandoffTemperature is the stricter temperature used only when
+	// the AI runs in handoff mode (clinic with action tool disabled, AI
+	// gathering context for the human team). Lower than AIAgentTemperature
+	// because handoff requires strict rule-following.
+	AIAgentHandoffTemperature float32
+	AIAgentTimeout            time.Duration
+	ConversationMaxTurns      int
+	ConversationRedisTTL      time.Duration
+	ConversationPostgresTTL   time.Duration
+	// ConversationPromptHistoryTurns = how many past turns (user+assistant
+	// mixed) are injected into the LLM prompt. Different from MaxTurns, which
+	// is the storage cap. Lower values reduce "memory-faulty" hallucination
+	// on cheaper models; higher values give better continuity on strong ones.
+	ConversationPromptHistoryTurns int
 
 	// AI Agent Feature Flags (gradual rollout)
 	AIAgentSchedulingEnabled bool
 	AIAgentConfirmEnabled    bool
 	AIAgentCancelEnabled     bool
+	AIAgentRescheduleEnabled bool
 	AIAgentRemindersEnabled  bool
 }
 
@@ -90,6 +107,10 @@ func NewWorkerConfig() *WorkerConfig {
 		TimeoutWorkerInterval:       getEnvAsDurationW("TIMEOUT_WORKER_INTERVAL", 5*time.Minute),
 		ConfirmationTimeoutDuration: getEnvAsDurationW("CONFIRMATION_TIMEOUT_DURATION", 16*time.Hour),
 
+		// Payment Reminder kill switches (default on; ops flips to false to shut down a channel)
+		PaymentReminderWhatsAppEnabled: getEnvAsBoolW("PAYMENT_REMINDER_WHATSAPP_ENABLED", true),
+		PaymentReminderEmailEnabled:    getEnvAsBoolW("PAYMENT_REMINDER_EMAIL_ENABLED", true),
+
 		// Message Sender
 		MessageRateLimitSeconds: getEnvAsIntW("MESSAGE_RATE_LIMIT_SECONDS", 1),
 		MessageRetryMax:         getEnvAsIntW("MESSAGE_RETRY_MAX", 3),
@@ -112,25 +133,26 @@ func NewWorkerConfig() *WorkerConfig {
 
 		// AI Agent Configuration
 		AIAgentEnabled:  getEnvAsBoolW("AI_AGENT_ENABLED", false),
-		AIAgentProvider: getEnvW("AI_AGENT_PROVIDER", "gemini"),
-		AIAgentModel:    getEnvW("AI_AGENT_MODEL", "gemini-2.0-flash-exp"),
+		AIAgentProvider: getEnvW("AI_AGENT_PROVIDER", "openrouter"),
+		AIAgentModel:    getEnvW("AI_AGENT_MODEL", "google/gemini-2.0-flash-001"),
 		AIAgentFallbackModels: getEnvAsSliceW("AI_AGENT_FALLBACK_MODELS", []string{
-			"gemini-2.0-flash",
-			"gemini-2.5-flash-lite",
-			"gemini-1.5-flash",
-			"gemini-2.5-flash",
+			"google/gemini-2.0-flash-lite-001",
+			"qwen/qwen-2.5-72b-instruct",
 		}),
-		AIAgentMaxTokens:        getEnvAsIntW("AI_AGENT_MAX_TOKENS", 2048),
-		AIAgentTemperature:      getEnvAsFloat32W("AI_AGENT_TEMPERATURE", 0.7),
-		AIAgentTimeout:          getEnvAsDurationW("AI_AGENT_TIMEOUT", 30*time.Second),
-		ConversationMaxTurns:    getEnvAsIntW("CONVERSATION_MAX_TURNS", 30),
-		ConversationRedisTTL:    getEnvAsDurationW("CONVERSATION_REDIS_TTL", 30*time.Minute),
-		ConversationPostgresTTL: getEnvAsDurationW("CONVERSATION_POSTGRES_TTL", 7*24*time.Hour),
+		AIAgentMaxTokens:               getEnvAsIntW("AI_AGENT_MAX_TOKENS", 2048),
+		AIAgentTemperature:             getEnvAsFloat32W("AI_AGENT_TEMPERATURE", 0.5),
+		AIAgentHandoffTemperature:      getEnvAsFloat32W("AI_AGENT_HANDOFF_TEMPERATURE", 0.3),
+		AIAgentTimeout:                 getEnvAsDurationW("AI_AGENT_TIMEOUT", 30*time.Second),
+		ConversationMaxTurns:           getEnvAsIntW("CONVERSATION_MAX_TURNS", 30),
+		ConversationRedisTTL:           getEnvAsDurationW("CONVERSATION_REDIS_TTL", 30*time.Minute),
+		ConversationPostgresTTL:        getEnvAsDurationW("CONVERSATION_POSTGRES_TTL", 90*24*time.Hour),
+		ConversationPromptHistoryTurns: getEnvAsIntW("CONVERSATION_PROMPT_HISTORY_TURNS", 15),
 
 		// AI Agent Feature Flags (all disabled by default for gradual rollout)
 		AIAgentSchedulingEnabled: getEnvAsBoolW("AI_AGENT_SCHEDULING_ENABLED", false),
 		AIAgentConfirmEnabled:    getEnvAsBoolW("AI_AGENT_CONFIRM_ENABLED", false),
 		AIAgentCancelEnabled:     getEnvAsBoolW("AI_AGENT_CANCEL_ENABLED", false),
+		AIAgentRescheduleEnabled: getEnvAsBoolW("AI_AGENT_RESCHEDULE_ENABLED", false),
 		AIAgentRemindersEnabled:  getEnvAsBoolW("AI_AGENT_REMINDERS_ENABLED", false),
 	}
 }

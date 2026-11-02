@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
-	"os"
 	"regexp"
 	"strings"
 	"time"
@@ -13,12 +12,20 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/aseno/backend/internal/errors"
+	account_model "github.com/aseno/backend/pkg/account/model"
+	account_repository "github.com/aseno/backend/pkg/account/repository"
 	"github.com/aseno/backend/pkg/auth/model"
 	auth_repository "github.com/aseno/backend/pkg/auth/repository"
 	clinic_model "github.com/aseno/backend/pkg/clinic/model"
 	clinic_repository "github.com/aseno/backend/pkg/clinic/repository"
+	clinicmember_model "github.com/aseno/backend/pkg/clinicmember/model"
+	clinicmember_repository "github.com/aseno/backend/pkg/clinicmember/repository"
 	email_service "github.com/aseno/backend/pkg/email/service"
 	payment_model "github.com/aseno/backend/pkg/payment/model"
+	plan_model "github.com/aseno/backend/pkg/plan/model"
+	plan_repo "github.com/aseno/backend/pkg/plan/repository"
+	professional_model "github.com/aseno/backend/pkg/professional/model"
+	professional_repository "github.com/aseno/backend/pkg/professional/repository"
 	user_model "github.com/aseno/backend/pkg/user/model"
 	user_repository "github.com/aseno/backend/pkg/user/repository"
 )
@@ -30,7 +37,8 @@ type AuthService interface {
 	GoogleLogin(ctx context.Context, req *model.GoogleLoginRequest) (*model.AuthResponse, error)
 	RefreshToken(ctx context.Context, refreshToken string) (*model.AuthResponse, error)
 	Logout(ctx context.Context, userID uuid.UUID) error
-	GetCurrentUser(ctx context.Context, userID uuid.UUID) (*model.CurrentUserResponse, error)
+	GetCurrentUser(ctx context.Context, userID, currentClinicID uuid.UUID) (*model.CurrentUserResponse, error)
+	SwitchClinic(ctx context.Context, userID, clinicID uuid.UUID) (*model.AuthResponse, error)
 	ChangePassword(ctx context.Context, userID uuid.UUID, req *model.ChangePasswordRequest) error
 	RequestPasswordReset(ctx context.Context, req *model.RequestPasswordResetRequest) error
 	ResetPassword(ctx context.Context, req *model.ResetPasswordRequest) error
@@ -40,6 +48,7 @@ type AuthService interface {
 	ResendVerificationEmail(ctx context.Context, email string) error
 	// Payment service injection (for creating Asaas subscriptions during registration)
 	SetPaymentService(paymentService PaymentService)
+	SetTemplateSeedService(svc TemplateSeedService)
 }
 
 // GoogleAuthClient defines the interface for Google authentication
@@ -50,7 +59,12 @@ type GoogleAuthClient interface {
 // PaymentService defines minimal interface for payment operations during registration
 type PaymentService interface {
 	CreateCustomerForClinic(ctx context.Context, clinicID uuid.UUID, req *payment_model.CreateCustomerRequest) error
-	CreateSubscriptionForClinic(ctx context.Context, clinicID uuid.UUID, plan string, billing string) error
+	CreateSubscriptionForClinic(ctx context.Context, clinicID uuid.UUID, planID uuid.UUID, offerToken *string, billing string, variant string, units int) error
+}
+
+// TemplateSeedService defines minimal interface for seeding default templates on clinic creation
+type TemplateSeedService interface {
+	SeedDefaultTemplates(ctx context.Context, clinicID uuid.UUID) error
 }
 
 // GoogleUserInfo represents user information from Google
@@ -68,30 +82,46 @@ type GoogleUserInfo struct {
 type authService struct {
 	userRepo              user_repository.UserRepository
 	clinicRepo            clinic_repository.ClinicRepository
+	accountRepo           account_repository.AccountRepository
 	passwordResetRepo     auth_repository.PasswordResetRepository
 	emailVerificationRepo auth_repository.EmailVerificationRepository
+	planRepo              plan_repo.PlanRepository
+	professionalRepo      professional_repository.ProfessionalRepository
+	clinicMemberRepo      clinicmember_repository.ClinicMemberRepository
 	jwtService            JWTService
 	googleClient          GoogleAuthClient
 	emailService          email_service.EmailService
-	paymentService        PaymentService // Optional: for creating Asaas subscriptions during registration
+	paymentService        PaymentService      // Optional: for creating Asaas subscriptions during registration
+	templateSeedService   TemplateSeedService // Optional: for seeding default anamnese templates on clinic creation
+	frontendURL           string
 }
 
 // NewAuthService creates a new auth service
 func NewAuthService(
 	userRepo user_repository.UserRepository,
 	clinicRepo clinic_repository.ClinicRepository,
+	accountRepo account_repository.AccountRepository,
 	passwordResetRepo auth_repository.PasswordResetRepository,
 	emailVerificationRepo auth_repository.EmailVerificationRepository,
+	planRepo plan_repo.PlanRepository,
+	professionalRepo professional_repository.ProfessionalRepository,
+	clinicMemberRepo clinicmember_repository.ClinicMemberRepository,
 	jwtService JWTService,
 	emailService email_service.EmailService,
+	frontendURL string,
 ) AuthService {
 	return &authService{
 		userRepo:              userRepo,
 		clinicRepo:            clinicRepo,
+		accountRepo:           accountRepo,
 		passwordResetRepo:     passwordResetRepo,
 		emailVerificationRepo: emailVerificationRepo,
+		planRepo:              planRepo,
+		professionalRepo:      professionalRepo,
+		clinicMemberRepo:      clinicMemberRepo,
 		jwtService:            jwtService,
 		emailService:          emailService,
+		frontendURL:           frontendURL,
 	}
 }
 
@@ -99,26 +129,100 @@ func NewAuthService(
 func NewAuthServiceWithGoogle(
 	userRepo user_repository.UserRepository,
 	clinicRepo clinic_repository.ClinicRepository,
+	accountRepo account_repository.AccountRepository,
 	passwordResetRepo auth_repository.PasswordResetRepository,
 	emailVerificationRepo auth_repository.EmailVerificationRepository,
+	planRepo plan_repo.PlanRepository,
+	professionalRepo professional_repository.ProfessionalRepository,
+	clinicMemberRepo clinicmember_repository.ClinicMemberRepository,
 	jwtService JWTService,
 	googleClient GoogleAuthClient,
 	emailService email_service.EmailService,
+	frontendURL string,
 ) AuthService {
 	return &authService{
 		userRepo:              userRepo,
 		clinicRepo:            clinicRepo,
+		accountRepo:           accountRepo,
 		passwordResetRepo:     passwordResetRepo,
 		emailVerificationRepo: emailVerificationRepo,
+		planRepo:              planRepo,
+		professionalRepo:      professionalRepo,
+		clinicMemberRepo:      clinicMemberRepo,
 		jwtService:            jwtService,
 		googleClient:          googleClient,
 		emailService:          emailService,
+		frontendURL:           frontendURL,
 	}
 }
 
 // SetPaymentService sets the payment service (used to avoid circular dependency)
 func (s *authService) SetPaymentService(paymentService PaymentService) {
 	s.paymentService = paymentService
+}
+
+func (s *authService) SetTemplateSeedService(svc TemplateSeedService) {
+	s.templateSeedService = svc
+}
+
+// buildTokenContext constructs a TokenContext for JWT generation from a user and their clinic membership.
+// It looks up the clinic membership and professional link from the database.
+func (s *authService) buildTokenContext(ctx context.Context, user *user_model.User, clinicID uuid.UUID) *TokenContext {
+	tc := &TokenContext{
+		UserID:   user.ID,
+		Email:    user.Email,
+		ClinicID: clinicID,
+	}
+
+	// Get role from clinic_members
+	if s.clinicMemberRepo != nil {
+		member, err := s.clinicMemberRepo.GetByUserAndClinic(ctx, user.ID, clinicID)
+		if err == nil && member != nil {
+			tc.Role = member.Role
+		}
+	} else {
+		// Fallback to user.Role (legacy, while users table still has the column)
+		tc.Role = user.Role
+	}
+
+	// Load professional ID
+	if s.professionalRepo != nil {
+		prof, err := s.professionalRepo.GetByUserID(ctx, user.ID, clinicID)
+		if err == nil && prof != nil {
+			tc.ProfessionalID = &prof.ID
+			user.ProfessionalID = &prof.ID
+		}
+	}
+
+	return tc
+}
+
+// getDefaultClinicID returns the first active clinic for a user via clinic_members.
+// Falls back to user.ClinicID if clinic_members is not available.
+func (s *authService) getDefaultClinicID(ctx context.Context, user *user_model.User) uuid.UUID {
+	if s.clinicMemberRepo != nil {
+		members, err := s.clinicMemberRepo.GetClinicsByUserID(ctx, user.ID)
+		if err == nil && len(members) > 0 {
+			return members[0].ClinicID
+		}
+	}
+	return user.ClinicID
+}
+
+// getUserClinics returns all ClinicMemberResponse for the user
+func (s *authService) getUserClinics(ctx context.Context, userID uuid.UUID) []*clinicmember_model.ClinicMemberResponse {
+	if s.clinicMemberRepo == nil {
+		return nil
+	}
+	members, err := s.clinicMemberRepo.GetClinicsByUserID(ctx, userID)
+	if err != nil || len(members) == 0 {
+		return nil
+	}
+	responses := make([]*clinicmember_model.ClinicMemberResponse, len(members))
+	for i, m := range members {
+		responses[i] = m.ToResponse()
+	}
+	return responses
 }
 
 // Register creates a new clinic and owner user
@@ -144,42 +248,77 @@ func (s *authService) Register(ctx context.Context, req *model.RegisterRequest) 
 		slug = slug + "-" + generateShortID()
 	}
 
-	// Determine plan and subscription status based on request
-	var planType clinic_model.PlanType
-	var subscriptionStatus clinic_model.SubscriptionStatus
-	var trialEndsAt *time.Time
-
-	// Set plan based on selection
-	switch req.Plan {
-	case "basic":
-		planType = clinic_model.PlanTypeBasic
-	case "professional":
-		planType = clinic_model.PlanTypeProfessional
-	case "advanced":
-		planType = clinic_model.PlanTypeAdvanced
-	default: // "trial" or empty - defaults to professional with trial
-		planType = clinic_model.PlanTypeProfessional
+	// Fetch requested plan
+	targetSlug := req.Plan
+	if targetSlug == "" || targetSlug == "trial" {
+		targetSlug = "professional"
 	}
+
+	plan, err := s.planRepo.GetBySlug(ctx, targetSlug)
+	if err != nil {
+		// Fallback if not found (or seed hasn't run), though ideally we should return an error
+		// We'll leave the error handling for now unless it breaks onboarding.
+		// Actually, returning error is safer if plan doesn't exist, preventing FK violations.
+		return nil, errors.ErrInternalInstance.WithMessage("Selected plan not found").WithError(err)
+	}
+
+	var subscriptionStatus account_model.SubscriptionStatus
+	var trialEndsAt *time.Time
 
 	// If document provided, set as active (will create Asaas subscription)
 	// Otherwise, give 14-day trial period regardless of plan selected
 	if req.Document != "" && req.Plan != "" && req.Plan != "trial" {
-		subscriptionStatus = clinic_model.SubscriptionStatusActive
+		subscriptionStatus = account_model.SubscriptionStatusPending
 	} else {
-		subscriptionStatus = clinic_model.SubscriptionStatusTrial
+		subscriptionStatus = account_model.SubscriptionStatusTrial
 		trial := time.Now().AddDate(0, 0, 14)
 		trialEndsAt = &trial
 	}
 
-	// Create clinic
+	// Pre-generate UUIDs for circular references
+	userID := uuid.New()
+	accountID := uuid.New()
+	clinicID := uuid.New()
+
+	planVariant := plan_model.NormalizeVariant(req.Variant)
+	// Solo variant (single professional) is not compatible with the per-unit advanced plan.
+	if planVariant.IsSolo() && plan.Slug == "advanced" {
+		return nil, errors.ErrBadRequestInstance.WithMessage("O plano Avançado não possui modalidade autônomo")
+	}
+
+	maxClinics := plan.MaxClinics
+	maxProfessionals := plan.MaxProfessionals
+	if planVariant.IsSolo() {
+		maxClinics = 1
+		maxProfessionals = plan_model.SoloMaxProfessionals
+	}
+
+	// Create Account (don't set Plan association to avoid GORM upsert conflict)
+	account := &account_model.Account{
+		ID:                     accountID,
+		OwnerID:                userID,
+		PlanID:                 &plan.ID,
+		PlanVariant:            planVariant,
+		SubscriptionStatus:     subscriptionStatus,
+		TrialEndsAt:            trialEndsAt,
+		MaxClinics:             maxClinics,
+		MaxProfessionals:       maxProfessionals,
+		MaxWhatsappConnections: plan.MaxWhatsappConnections,
+		MaxGoogleCalendars:     plan.MaxGoogleCalendars,
+	}
+
+	if err := s.accountRepo.Create(ctx, account); err != nil {
+		return nil, err
+	}
+
+	// Create clinic (don't embed Account to prevent GORM cascading saves)
 	clinic := &clinic_model.Clinic{
-		Name:               req.ClinicName,
-		Slug:               slug,
-		Email:              req.Email,
-		Phone:              req.Phone,
-		Plan:               planType,
-		SubscriptionStatus: subscriptionStatus,
-		TrialEndsAt:        trialEndsAt,
+		ID:        clinicID,
+		AccountID: accountID,
+		Name:      req.ClinicName,
+		Slug:      slug,
+		Email:     req.Email,
+		Phone:     req.Phone,
 		Settings: clinic_model.ClinicSettings{
 			Timezone:                  "America/Sao_Paulo",
 			DefaultAppointmentMinutes: 30,
@@ -187,34 +326,85 @@ func (s *authService) Register(ctx context.Context, req *model.RegisterRequest) 
 			AllowOnlineBooking:        false,
 			RequireConfirmation:       true,
 			AIAgentEnabled:            true,
+			WhatsAppRemindersEnabled:  true,
 		},
 	}
 
 	if err := s.clinicRepo.Create(ctx, clinic); err != nil {
+		_ = s.accountRepo.Delete(ctx, accountID)
 		return nil, err
+	}
+
+	// Seed default anamnese templates for the new clinic
+	if s.templateSeedService != nil {
+		_ = s.templateSeedService.SeedDefaultTemplates(ctx, clinicID)
 	}
 
 	// Create owner user
 	user := &user_model.User{
+		ID:            userID,
 		ClinicID:      clinic.ID,
 		Email:         req.Email,
 		Name:          req.Name,
 		Phone:         req.Phone,
 		Role:          user_model.UserRoleOwner,
-		EmailVerified: false,
+		EmailVerified: req.EmailVerified,
 		IsActive:      true,
 	}
 
 	if err := user.SetPassword(req.Password); err != nil {
+		_ = s.clinicRepo.Delete(ctx, clinicID)
+		_ = s.accountRepo.Delete(ctx, accountID)
 		return nil, errors.ErrInternalInstance.WithError(err)
 	}
 
 	if err := s.userRepo.Create(ctx, user); err != nil {
+		_ = s.clinicRepo.Delete(ctx, clinicID)
+		_ = s.accountRepo.Delete(ctx, accountID)
 		return nil, err
 	}
 
+	// Attach associations for response serialization (after all DB operations)
+	account.Plan = plan
+	clinic.Account = account
+
+	// Create clinic membership for the owner
+	if s.clinicMemberRepo != nil {
+		_ = s.clinicMemberRepo.Create(ctx, &clinicmember_model.ClinicMember{
+			UserID:   userID,
+			ClinicID: clinicID,
+			Role:     user_model.UserRoleOwner,
+			IsActive: true,
+		})
+	}
+
+	// Create professional linked to the owner user (non-blocking — user can link later if this fails)
+	if s.professionalRepo != nil {
+		defaultSlot := []professional_model.TimeSlot{{Start: "09:00", End: "18:00"}}
+		professional := &professional_model.Professional{
+			ClinicID: clinicID,
+			UserID:   &userID,
+			Name:     req.Name,
+			Email:    req.Email,
+			Phone:    req.Phone,
+			Color:    "#7C3AED",
+			IsActive: true,
+			WorkingHours: professional_model.WorkingHours{
+				Monday:    defaultSlot,
+				Tuesday:   defaultSlot,
+				Wednesday: defaultSlot,
+				Thursday:  defaultSlot,
+				Friday:    defaultSlot,
+			},
+		}
+		if err := s.professionalRepo.Create(ctx, professional); err != nil {
+			fmt.Printf("[AUTH] Failed to create professional for user %s: %v\n", userID, err)
+		}
+	}
+
 	// Generate tokens
-	tokenPair, err := s.jwtService.GenerateTokenPair(user)
+	tc := s.buildTokenContext(ctx, user, clinicID)
+	tokenPair, err := s.jwtService.GenerateTokenPair(tc)
 	if err != nil {
 		return nil, err
 	}
@@ -229,9 +419,8 @@ func (s *authService) Register(ctx context.Context, req *model.RegisterRequest) 
 		// Non-critical error, just log it
 	}
 
-	// Create Asaas customer and subscription if document provided and not trial
-	if s.paymentService != nil && req.Document != "" && req.Plan != "" && req.Plan != "trial" {
-		// Create customer in Asaas
+	// Create Asaas customer (always, if payment service is available)
+	if s.paymentService != nil {
 		customerReq := &payment_model.CreateCustomerRequest{
 			Name:     req.Name,
 			Email:    req.Email,
@@ -243,12 +432,28 @@ func (s *authService) Register(ctx context.Context, req *model.RegisterRequest) 
 			// Log error but don't fail registration - user can set up payment later
 			fmt.Printf("[AUTH] Failed to create Asaas customer for clinic %s: %v\n", clinic.ID, err)
 		} else {
-			// Customer created successfully, now create subscription
-			if err := s.paymentService.CreateSubscriptionForClinic(ctx, clinic.ID, req.Plan, req.Billing); err != nil {
-				// Log error but don't fail registration
-				fmt.Printf("[AUTH] Failed to create Asaas subscription for clinic %s: %v\n", clinic.ID, err)
-			} else {
-				fmt.Printf("[AUTH] Successfully created Asaas subscription for clinic %s (plan: %s, billing: %s)\n", clinic.ID, req.Plan, req.Billing)
+			// Customer created successfully, now create subscription if a paid plan is selected
+			// TEMPORAY: The Frontend sends strings instead of PlanIDs.
+			// So we attempt to parse it as an UUID or we skip subscription creation.
+			var planID uuid.UUID
+			if req.Plan != "" && req.Plan != "trial" {
+				parsed, err := uuid.Parse(req.Plan)
+				if err == nil {
+					planID = parsed
+					var offerToken *string
+					if req.OfferToken != "" {
+						offerToken = &req.OfferToken
+					}
+
+					if err := s.paymentService.CreateSubscriptionForClinic(ctx, clinic.ID, planID, offerToken, req.Billing, req.Variant, req.Units); err != nil {
+						// Log error but don't fail registration
+						fmt.Printf("[AUTH] Failed to create Asaas subscription for clinic %s: %v\n", clinic.ID, err)
+					} else {
+						fmt.Printf("[AUTH] Successfully created Asaas subscription for clinic %s (planID: %s, billing: %s)\n", clinic.ID, req.Plan, req.Billing)
+					}
+				} else {
+					fmt.Printf("[AUTH] Failed to create subscription because plan is not a boolean: %s\n", req.Plan)
+				}
 			}
 		}
 	}
@@ -291,18 +496,23 @@ func (s *authService) Login(ctx context.Context, req *model.LoginRequest) (*mode
 		return nil, errors.ErrInvalidCredentialsInstance
 	}
 
-	// Check if clinic subscription is active
+	// Load clinic for response (login is allowed even if subscription expired,
+	// the tenant middleware will enforce subscription on protected routes)
 	clinic, err := s.clinicRepo.GetByID(ctx, user.ClinicID)
 	if err != nil {
 		return nil, err
 	}
 
-	if !clinic.IsSubscriptionActive() {
-		return nil, errors.ErrForbiddenInstance.WithMessage("Clinic subscription has expired")
+	account, err := s.accountRepo.GetByID(ctx, clinic.AccountID)
+	if err != nil {
+		return nil, err
 	}
+	clinic.Account = account
 
-	// Generate tokens
-	tokenPair, err := s.jwtService.GenerateTokenPair(user)
+	// Build token context from clinic_members (source of truth for role + professional)
+	clinicID := s.getDefaultClinicID(ctx, user)
+	tc := s.buildTokenContext(ctx, user, clinicID)
+	tokenPair, err := s.jwtService.GenerateTokenPair(tc)
 	if err != nil {
 		return nil, err
 	}
@@ -359,14 +569,45 @@ func (s *authService) GoogleLogin(ctx context.Context, req *model.GoogleLoginReq
 		// Calculate trial end date (14 days from now)
 		trialEndsAt := time.Now().AddDate(0, 0, 14)
 
-		// Create clinic
+		userID := uuid.New()
+		accountID := uuid.New()
+		clinicID := uuid.New()
+
+		// Fetch requested plan or default to basic
+		planSlug := req.Plan
+		if planSlug == "" || planSlug == "trial" {
+			planSlug = "basic"
+		}
+		plan, err := s.planRepo.GetBySlug(ctx, planSlug)
+		if err != nil {
+			// Prevent constraint failures if plan isn't found
+			return nil, errors.ErrInternalInstance.WithMessage("Default basic plan not found").WithError(err)
+		}
+
+		// Create Account (don't set Plan association to avoid GORM upsert conflict)
+		account := &account_model.Account{
+			ID:                     accountID,
+			OwnerID:                userID,
+			PlanID:                 &plan.ID,
+			SubscriptionStatus:     account_model.SubscriptionStatusTrial,
+			TrialEndsAt:            &trialEndsAt,
+			MaxClinics:             plan.MaxClinics,
+			MaxProfessionals:       plan.MaxProfessionals,
+			MaxWhatsappConnections: plan.MaxWhatsappConnections,
+			MaxGoogleCalendars:     plan.MaxGoogleCalendars,
+		}
+
+		if err := s.accountRepo.Create(ctx, account); err != nil {
+			return nil, err
+		}
+
+		// Create clinic (don't embed Account to prevent GORM cascading saves)
 		clinic := &clinic_model.Clinic{
-			Name:               googleUser.Name + "'s Clinic",
-			Slug:               slug,
-			Email:              googleUser.Email,
-			Plan:               clinic_model.PlanTypeProfessional,
-			SubscriptionStatus: clinic_model.SubscriptionStatusTrial,
-			TrialEndsAt:        &trialEndsAt,
+			ID:        clinicID,
+			AccountID: accountID,
+			Name:      googleUser.Name + "'s Clinic",
+			Slug:      slug,
+			Email:     googleUser.Email,
 			Settings: clinic_model.ClinicSettings{
 				Timezone:                  "America/Sao_Paulo",
 				DefaultAppointmentMinutes: 30,
@@ -374,15 +615,18 @@ func (s *authService) GoogleLogin(ctx context.Context, req *model.GoogleLoginReq
 				AllowOnlineBooking:        false,
 				RequireConfirmation:       true,
 				AIAgentEnabled:            true,
+				WhatsAppRemindersEnabled:  true,
 			},
 		}
 
 		if err := s.clinicRepo.Create(ctx, clinic); err != nil {
+			_ = s.accountRepo.Delete(ctx, accountID)
 			return nil, err
 		}
 
 		// Create owner user (without password - Google-only login)
 		user = &user_model.User{
+			ID:            userID,
 			ClinicID:      clinic.ID,
 			Email:         googleUser.Email,
 			Name:          googleUser.Name,
@@ -394,7 +638,57 @@ func (s *authService) GoogleLogin(ctx context.Context, req *model.GoogleLoginReq
 		}
 
 		if err := s.userRepo.Create(ctx, user); err != nil {
+			_ = s.clinicRepo.Delete(ctx, clinicID)
+			_ = s.accountRepo.Delete(ctx, accountID)
 			return nil, err
+		}
+
+		// Attach associations for response serialization (after all DB operations)
+		account.Plan = plan
+		clinic.Account = account
+
+		// Create clinic membership for the owner
+		if s.clinicMemberRepo != nil {
+			_ = s.clinicMemberRepo.Create(ctx, &clinicmember_model.ClinicMember{
+				UserID:   userID,
+				ClinicID: clinicID,
+				Role:     user_model.UserRoleOwner,
+				IsActive: true,
+			})
+		}
+
+		// Create professional linked to the owner user (non-blocking — user can link later if this fails)
+		if s.professionalRepo != nil {
+			defaultSlot := []professional_model.TimeSlot{{Start: "09:00", End: "18:00"}}
+			professional := &professional_model.Professional{
+				ClinicID: clinicID,
+				UserID:   &userID,
+				Name:     googleUser.Name,
+				Email:    googleUser.Email,
+				Color:    "#7C3AED",
+				IsActive: true,
+				WorkingHours: professional_model.WorkingHours{
+					Monday:    defaultSlot,
+					Tuesday:   defaultSlot,
+					Wednesday: defaultSlot,
+					Thursday:  defaultSlot,
+					Friday:    defaultSlot,
+				},
+			}
+			if err := s.professionalRepo.Create(ctx, professional); err != nil {
+				fmt.Printf("[AUTH] Failed to create professional for Google user %s: %v\n", userID, err)
+			}
+		}
+
+		// Create Asaas customer unconditionally for the new account
+		if s.paymentService != nil {
+			customerReq := &payment_model.CreateCustomerRequest{
+				Name:  googleUser.Name,
+				Email: googleUser.Email,
+			}
+			if err := s.paymentService.CreateCustomerForClinic(ctx, clinic.ID, customerReq); err != nil {
+				fmt.Printf("[AUTH] Failed to create Asaas customer for clinic via Google Login %s: %v\n", clinic.ID, err)
+			}
 		}
 	} else {
 		// User exists - check if active
@@ -413,19 +707,24 @@ func (s *authService) GoogleLogin(ctx context.Context, req *model.GoogleLoginReq
 			return nil, err
 		}
 
-		// Check if clinic subscription is active
+		// Check if clinic exists and get it
 		clinic, err := s.clinicRepo.GetByID(ctx, user.ClinicID)
 		if err != nil {
 			return nil, err
 		}
 
-		if !clinic.IsSubscriptionActive() {
-			return nil, errors.ErrForbiddenInstance.WithMessage("Clinic subscription has expired")
+		// Load account
+		account, err := s.accountRepo.GetByID(ctx, clinic.AccountID)
+		if err != nil {
+			return nil, err
 		}
+		clinic.Account = account
 	}
 
-	// Generate tokens
-	tokenPair, err := s.jwtService.GenerateTokenPair(user)
+	// Build token context from clinic_members (source of truth for role + professional)
+	clinicID := s.getDefaultClinicID(ctx, user)
+	tc := s.buildTokenContext(ctx, user, clinicID)
+	tokenPair, err := s.jwtService.GenerateTokenPair(tc)
 	if err != nil {
 		return nil, err
 	}
@@ -464,7 +763,7 @@ func (s *authService) RefreshToken(ctx context.Context, refreshToken string) (*m
 	}
 
 	// Get user
-	user, err := s.userRepo.GetByID(ctx, claims.UserID)
+	user, err := s.userRepo.GetByIDNoTenant(ctx, claims.UserID)
 	if err != nil {
 		return nil, err
 	}
@@ -479,8 +778,16 @@ func (s *authService) RefreshToken(ctx context.Context, refreshToken string) (*m
 		return nil, errors.ErrTokenInvalidInstance.WithMessage("Token has been revoked")
 	}
 
-	// Generate new tokens
-	tokenPair, err := s.jwtService.GenerateTokenPair(user)
+	// Build token context using the clinic_id from the refresh token claims so
+	// that users who have switched clinics keep the active clinic after a
+	// refresh. Falls back to the default if the refresh token predates this
+	// (claims.ClinicID == uuid.Nil).
+	refreshClinicID := claims.ClinicID
+	if refreshClinicID == uuid.Nil {
+		refreshClinicID = s.getDefaultClinicID(ctx, user)
+	}
+	tc := s.buildTokenContext(ctx, user, refreshClinicID)
+	tokenPair, err := s.jwtService.GenerateTokenPair(tc)
 	if err != nil {
 		return nil, err
 	}
@@ -491,7 +798,7 @@ func (s *authService) RefreshToken(ctx context.Context, refreshToken string) (*m
 	}
 
 	// Get clinic for response
-	clinic, err := s.clinicRepo.GetByID(ctx, user.ClinicID)
+	clinic, err := s.clinicRepo.GetByID(ctx, refreshClinicID)
 	if err != nil {
 		return nil, err
 	}
@@ -510,27 +817,111 @@ func (s *authService) Logout(ctx context.Context, userID uuid.UUID) error {
 	return s.userRepo.UpdateRefreshToken(ctx, userID, "")
 }
 
-// GetCurrentUser retrieves the current user's data with clinic info
-func (s *authService) GetCurrentUser(ctx context.Context, userID uuid.UUID) (*model.CurrentUserResponse, error) {
-	user, err := s.userRepo.GetByID(ctx, userID)
+// GetCurrentUser retrieves the current user's data with clinic info.
+// currentClinicID is the clinic_id from the JWT (set by the auth middleware).
+// Pass uuid.Nil to fall back to the user's default clinic — this keeps callers
+// that don't know the JWT context (legacy paths) working, but the HTTP handler
+// MUST pass the JWT clinic_id so that /auth/me reflects the currently active
+// clinic after a SwitchClinic. Without this, a page reload after switching
+// reverts the frontend back to the user's owned clinic.
+func (s *authService) GetCurrentUser(ctx context.Context, userID, currentClinicID uuid.UUID) (*model.CurrentUserResponse, error) {
+	user, err := s.userRepo.GetByIDNoTenant(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
 
-	clinic, err := s.clinicRepo.GetByID(ctx, user.ClinicID)
+	if currentClinicID == uuid.Nil {
+		currentClinicID = s.getDefaultClinicID(ctx, user)
+	}
+
+	// Load professional ID into user via buildTokenContext side effect
+	s.buildTokenContext(ctx, user, currentClinicID)
+
+	clinic, err := s.clinicRepo.GetByID(ctx, currentClinicID)
 	if err != nil {
 		return nil, err
 	}
 
 	return &model.CurrentUserResponse{
-		User:   user.ToResponse(),
-		Clinic: clinic.ToResponse(),
+		User:    user.ToResponse(),
+		Clinic:  clinic.ToResponse(),
+		Clinics: s.getUserClinicsWithNames(ctx, userID),
 	}, nil
+}
+
+// SwitchClinic generates new tokens for a different clinic the user belongs to
+func (s *authService) SwitchClinic(ctx context.Context, userID, clinicID uuid.UUID) (*model.AuthResponse, error) {
+	// Verify user exists
+	user, err := s.userRepo.GetByIDNoTenant(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Verify user has active membership in target clinic
+	if s.clinicMemberRepo != nil {
+		member, err := s.clinicMemberRepo.GetByUserAndClinic(ctx, userID, clinicID)
+		if err != nil || member == nil {
+			return nil, errors.ErrForbiddenInstance.WithMessage("Voce nao tem acesso a esta clinica")
+		}
+		if !member.IsActive {
+			return nil, errors.ErrForbiddenInstance.WithMessage("Sua conta nesta clinica esta desativada")
+		}
+	}
+
+	// Load clinic
+	clinic, err := s.clinicRepo.GetByID(ctx, clinicID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Build token context for the new clinic
+	tc := s.buildTokenContext(ctx, user, clinicID)
+	tokenPair, err := s.jwtService.GenerateTokenPair(tc)
+	if err != nil {
+		return nil, err
+	}
+
+	// Save refresh token
+	if err := s.userRepo.UpdateRefreshToken(ctx, user.ID, tokenPair.RefreshToken); err != nil {
+		return nil, err
+	}
+
+	return &model.AuthResponse{
+		User:         user.ToResponse(),
+		Clinic:       clinic.ToResponse(),
+		AccessToken:  tokenPair.AccessToken,
+		RefreshToken: tokenPair.RefreshToken,
+		ExpiresIn:    tokenPair.ExpiresIn,
+	}, nil
+}
+
+// getUserClinicsWithNames returns clinic info for all user's memberships
+func (s *authService) getUserClinicsWithNames(ctx context.Context, userID uuid.UUID) []model.UserClinicInfo {
+	if s.clinicMemberRepo == nil {
+		return nil
+	}
+	members, err := s.clinicMemberRepo.GetClinicsByUserID(ctx, userID)
+	if err != nil || len(members) == 0 {
+		return nil
+	}
+	result := make([]model.UserClinicInfo, 0, len(members))
+	for _, m := range members {
+		clinic, err := s.clinicRepo.GetByID(ctx, m.ClinicID)
+		if err != nil {
+			continue
+		}
+		result = append(result, model.UserClinicInfo{
+			ClinicID:   m.ClinicID,
+			ClinicName: clinic.Name,
+			Role:       m.Role,
+		})
+	}
+	return result
 }
 
 // ChangePassword changes the user's password
 func (s *authService) ChangePassword(ctx context.Context, userID uuid.UUID, req *model.ChangePasswordRequest) error {
-	user, err := s.userRepo.GetByID(ctx, userID)
+	user, err := s.userRepo.GetByIDNoTenant(ctx, userID)
 	if err != nil {
 		return err
 	}
@@ -593,7 +984,7 @@ func (s *authService) RequestPasswordReset(ctx context.Context, req *model.Reque
 	}
 
 	// Send email
-	frontendURL := os.Getenv("FRONTEND_URL")
+	frontendURL := s.frontendURL
 	if frontendURL == "" {
 		frontendURL = "http://localhost:3000"
 	}
@@ -623,7 +1014,7 @@ func (s *authService) ResetPassword(ctx context.Context, req *model.ResetPasswor
 	}
 
 	// Find user
-	user, err := s.userRepo.GetByID(ctx, reset.UserID)
+	user, err := s.userRepo.GetByIDNoTenant(ctx, reset.UserID)
 	if err != nil {
 		return err
 	}
@@ -675,7 +1066,7 @@ func generateShortID() string {
 
 // SendVerificationEmail sends an email verification link to the user
 func (s *authService) SendVerificationEmail(ctx context.Context, userID uuid.UUID) error {
-	user, err := s.userRepo.GetByID(ctx, userID)
+	user, err := s.userRepo.GetByIDNoTenant(ctx, userID)
 	if err != nil {
 		return err
 	}
@@ -703,7 +1094,7 @@ func (s *authService) SendVerificationEmail(ctx context.Context, userID uuid.UUI
 	}
 
 	// Send email
-	frontendURL := os.Getenv("FRONTEND_URL")
+	frontendURL := s.frontendURL
 	if frontendURL == "" {
 		frontendURL = "http://localhost:3000"
 	}
@@ -738,7 +1129,7 @@ func (s *authService) VerifyEmail(ctx context.Context, token string) error {
 	}
 
 	// Get user
-	user, err := s.userRepo.GetByID(ctx, verification.UserID)
+	user, err := s.userRepo.GetByIDNoTenant(ctx, verification.UserID)
 	if err != nil {
 		return err
 	}
@@ -750,7 +1141,30 @@ func (s *authService) VerifyEmail(ctx context.Context, token string) error {
 	}
 
 	// Mark token as used
-	return s.emailVerificationRepo.MarkAsUsed(ctx, verification.ID)
+	if err := s.emailVerificationRepo.MarkAsUsed(ctx, verification.ID); err != nil {
+		return err
+	}
+
+	// Send owner welcome email (non-blocking, errors are logged but not returned).
+	// We deliberately use SendOwnerWelcome (not SendWelcome) because the owner
+	// has not gone through onboarding yet and the stored name/clinic are
+	// auto-derived from the email — a personalized greeting would be off.
+	go func() {
+		bgCtx := context.Background()
+		frontendURL := s.frontendURL
+		if frontendURL == "" {
+			frontendURL = "http://localhost:3000"
+		}
+		loginLink := fmt.Sprintf("%s/pt-BR/login", frontendURL)
+		if err := s.emailService.SendOwnerWelcome(bgCtx, &email_service.OwnerWelcomeEmailData{
+			RecipientEmail: user.Email,
+			LoginLink:      loginLink,
+		}); err != nil {
+			fmt.Printf("[AUTH] Failed to send owner welcome email to %s: %v\n", user.Email, err)
+		}
+	}()
+
+	return nil
 }
 
 // ResendVerificationEmail resends the verification email to a user

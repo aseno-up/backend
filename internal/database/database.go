@@ -6,6 +6,8 @@ import (
 	"os"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/stdlib"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	gormlogger "gorm.io/gorm/logger"
@@ -33,22 +35,37 @@ func NewDatabase(dsn string, isDebug bool) (*Database, error) {
 		},
 	)
 
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{
+	// Parse DSN with pgx to set search_path as a startup parameter.
+	// This ensures every connection from the pool gets the correct schema,
+	// even through Supabase's connection pooler (Supavisor on port 6543).
+	pgxConfig, err := pgx.ParseConfig(dsn)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse database DSN: %w", err)
+	}
+	pgxConfig.RuntimeParams["search_path"] = "aseno"
+
+	// Disable prepared statements at the pgx level because Supabase's PgBouncer
+	// (in transaction mode) does not support them and throws "prepared statement already exists".
+	pgxConfig.DefaultQueryExecMode = pgx.QueryExecModeSimpleProtocol
+
+	// Open connection pool via pgx stdlib (compatible with database/sql)
+	sqlDB := stdlib.OpenDB(*pgxConfig)
+	sqlDB.SetMaxIdleConns(10)
+	sqlDB.SetMaxOpenConns(100)
+	sqlDB.SetConnMaxLifetime(time.Hour)
+
+	db, err := gorm.Open(postgres.New(postgres.Config{
+		Conn:                 sqlDB,
+		PreferSimpleProtocol: true, // disable prepared statements for connection pooler compatibility
+	}), &gorm.Config{
 		Logger: gormLogger,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to database: %w", err)
 	}
 
-	// Configure connection pool
-	sqlDB, err := db.DB()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get underlying sql.DB: %w", err)
-	}
-
-	sqlDB.SetMaxIdleConns(10)
-	sqlDB.SetMaxOpenConns(100)
-	sqlDB.SetConnMaxLifetime(time.Hour)
+	// Ensure the schema exists so AutoMigrate doesn't fail with "no schema has been selected to create in"
+	db.Exec("CREATE SCHEMA IF NOT EXISTS aseno")
 
 	return &Database{db: db}, nil
 }

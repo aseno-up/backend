@@ -54,8 +54,15 @@ type RegisterRequest struct {
 	// Optional: Plan selection from landing page
 	Plan    string `json:"plan"`    // trial, basic, professional, advanced
 	Billing string `json:"billing"` // monthly, annually
+	Variant string `json:"variant"` // "solo" for single-professional discounted contract, empty for clinic
 	// Optional: Payment info for paid plans
-	Document string `json:"document"` // CPF or CNPJ for Asaas
+	Document   string `json:"document"` // CPF or CNPJ for Asaas
+	OfferToken string `json:"offer_token"`
+	Units      int    `json:"units"` // contracted units for advanced plan (min 2)
+	// EmailVerified marks the e-mail as verified at creation time. Set to true
+	// by the magic-link onboarding flow where the user clicked a link sent to
+	// the address, which by itself proves they own it.
+	EmailVerified bool `json:"email_verified"`
 }
 
 // RefreshRequest represents the refresh token request body
@@ -66,6 +73,8 @@ type RefreshRequest struct {
 // GoogleAuthRequest represents the Google OAuth request body
 type GoogleAuthRequest struct {
 	IDToken string `json:"id_token" binding:"required"`
+	Plan    string `json:"plan"`    // optional: trial, basic, professional, advanced
+	Billing string `json:"billing"` // optional: monthly, annually
 }
 
 // GoogleLoginRequest is an alias for GoogleAuthRequest (for auth service)
@@ -99,6 +108,19 @@ type ChangePasswordRequest struct {
 
 // CurrentUserResponse represents the response for getting current user data
 type CurrentUserResponse struct {
-	User   *user_model.UserResponse     `json:"user"`
-	Clinic *clinic_model.ClinicResponse `json:"clinic"`
+	User    *user_model.UserResponse     `json:"user"`
+	Clinic  *clinic_model.ClinicResponse `json:"clinic"`
+	Clinics []UserClinicInfo             `json:"clinics,omitempty"`
+}
+
+// UserClinicInfo represents a clinic the user belongs to
+type UserClinicInfo struct {
+	ClinicID   uuid.UUID           `json:"clinic_id"`
+	ClinicName string              `json:"clinic_name"`
+	Role       user_model.UserRole `json:"role"`
+}
+
+// SwitchClinicRequest represents the request to switch active clinic
+type SwitchClinicRequest struct {
+	ClinicID uuid.UUID `json:"clinic_id" binding:"required"`
 }

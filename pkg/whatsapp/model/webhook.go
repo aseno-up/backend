@@ -49,6 +49,15 @@ type EvolutionMessageContent struct {
 	ExtendedTextMessage    *EvolutionExtendedText   `json:"extendedTextMessage,omitempty"`
 	ButtonsResponseMessage *EvolutionButtonResponse `json:"buttonsResponseMessage,omitempty"`
 	ListResponseMessage    *EvolutionListResponse   `json:"listResponseMessage,omitempty"`
+	AudioMessage           *EvolutionAudioMessage   `json:"audioMessage,omitempty"`
+}
+
+// EvolutionAudioMessage represents an audio message from Evolution API
+type EvolutionAudioMessage struct {
+	URL        string `json:"url,omitempty"`
+	Mimetype   string `json:"mimetype,omitempty"`
+	Seconds    int    `json:"seconds,omitempty"`
+	FileLength int64  `json:"fileLength,omitempty"`
 }
 
 // EvolutionExtendedText represents extended text message
@@ -79,6 +88,16 @@ type ParsedIncomingMessage struct {
 	IsFromMe   bool      `json:"is_from_me"`
 	Timestamp  time.Time `json:"timestamp"`
 	Instance   string    `json:"instance"`
+	// IsGroup is true when the message comes from a WhatsApp group chat (JID
+	// suffix @g.us on Evolution/WAHA). The webhook handler skips these before
+	// invoking the service — the AI agent and confirmation flows are built
+	// for 1-to-1 conversations and replying inside a group would spam all
+	// participants. Each provider parser sets this flag; default false keeps
+	// direct messages processed as before.
+	IsGroup bool `json:"is_group,omitempty"`
+	// Audio fields — set when the incoming message is an audio/voice note
+	IsAudio  bool   `json:"is_audio,omitempty"`
+	AudioURL string `json:"audio_url,omitempty"` // URL from provider (may require auth)
 }
 
 // MessageIntent represents the classified intent of an incoming message
@@ -111,6 +130,7 @@ type ClassifiedMessage struct {
 // ConnectionStatus represents the WhatsApp connection status
 type ConnectionStatus struct {
 	Instance   string `json:"instance"`
+	Provider   string `json:"provider,omitempty"`
 	State      string `json:"state"`
 	StatusCode int    `json:"status_code"`
 }

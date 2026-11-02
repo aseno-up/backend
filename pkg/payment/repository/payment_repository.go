@@ -62,15 +62,15 @@ func (r *paymentRepository) GetByAsaasID(ctx context.Context, asaasID string) (*
 	return &payment, nil
 }
 
-// GetByClinicID retrieves payments by clinic ID with pagination
-func (r *paymentRepository) GetByClinicID(ctx context.Context, clinicID uuid.UUID, limit, offset int) ([]*model.Payment, int64, error) {
+// GetByAccountID retrieves payments by account ID with pagination
+func (r *paymentRepository) GetByAccountID(ctx context.Context, accountID uuid.UUID, limit, offset int) ([]*model.Payment, int64, error) {
 	var payments []*model.Payment
 	var total int64
 
 	// Count total
 	if err := r.db.WithContext(ctx).
 		Model(&model.Payment{}).
-		Where("clinic_id = ?", clinicID).
+		Where("account_id = ?", accountID).
 		Count(&total).Error; err != nil {
 		return nil, 0, errors.ErrInternalInstance.WithError(err)
 	}
@@ -78,7 +78,7 @@ func (r *paymentRepository) GetByClinicID(ctx context.Context, clinicID uuid.UUI
 	// Get paginated results
 	result := r.db.WithContext(ctx).
 		Preload("Customer").
-		Where("clinic_id = ?", clinicID).
+		Where("account_id = ?", accountID).
 		Order("created_at DESC").
 		Limit(limit).
 		Offset(offset).

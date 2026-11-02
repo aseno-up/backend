@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/aseno/backend/internal/logger"
+	"github.com/aseno/backend/internal/phone"
 
 	"github.com/aseno/backend/pkg/whatsapp/model"
 	"github.com/google/uuid"
@@ -24,6 +25,12 @@ type Manager interface {
 
 	// AddAssistantMessage adds an assistant message to the conversation
 	AddAssistantMessage(ctx context.Context, conversationID uuid.UUID, content string, toolCalls []ToolCall) error
+
+	// AddHumanAgentMessage adds a message that a clinic attendant typed
+	// directly to the patient via the WhatsApp app (recorded under
+	// RoleHumanAgent so the LLM can tell it apart from patient and AI turns
+	// when the AI eventually resumes the conversation).
+	AddHumanAgentMessage(ctx context.Context, conversationID uuid.UUID, content string) error
 
 	// UpdateState updates the conversation state
 	UpdateState(ctx context.Context, conversationID uuid.UUID, state ConversationState, intent model.MessageIntent) error
@@ -80,7 +87,10 @@ func (m *conversationManager) GetOrCreate(ctx context.Context, clinicID uuid.UUI
 		return conversation, nil
 	}
 
-	// Create new conversation
+	// Create new conversation. ExpiresAt uses the extended (Postgres) TTL —
+	// the short defaultTTL is for Redis cache validity only and treating it
+	// as the row expiry causes every conversation to expire within 30
+	// minutes, leading to duplicate rows per patient and loss of context.
 	conversation = &ConversationContext{
 		ID:             uuid.New(),
 		ClinicID:       clinicID,
@@ -92,7 +102,7 @@ func (m *conversationManager) GetOrCreate(ctx context.Context, clinicID uuid.UUI
 		Metadata:       map[string]interface{}{},
 		CreatedAt:      time.Now(),
 		UpdatedAt:      time.Now(),
-		ExpiresAt:      time.Now().Add(m.defaultTTL),
+		ExpiresAt:      time.Now().Add(m.extendedTTL),
 	}
 
 	if err := m.repo.Create(ctx, conversation); err != nil {
@@ -117,9 +127,6 @@ func (m *conversationManager) AddUserMessage(ctx context.Context, conversationID
 
 	conversation.AddUserTurn(content, m.maxTurns)
 
-	// Extend expiration time on user activity
-	conversation.ExpiresAt = time.Now().Add(m.defaultTTL)
-
 	return m.repo.Update(ctx, conversation)
 }
 
@@ -131,6 +138,20 @@ func (m *conversationManager) AddAssistantMessage(ctx context.Context, conversat
 	}
 
 	conversation.AddAssistantTurn(content, toolCalls, m.maxTurns)
+
+	return m.repo.Update(ctx, conversation)
+}
+
+// AddHumanAgentMessage records a message that a clinic attendant typed
+// directly to the patient via the WhatsApp app while the AI was paused. See
+// the interface comment for why this is a separate role from "user".
+func (m *conversationManager) AddHumanAgentMessage(ctx context.Context, conversationID uuid.UUID, content string) error {
+	conversation, err := m.repo.GetByID(ctx, conversationID)
+	if err != nil {
+		return err
+	}
+
+	conversation.AddHumanAgentTurn(content, m.maxTurns)
 
 	return m.repo.Update(ctx, conversation)
 }
@@ -150,6 +171,13 @@ func (m *conversationManager) UpdateState(ctx context.Context, conversationID uu
 	logger.Printf("[Conversation Manager] Updated conversation %s state to %s (intent: %s)", conversationID, state, intent)
 
 	return m.repo.Update(ctx, conversation)
+}
+
+// CanonicalizePhone is a thin wrapper around internal/phone.Canonicalize kept
+// here so existing callers inside this package don't churn. New code should
+// import internal/phone directly.
+func CanonicalizePhone(p string) string {
+	return phone.Canonicalize(p)
 }
 
 // SetPendingAction sets a pending action in the conversation

@@ -33,7 +33,9 @@ func NewHealthHandler(db *database.Database) HealthHandler {
 // RegisterRoutes registers health check routes
 func (h *healthHandler) RegisterRoutes(router gin.IRouter) {
 	router.GET("/health", h.Health)
+	router.HEAD("/health", h.Health)
 	router.GET("/ready", h.Ready)
+	router.HEAD("/ready", h.Ready)
 }
 
 // Health returns basic health status

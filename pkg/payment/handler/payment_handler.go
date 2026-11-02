@@ -2,11 +2,12 @@ package handler
 
 import (
 	"encoding/json"
-	"github.com/aseno/backend/internal/logger"
 	"io"
 	"net/http"
 	"strconv"
 	"time"
+
+	"github.com/aseno/backend/internal/logger"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -29,6 +30,8 @@ type PaymentHandler interface {
 	GetSubscription(c *gin.Context)
 	CreateSubscription(c *gin.Context)
 	CancelSubscription(c *gin.Context)
+	GetSubscriptionPayments(c *gin.Context)
+	SwitchPlan(c *gin.Context)
 	Webhook(c *gin.Context)
 }
 
@@ -65,6 +68,8 @@ func (h *paymentHandler) RegisterRoutes(router gin.IRouter) {
 		billing.GET("/subscription", h.GetSubscription)
 		billing.POST("/subscription", h.CreateSubscription)
 		billing.DELETE("/subscription", h.CancelSubscription)
+		billing.GET("/subscription/payments", h.GetSubscriptionPayments)
+		billing.POST("/switch-plan", h.SwitchPlan)
 	}
 }
 
@@ -226,8 +231,8 @@ func (h *paymentHandler) GetPayment(c *gin.Context) {
 		return
 	}
 
-	paymentID, err := uuid.Parse(c.Param("id"))
-	if err != nil {
+	paymentID := c.Param("id")
+	if paymentID == "" {
 		c.JSON(http.StatusBadRequest, errors.ToResponse(errors.ErrInvalidInstance.WithMessage("Invalid payment ID")))
 		return
 	}
@@ -250,8 +255,8 @@ func (h *paymentHandler) GetPixQRCode(c *gin.Context) {
 		return
 	}
 
-	paymentID, err := uuid.Parse(c.Param("id"))
-	if err != nil {
+	paymentID := c.Param("id")
+	if paymentID == "" {
 		c.JSON(http.StatusBadRequest, errors.ToResponse(errors.ErrInvalidInstance.WithMessage("Invalid payment ID")))
 		return
 	}
@@ -309,9 +314,12 @@ func (h *paymentHandler) GetSubscription(c *gin.Context) {
 
 // CreateSubscriptionRequest represents the request to create a subscription
 type CreateSubscriptionRequest struct {
-	BillingType string `json:"billing_type" binding:"required"`
-	Plan        string `json:"plan" binding:"required,oneof=basic professional advanced"`
-	Cycle       string `json:"cycle" binding:"required"`
+	BillingType string  `json:"billing_type" binding:"required"`
+	PlanID      string  `json:"plan_id" binding:"required,uuid"`
+	OfferToken  *string `json:"offer_token,omitempty"`
+	Cycle       string  `json:"cycle" binding:"required"`
+	Variant     string  `json:"variant"`
+	Units       int     `json:"units"`
 }
 
 // CreateSubscription creates a new subscription
@@ -328,27 +336,19 @@ func (h *paymentHandler) CreateSubscription(c *gin.Context) {
 		return
 	}
 
-	// Price lookup based on plan strategy
-	var value float64
-	var description string
-
-	switch req.Plan {
-	case "basic":
-		value = 99.00
-		description = "Plano Básico - Aseno"
-	case "professional":
-		value = 199.00
-		description = "Plano Profissional - Aseno"
-	case "advanced":
-		value = 349.00
-		description = "Plano Avançado - Aseno"
+	planID, err := uuid.Parse(req.PlanID)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, errors.ToResponse(errors.ErrValidationInstance.WithMessage("Invalid plan_id format")))
+		return
 	}
 
 	input := &service.CreateSubscriptionInput{
 		BillingType: model.BillingType(req.BillingType),
-		Value:       value,
+		PlanID:      planID,
+		OfferToken:  req.OfferToken,
 		Cycle:       model.BillingCycle(req.Cycle),
-		Description: description,
+		Variant:     req.Variant,
+		Units:       req.Units,
 	}
 
 	subscription, err := h.service.CreateSubscription(c.Request.Context(), clinicID.(uuid.UUID), input)
@@ -376,6 +376,60 @@ func (h *paymentHandler) CancelSubscription(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"status": "canceled"})
+}
+
+// SwitchPlanRequest represents the request to switch plans
+type SwitchPlanRequest struct {
+	Plan                 string                      `json:"plan" binding:"required,oneof=basic professional advanced"`
+	BillingType          string                      `json:"billing_type" binding:"required"`
+	Cycle                string                      `json:"cycle" binding:"required"`
+	Variant              string                      `json:"variant"`
+	OfferToken           *string                     `json:"offer_token,omitempty"`
+	CreditCard           *model.CreditCardInfo       `json:"credit_card,omitempty"`
+	CreditCardHolderInfo *model.CreditCardHolderInfo `json:"credit_card_holder_info,omitempty"`
+	Units                int                         `json:"units"`
+}
+
+// SwitchPlan handles plan switching (cancel current + create new)
+func (h *paymentHandler) SwitchPlan(c *gin.Context) {
+	clinicID, exists := c.Get("clinic_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, errors.ToResponse(errors.ErrUnauthorizedInstance))
+		return
+	}
+
+	var req SwitchPlanRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, errors.ToResponse(errors.ErrValidationInstance.WithError(err)))
+		return
+	}
+
+	subscription, err := h.service.SwitchPlan(c.Request.Context(), clinicID.(uuid.UUID), req.Plan, req.BillingType, req.Cycle, req.Variant, req.OfferToken, req.CreditCard, req.CreditCardHolderInfo, req.Units)
+	if err != nil {
+		statusCode := errors.GetStatusCode(err)
+		c.JSON(statusCode, errors.ToResponse(err))
+		return
+	}
+
+	c.JSON(http.StatusCreated, subscription)
+}
+
+// GetSubscriptionPayments returns payments for the current subscription
+func (h *paymentHandler) GetSubscriptionPayments(c *gin.Context) {
+	clinicID, exists := c.Get("clinic_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, errors.ToResponse(errors.ErrUnauthorizedInstance))
+		return
+	}
+
+	payments, err := h.service.GetSubscriptionPayments(c.Request.Context(), clinicID.(uuid.UUID))
+	if err != nil {
+		statusCode := errors.GetStatusCode(err)
+		c.JSON(statusCode, errors.ToResponse(err))
+		return
+	}
+
+	c.JSON(http.StatusOK, payments)
 }
 
 // Webhook handles incoming webhooks from Asaas

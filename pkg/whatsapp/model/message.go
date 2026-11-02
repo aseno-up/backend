@@ -46,7 +46,7 @@ type Message struct {
 	Type          MessageType      `json:"type" gorm:"not null;default:'text'"`
 	Content       string           `json:"content" gorm:"type:text"`
 	Status        MessageStatus    `json:"status" gorm:"not null;default:'pending'"`
-	ExternalID    string           `json:"external_id"` // ID from WhatsApp provider
+	ExternalID    string           `json:"external_id" gorm:"index"` // ID from WhatsApp provider; indexed for fromMe webhook lookup
 	ErrorMessage  string           `json:"error_message,omitempty"`
 	SentAt        *time.Time       `json:"sent_at,omitempty"`
 	DeliveredAt   *time.Time       `json:"delivered_at,omitempty"`

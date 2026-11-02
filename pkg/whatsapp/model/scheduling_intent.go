@@ -36,7 +36,11 @@ func (s SlotOptions) Value() (driver.Value, error) {
 	if s == nil {
 		return nil, nil
 	}
-	return json.Marshal(s)
+	b, err := json.Marshal(s)
+	if err != nil {
+		return nil, err
+	}
+	return string(b), nil
 }
 
 // Scan implements sql.Scanner for SlotOptions
@@ -70,7 +74,11 @@ func (s *SelectedSlot) Value() (driver.Value, error) {
 	if s == nil {
 		return nil, nil
 	}
-	return json.Marshal(s)
+	b, err := json.Marshal(s)
+	if err != nil {
+		return nil, err
+	}
+	return string(b), nil
 }
 
 // Scan implements sql.Scanner for SelectedSlot

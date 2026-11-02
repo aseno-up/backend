@@ -1,9 +1,13 @@
 package agent
 
 import (
-	"github.com/aseno/backend/internal/logger"
+	"math"
+	"os"
+	"strconv"
 	"sync"
 	"time"
+
+	"github.com/aseno/backend/internal/logger"
 )
 
 // MetricsCollector collects and tracks AI agent metrics
@@ -238,25 +242,92 @@ type Metrics struct {
 	FallbackTriggers int64
 }
 
-// EstimateTokenCost estimates the cost of tokens for Gemini
-// Pricing as of 2026 (update as needed)
-func EstimateTokenCost(tokens int, model string) float64 {
-	// Gemini pricing (example - update with actual pricing)
-	// gemini-2.0-flash: $0.10 per 1M tokens
-	// gemini-2.0-flash-exp: Free tier (for now)
+// usdToBrl is the conversion factor used for cost estimates. It is read once
+// at package init from the USD_TO_BRL_RATE env var so FX drift can be
+// adjusted without rebuilding the binary; missing/invalid values fall back
+// to the documented default so a bad config string cannot silently zero out
+// the cost dashboard.
+var usdToBrl = parseUSDToBRL(os.Getenv("USD_TO_BRL_RATE"))
 
-	const usdToBrl = 5.0 // Approximate exchange rate
+const defaultUSDToBRL = 5.0
 
-	switch model {
-	case "gemini-2.0-flash":
-		return (float64(tokens) / 1000000.0) * 0.10 * usdToBrl
-	case "gemini-2.0-flash-exp":
-		return 0 // Free tier
-	case "gemini-1.5-flash":
-		return (float64(tokens) / 1000000.0) * 0.075 * usdToBrl
-	case "gemini-1.5-pro":
-		return (float64(tokens) / 1000000.0) * 1.25 * usdToBrl
-	default:
-		return (float64(tokens) / 1000000.0) * 0.10 * usdToBrl
+// parseUSDToBRL turns the raw env-var string into a positive float. Anything
+// non-numeric, zero, or negative is treated as "not set" and the documented
+// default is used. Exposed (lowercase) so tests can drive it directly without
+// needing to reach into the OS env.
+func parseUSDToBRL(raw string) float64 {
+	if raw == "" {
+		return defaultUSDToBRL
 	}
+	f, err := strconv.ParseFloat(raw, 64)
+	// strconv.ParseFloat accepts "nan", "inf", "+inf" without error — those
+	// would silently break the cost dashboard, so reject explicitly.
+	if err != nil || math.IsNaN(f) || math.IsInf(f, 0) || f <= 0 {
+		return defaultUSDToBRL
+	}
+	return f
+}
+
+// modelPricing maps a model name to its USD-per-1M-tokens cost.
+// Sourced from OpenRouter's listing for each model. All models in the
+// production primary + fallback chain are covered explicitly; everything
+// else falls back to fallbackPricing, which is set conservatively to
+// gpt-4o-mini's rate (our primary).
+type modelRate struct {
+	inputPer1M  float64
+	outputPer1M float64
+}
+
+var modelPricing = map[string]modelRate{
+	// Production primary + fallbacks (k8s/secrets.yaml AI_AGENT_MODEL chain)
+	"openai/gpt-4o-mini":               {0.15, 0.60},
+	"google/gemini-2.0-flash-001":      {0.10, 0.40},
+	"google/gemini-2.0-flash-lite-001": {0.075, 0.30},
+	"qwen/qwen-2.5-72b-instruct":       {0.13, 0.39},
+
+	// Common alternates we may switch to without redeploying this code
+	"openai/gpt-4o":                     {2.50, 10.00},
+	"openai/gpt-4-turbo":                {10.00, 30.00},
+	"openai/gpt-3.5-turbo":              {0.50, 1.50},
+	"anthropic/claude-3.5-sonnet":       {3.00, 15.00},
+	"anthropic/claude-3.5-haiku":        {0.80, 4.00},
+	"anthropic/claude-3-opus":           {15.00, 75.00},
+	"google/gemini-1.5-flash":           {0.075, 0.30},
+	"google/gemini-1.5-pro":             {1.25, 5.00},
+	"meta-llama/llama-3.1-70b-instruct": {0.30, 0.30},
+	"mistralai/mistral-7b-instruct":     {0.06, 0.06},
+
+	// Legacy keys preserved for backwards compatibility with non-OpenRouter
+	// callers (older Gemini direct integrations used these short names).
+	"gemini-2.0-flash":     {0.10, 0.40},
+	"gemini-2.0-flash-exp": {0, 0},
+	"gemini-1.5-flash":     {0.075, 0.30},
+	"gemini-1.5-pro":       {1.25, 5.00},
+}
+
+// fallbackPricing is used when the model name is not in modelPricing.
+// We use the primary model's rate so unknown models do not silently report
+// zero cost on the admin dashboard.
+var fallbackPricing = modelRate{0.15, 0.60}
+
+// EstimateTokenCostSplit returns the BRL cost of a single LLM call with a
+// real input/output split. This is the function billing/observability code
+// should use; OpenRouter and Gemini both report the split.
+func EstimateTokenCostSplit(inputTokens, outputTokens int, model string) float64 {
+	rate, ok := modelPricing[model]
+	if !ok {
+		rate = fallbackPricing
+	}
+	inCost := float64(inputTokens) / 1_000_000.0 * rate.inputPer1M
+	outCost := float64(outputTokens) / 1_000_000.0 * rate.outputPer1M
+	return (inCost + outCost) * usdToBrl
+}
+
+// EstimateTokenCost is the legacy single-number signature kept for callers
+// that do not have the in/out split. Approximates a chat-typical 80/20
+// input/output ratio (system prompt + history dwarfs the reply).
+func EstimateTokenCost(tokens int, model string) float64 {
+	in := tokens * 80 / 100
+	out := tokens - in
+	return EstimateTokenCostSplit(in, out, model)
 }

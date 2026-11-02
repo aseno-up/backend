@@ -16,6 +16,7 @@ import (
 type ClinicService interface {
 	GetByID(ctx context.Context, id uuid.UUID) (*model.ClinicResponse, error)
 	Update(ctx context.Context, id uuid.UUID, req *model.UpdateClinicRequest) (*model.ClinicResponse, error)
+	ListLookup(ctx context.Context) ([]model.ClinicLookup, error)
 }
 
 // clinicService implements ClinicService
@@ -75,6 +76,18 @@ func (s *clinicService) Update(ctx context.Context, id uuid.UUID, req *model.Upd
 	if req.ZipCode != "" {
 		clinic.ZipCode = req.ZipCode
 	}
+	if req.Document != nil {
+		clinic.Document = *req.Document
+	}
+	if req.Instagram != nil {
+		clinic.Instagram = *req.Instagram
+	}
+	if req.BusinessInfo != nil {
+		clinic.BusinessInfo = *req.BusinessInfo
+	}
+	if req.FAQ != nil {
+		clinic.FAQ = *req.FAQ
+	}
 	if req.LogoURL != "" {
 		clinic.LogoURL = req.LogoURL
 	}
@@ -129,8 +142,23 @@ func (s *clinicService) Update(ctx context.Context, id uuid.UUID, req *model.Upd
 		if req.Settings.EmailRemindersEnabled != nil {
 			clinic.Settings.EmailRemindersEnabled = *req.Settings.EmailRemindersEnabled
 		}
+		if req.Settings.WhatsAppReminder2hEnabled != nil {
+			clinic.Settings.WhatsAppReminder2hEnabled = req.Settings.WhatsAppReminder2hEnabled
+		}
+		if req.Settings.WhatsAppReminder24hEnabled != nil {
+			clinic.Settings.WhatsAppReminder24hEnabled = req.Settings.WhatsAppReminder24hEnabled
+		}
+		if req.Settings.WhatsAppReminder48hEnabled != nil {
+			clinic.Settings.WhatsAppReminder48hEnabled = req.Settings.WhatsAppReminder48hEnabled
+		}
+		if req.Settings.RequirePaymentBeforeBooking != nil {
+			clinic.Settings.RequirePaymentBeforeBooking = *req.Settings.RequirePaymentBeforeBooking
+		}
 		if req.Settings.AIAgentEnabled != nil {
 			clinic.Settings.AIAgentEnabled = *req.Settings.AIAgentEnabled
+		}
+		if req.Settings.AboutUs != nil {
+			clinic.Settings.AboutUs = *req.Settings.AboutUs
 		}
 
 		// AI/WhatsApp settings
@@ -143,6 +171,55 @@ func (s *clinicService) Update(ctx context.Context, id uuid.UUID, req *model.Upd
 		if req.Settings.AIBusinessHours != nil {
 			clinic.Settings.AIBusinessHours = req.Settings.AIBusinessHours
 		}
+
+		if req.Settings.AIToolSchedule != nil {
+			clinic.Settings.AIToolSchedule = req.Settings.AIToolSchedule
+		}
+		if req.Settings.AIToolConfirm != nil {
+			clinic.Settings.AIToolConfirm = req.Settings.AIToolConfirm
+		}
+		if req.Settings.AIToolCancel != nil {
+			clinic.Settings.AIToolCancel = req.Settings.AIToolCancel
+		}
+		if req.Settings.AIToolReschedule != nil {
+			clinic.Settings.AIToolReschedule = req.Settings.AIToolReschedule
+		}
+		if req.Settings.AIToolEnrollClass != nil {
+			clinic.Settings.AIToolEnrollClass = req.Settings.AIToolEnrollClass
+		}
+		if req.Settings.AIToolConfirmClass != nil {
+			clinic.Settings.AIToolConfirmClass = req.Settings.AIToolConfirmClass
+		}
+		if req.Settings.AIBlockedIntentReply != nil {
+			clinic.Settings.AIBlockedIntentReply = *req.Settings.AIBlockedIntentReply
+		}
+		if req.Settings.AIHumanTakeoverPauseHours != nil {
+			clinic.Settings.AIHumanTakeoverPauseHours = req.Settings.AIHumanTakeoverPauseHours
+		}
+
+		// Payment reminder settings
+		if req.Settings.PaymentReminderDaysBefore != nil {
+			d := *req.Settings.PaymentReminderDaysBefore
+			if d < 1 || d > 7 {
+				return nil, errors.ErrValidationInstance.WithMessage(
+					"payment_reminder_days_before must be between 1 and 7")
+			}
+			clinic.Settings.PaymentReminderDaysBefore = req.Settings.PaymentReminderDaysBefore
+		}
+		if req.Settings.PaymentReminderWhatsAppEnabled != nil {
+			clinic.Settings.PaymentReminderWhatsAppEnabled = req.Settings.PaymentReminderWhatsAppEnabled
+		}
+		if req.Settings.PaymentReminderEmailEnabled != nil {
+			clinic.Settings.PaymentReminderEmailEnabled = req.Settings.PaymentReminderEmailEnabled
+		}
+
+		// Group class reminder windows
+		if req.Settings.GroupClassReminder24hEnabled != nil {
+			clinic.Settings.GroupClassReminder24hEnabled = req.Settings.GroupClassReminder24hEnabled
+		}
+		if req.Settings.GroupClassReminder2hEnabled != nil {
+			clinic.Settings.GroupClassReminder2hEnabled = req.Settings.GroupClassReminder2hEnabled
+		}
 	}
 
 	// Save changes
@@ -153,4 +230,19 @@ func (s *clinicService) Update(ctx context.Context, id uuid.UUID, req *model.Upd
 	resp := clinic.ToResponse()
 	resp.BookingURL = s.buildBookingURL(clinic.Slug)
 	return resp, nil
+}
+
+// ListLookup returns a minimal {id, name} list of all clinics, used by the
+// admin Usage Metrics page to render names instead of raw UUIDs. The endpoint
+// behind this is dev-clinic-only via middleware in cmd/api/main.go.
+func (s *clinicService) ListLookup(ctx context.Context) ([]model.ClinicLookup, error) {
+	clinics, _, err := s.repo.List(ctx, 10000, 0)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]model.ClinicLookup, 0, len(clinics))
+	for _, c := range clinics {
+		out = append(out, model.ClinicLookup{ID: c.ID, Name: c.Name})
+	}
+	return out, nil
 }

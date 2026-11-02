@@ -12,11 +12,22 @@ import (
 	user_model "github.com/aseno/backend/pkg/user/model"
 )
 
+// TokenContext holds the data needed to generate JWT tokens.
+// This decouples token generation from the User struct, allowing
+// clinic_id and role to come from clinic_members instead of users table.
+type TokenContext struct {
+	UserID         uuid.UUID
+	Email          string
+	ClinicID       uuid.UUID
+	Role           user_model.UserRole
+	ProfessionalID *uuid.UUID
+}
+
 // JWTService defines the interface for JWT operations
 type JWTService interface {
-	GenerateTokenPair(user *user_model.User) (*model.TokenPair, error)
-	GenerateAccessToken(user *user_model.User) (string, time.Time, error)
-	GenerateRefreshToken(user *user_model.User) (string, error)
+	GenerateTokenPair(tc *TokenContext) (*model.TokenPair, error)
+	GenerateAccessToken(tc *TokenContext) (string, time.Time, error)
+	GenerateRefreshToken(tc *TokenContext) (string, error)
 	GenerateSSEToken(userID, clinicID uuid.UUID) (string, error)
 	ValidateAccessToken(tokenString string) (*model.JWTClaims, error)
 	ValidateRefreshToken(tokenString string) (*model.JWTClaims, error)
@@ -42,13 +53,13 @@ func NewJWTService(secret string, accessTokenTTLMinutes, refreshTokenTTLDays int
 }
 
 // GenerateTokenPair generates both access and refresh tokens
-func (s *jwtService) GenerateTokenPair(user *user_model.User) (*model.TokenPair, error) {
-	accessToken, expiresAt, err := s.GenerateAccessToken(user)
+func (s *jwtService) GenerateTokenPair(tc *TokenContext) (*model.TokenPair, error) {
+	accessToken, expiresAt, err := s.GenerateAccessToken(tc)
 	if err != nil {
 		return nil, err
 	}
 
-	refreshToken, err := s.GenerateRefreshToken(user)
+	refreshToken, err := s.GenerateRefreshToken(tc)
 	if err != nil {
 		return nil, err
 	}
@@ -61,23 +72,23 @@ func (s *jwtService) GenerateTokenPair(user *user_model.User) (*model.TokenPair,
 	}, nil
 }
 
-// GenerateAccessToken generates an access token for the user
-func (s *jwtService) GenerateAccessToken(user *user_model.User) (string, time.Time, error) {
+// GenerateAccessToken generates an access token
+func (s *jwtService) GenerateAccessToken(tc *TokenContext) (string, time.Time, error) {
 	expiresAt := time.Now().Add(s.accessTokenTTL)
 
 	claims := &model.JWTClaims{
-		UserID:         user.ID,
-		ClinicID:       user.ClinicID,
-		Email:          user.Email,
-		Role:           user.Role,
-		ProfessionalID: user.ProfessionalID,
+		UserID:         tc.UserID,
+		ClinicID:       tc.ClinicID,
+		Email:          tc.Email,
+		Role:           tc.Role,
+		ProfessionalID: tc.ProfessionalID,
 		Type:           model.TokenTypeAccess,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(expiresAt),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
 			NotBefore: jwt.NewNumericDate(time.Now()),
 			Issuer:    s.issuer,
-			Subject:   user.ID.String(),
+			Subject:   tc.UserID.String(),
 			ID:        uuid.New().String(),
 		},
 	}
@@ -91,23 +102,23 @@ func (s *jwtService) GenerateAccessToken(user *user_model.User) (string, time.Ti
 	return tokenString, expiresAt, nil
 }
 
-// GenerateRefreshToken generates a refresh token for the user
-func (s *jwtService) GenerateRefreshToken(user *user_model.User) (string, error) {
+// GenerateRefreshToken generates a refresh token
+func (s *jwtService) GenerateRefreshToken(tc *TokenContext) (string, error) {
 	expiresAt := time.Now().Add(s.refreshTokenTTL)
 
 	claims := &model.JWTClaims{
-		UserID:         user.ID,
-		ClinicID:       user.ClinicID,
-		Email:          user.Email,
-		Role:           user.Role,
-		ProfessionalID: user.ProfessionalID,
+		UserID:         tc.UserID,
+		ClinicID:       tc.ClinicID,
+		Email:          tc.Email,
+		Role:           tc.Role,
+		ProfessionalID: tc.ProfessionalID,
 		Type:           model.TokenTypeRefresh,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(expiresAt),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
 			NotBefore: jwt.NewNumericDate(time.Now()),
 			Issuer:    s.issuer,
-			Subject:   user.ID.String(),
+			Subject:   tc.UserID.String(),
 			ID:        uuid.New().String(),
 		},
 	}

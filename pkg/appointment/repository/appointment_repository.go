@@ -9,6 +9,7 @@ import (
 
 	"github.com/aseno/backend/internal/errors"
 	"github.com/aseno/backend/pkg/appointment/model"
+	procedureModel "github.com/aseno/backend/pkg/procedure/model"
 )
 
 // AppointmentRepository defines the interface for appointment data operations
@@ -20,24 +21,50 @@ type AppointmentRepository interface {
 	GetByDay(ctx context.Context, clinicID uuid.UUID, date time.Time, professionalID *uuid.UUID) ([]*model.Appointment, error)
 	Update(ctx context.Context, appointment *model.Appointment) error
 	Delete(ctx context.Context, id, clinicID uuid.UUID) error
+	DeleteCascade(ctx context.Context, id, clinicID uuid.UUID, deletePayments bool) error
+	// SoftDeleteAsCanceledException marks a session-plan appointment as a
+	// cancelled-exception tombstone (status=canceled, is_exception=true,
+	// deleted_at set) so the CalendarFacade keeps suppressing its virtual
+	// occurrence. Used instead of a hard delete for appointments linked to a
+	// session plan — otherwise the RRULE re-materializes the slot and the
+	// appointment appears to "come back".
+	SoftDeleteAsCanceledException(ctx context.Context, id, clinicID uuid.UUID, deletePayments bool) error
+	GetDeletePreview(ctx context.Context, id, clinicID uuid.UUID) (*model.AppointmentDeletePreview, error)
 	CheckConflict(ctx context.Context, clinicID, professionalID uuid.UUID, start, end time.Time, excludeID *uuid.UUID) (bool, error)
 	GetByPatient(ctx context.Context, patientID, clinicID uuid.UUID, limit int) ([]*model.Appointment, error)
 	UpdateStatus(ctx context.Context, id, clinicID uuid.UUID, status model.AppointmentStatus) error
 
 	// Reminder-related methods
 	GetPendingReminders(ctx context.Context, reminderType string, windowStart, windowEnd time.Time) ([]*model.AppointmentWithClinic, error)
-	MarkReminderSent(ctx context.Context, id uuid.UUID, reminderType string) error
+	MarkReminderSent(ctx context.Context, clinicID, id uuid.UUID, reminderType string) error
 
 	// WhatsApp response handling
 	GetPendingByPhone(ctx context.Context, clinicID uuid.UUID, phone string) (*model.Appointment, error)
 
 	// Confirmation timeout methods
 	GetExpiredConfirmations(ctx context.Context, limit int) ([]*model.AppointmentWithClinic, error)
-	MarkConfirmationExpired(ctx context.Context, id uuid.UUID) error
-	SetConfirmationExpiresAt(ctx context.Context, id uuid.UUID, expiresAt time.Time) error
+	MarkConfirmationExpired(ctx context.Context, clinicID, id uuid.UUID) error
+	SetConfirmationExpiresAt(ctx context.Context, clinicID, id uuid.UUID, expiresAt time.Time) error
 
 	// Smart Scheduling
 	GetSlotPerformanceStats(ctx context.Context, clinicID, professionalID uuid.UUID) ([]*model.SlotPerformanceStats, error)
+
+	// GetByDateRangeWithExceptions retrieves appointments including cancelled exceptions (for calendar facade)
+	GetByDateRangeWithExceptions(ctx context.Context, clinicID uuid.UUID, start, end time.Time, professionalID *uuid.UUID) ([]*model.Appointment, error)
+
+	// FindPlanAppointmentOnDate returns the non-cancelled, non-deleted
+	// appointment for the given session plan whose current start_time OR
+	// original_date falls within the requested day. Used by reschedule flows
+	// to locate the appointment to update without depending on the plan's
+	// currently-configured professional (which may differ from the
+	// appointment's). Returns nil when no matching appointment exists.
+	FindPlanAppointmentOnDate(ctx context.Context, clinicID, sessionPlanID uuid.UUID, day time.Time) (*model.Appointment, error)
+
+	// CountByProfessionalID returns the count of non-deleted appointments for a professional
+	CountByProfessionalID(ctx context.Context, professionalID, clinicID uuid.UUID) (int64, error)
+
+	// UpdatePaymentStatus updates only the payment_status field
+	UpdatePaymentStatus(ctx context.Context, id uuid.UUID, status model.PaymentStatus) error
 }
 
 // appointmentRepository implements AppointmentRepository
@@ -98,6 +125,8 @@ func (r *appointmentRepository) GetByID(ctx context.Context, id, clinicID uuid.U
 	result := r.db.WithContext(ctx).
 		Preload("Patient").
 		Preload("Professional").
+		Preload("Procedures.Procedure", func(db *gorm.DB) *gorm.DB { return db.Unscoped() }).
+		Preload("Specialties").
 		Where("id = ? AND clinic_id = ? AND deleted_at IS NULL", id, clinicID).
 		First(&appointment)
 	if result.Error != nil {
@@ -106,7 +135,52 @@ func (r *appointmentRepository) GetByID(ctx context.Context, id, clinicID uuid.U
 		}
 		return nil, errors.ErrInternalInstance.WithError(result.Error)
 	}
+	r.fillMissingProcedures(ctx, []*model.Appointment{&appointment})
 	return &appointment, nil
+}
+
+// fillMissingProcedures is a defensive fallback for the Preload("Procedures.Procedure")
+// callback: if GORM's nested Unscoped preload doesn't attach the Procedure row for
+// every AppointmentProcedure (e.g. when the procedure was soft-deleted), we issue a
+// single batched Unscoped SELECT and populate the pointers ourselves. Without this,
+// the edit dialog would lose the procedure name and the user couldn't remove it
+// from the appointment.
+func (r *appointmentRepository) fillMissingProcedures(ctx context.Context, appts []*model.Appointment) {
+	missing := make(map[uuid.UUID]struct{})
+	for _, apt := range appts {
+		for i := range apt.Procedures {
+			if apt.Procedures[i].Procedure == nil {
+				missing[apt.Procedures[i].ProcedureID] = struct{}{}
+			}
+		}
+	}
+	if len(missing) == 0 {
+		return
+	}
+	ids := make([]uuid.UUID, 0, len(missing))
+	for id := range missing {
+		ids = append(ids, id)
+	}
+
+	var procs []procedureModel.Procedure
+	if err := r.db.WithContext(ctx).Unscoped().
+		Where("id IN ?", ids).
+		Find(&procs).Error; err != nil {
+		return
+	}
+	byID := make(map[uuid.UUID]*procedureModel.Procedure, len(procs))
+	for i := range procs {
+		byID[procs[i].ID] = &procs[i]
+	}
+	for _, apt := range appts {
+		for i := range apt.Procedures {
+			if apt.Procedures[i].Procedure == nil {
+				if p := byID[apt.Procedures[i].ProcedureID]; p != nil {
+					apt.Procedures[i].Procedure = p
+				}
+			}
+		}
+	}
 }
 
 // List retrieves appointments with filters
@@ -154,6 +228,8 @@ func (r *appointmentRepository) List(ctx context.Context, clinicID uuid.UUID, fi
 	result := query.
 		Preload("Patient").
 		Preload("Professional").
+		Preload("Procedures.Procedure", func(db *gorm.DB) *gorm.DB { return db.Unscoped() }).
+		Preload("Specialties").
 		Order("start_time ASC").
 		Limit(perPage).
 		Offset(offset).
@@ -163,6 +239,7 @@ func (r *appointmentRepository) List(ctx context.Context, clinicID uuid.UUID, fi
 		return nil, 0, errors.ErrInternalInstance.WithError(result.Error)
 	}
 
+	r.fillMissingProcedures(ctx, appointments)
 	return appointments, total, nil
 }
 
@@ -173,6 +250,8 @@ func (r *appointmentRepository) GetByDateRange(ctx context.Context, clinicID uui
 	query := r.db.WithContext(ctx).
 		Preload("Patient").
 		Preload("Professional").
+		Preload("Procedures.Procedure", func(db *gorm.DB) *gorm.DB { return db.Unscoped() }).
+		Preload("Specialties").
 		Where("clinic_id = ? AND deleted_at IS NULL", clinicID).
 		Where("start_time >= ? AND start_time < ?", start, end).
 		Where("status NOT IN (?)", []model.AppointmentStatus{model.AppointmentStatusCanceled})
@@ -186,7 +265,88 @@ func (r *appointmentRepository) GetByDateRange(ctx context.Context, clinicID uui
 		return nil, errors.ErrInternalInstance.WithError(result.Error)
 	}
 
+	r.fillMissingProcedures(ctx, appointments)
 	return appointments, nil
+}
+
+// GetByDateRangeWithExceptions retrieves appointments in range, including
+// cancelled exceptions. Used by CalendarFacade to merge real appointments with
+// virtual RRULE occurrences. Three categories of rows are returned:
+//
+//   - Non-deleted, non-cancelled appointments (the normal case).
+//   - Non-deleted cancelled exceptions — rendered on the calendar as cancelled
+//     entries AND used to suppress the virtual occurrence at that date.
+//   - Soft-deleted cancelled exceptions ("tombstones") — NOT rendered, but
+//     still used by the facade to suppress the virtual occurrence. This is
+//     what prevents a deleted session-plan appointment from "coming back" as a
+//     virtual event.
+func (r *appointmentRepository) GetByDateRangeWithExceptions(ctx context.Context, clinicID uuid.UUID, start, end time.Time, professionalID *uuid.UUID) ([]*model.Appointment, error) {
+	var appointments []*model.Appointment
+
+	query := r.db.WithContext(ctx).
+		Preload("Patient").
+		Preload("Professional").
+		Preload("Procedures.Procedure", func(db *gorm.DB) *gorm.DB { return db.Unscoped() }).
+		Preload("Specialties").
+		Where("clinic_id = ?", clinicID).
+		Where("start_time >= ? AND start_time < ?", start, end).
+		Where(
+			"(deleted_at IS NULL AND (status NOT IN (?) OR (is_exception = true AND status = ?)))"+
+				" OR (deleted_at IS NOT NULL AND is_exception = true AND status = ?)",
+			[]model.AppointmentStatus{model.AppointmentStatusCanceled},
+			model.AppointmentStatusCanceled,
+			model.AppointmentStatusCanceled,
+		)
+
+	if professionalID != nil {
+		query = query.Where("professional_id = ?", *professionalID)
+	}
+
+	result := query.Order("start_time ASC").Find(&appointments)
+	if result.Error != nil {
+		return nil, errors.ErrInternalInstance.WithError(result.Error)
+	}
+
+	r.fillMissingProcedures(ctx, appointments)
+	return appointments, nil
+}
+
+// FindPlanAppointmentOnDate returns the non-cancelled, non-deleted appointment
+// belonging to the given session plan whose current start_time OR original_date
+// falls within the requested day. Ordering by original_date first (nulls last,
+// then start_time) keeps the result stable when both a first-time materialized
+// appointment and an already-rescheduled one happen to exist on the day —
+// though in practice a plan should only have one appointment per occurrence.
+//
+// The plan's current professional_id is deliberately NOT used as a filter: the
+// plan may have been reconfigured after the appointment was materialized, and
+// the reschedule flow still needs to update the original row instead of
+// creating a duplicate.
+func (r *appointmentRepository) FindPlanAppointmentOnDate(ctx context.Context, clinicID, sessionPlanID uuid.UUID, day time.Time) (*model.Appointment, error) {
+	start := time.Date(day.Year(), day.Month(), day.Day(), 0, 0, 0, 0, day.Location())
+	end := start.AddDate(0, 0, 1)
+
+	var apt model.Appointment
+	err := r.db.WithContext(ctx).
+		Preload("Patient").
+		Preload("Professional").
+		Preload("Procedures.Procedure", func(db *gorm.DB) *gorm.DB { return db.Unscoped() }).
+		Preload("Specialties").
+		Where("clinic_id = ? AND session_plan_id = ? AND deleted_at IS NULL", clinicID, sessionPlanID).
+		Where("status != ?", model.AppointmentStatusCanceled).
+		Where(
+			"(start_time >= ? AND start_time < ?) OR (original_date IS NOT NULL AND original_date >= ? AND original_date < ?)",
+			start, end, start, end,
+		).
+		Order("start_time ASC").
+		First(&apt).Error
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil, nil
+		}
+		return nil, errors.ErrInternalInstance.WithError(err)
+	}
+	return &apt, nil
 }
 
 // GetByDay retrieves appointments for a specific day
@@ -201,11 +361,47 @@ func (r *appointmentRepository) GetByDay(ctx context.Context, clinicID uuid.UUID
 
 // Update updates an appointment
 func (r *appointmentRepository) Update(ctx context.Context, appointment *model.Appointment) error {
-	result := r.db.WithContext(ctx).Omit("Patient", "Professional").Save(appointment)
-	if result.Error != nil {
-		return errors.ErrInternalInstance.WithError(result.Error)
-	}
-	return nil
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// Save the core appointment but omit relations so we handle Procedures and Specialties explicitly
+		if err := tx.Omit("Patient", "Professional", "Procedures", "Specialties").Save(appointment).Error; err != nil {
+			return errors.ErrInternalInstance.WithError(err)
+		}
+
+		// Explicitly replace the Procedures association
+		if appointment.Procedures != nil {
+			if err := tx.Where("appointment_id = ?", appointment.ID).Delete(&model.AppointmentProcedure{}).Error; err != nil {
+				return errors.ErrInternalInstance.WithError(err)
+			}
+
+			if len(appointment.Procedures) > 0 {
+				for i := range appointment.Procedures {
+					appointment.Procedures[i].AppointmentID = appointment.ID
+				}
+				if err := tx.Create(&appointment.Procedures).Error; err != nil {
+					return errors.ErrInternalInstance.WithError(err)
+				}
+			}
+		}
+
+		// Explicitly replace the Specialties association
+		if appointment.Specialties != nil {
+			if err := tx.Where("appointment_id = ?", appointment.ID).Delete(&model.AppointmentSpecialty{}).Error; err != nil {
+				return errors.ErrInternalInstance.WithError(err)
+			}
+
+			if len(appointment.Specialties) > 0 {
+				for i := range appointment.Specialties {
+					appointment.Specialties[i].AppointmentID = appointment.ID
+					appointment.Specialties[i].ClinicID = appointment.ClinicID
+				}
+				if err := tx.Create(&appointment.Specialties).Error; err != nil {
+					return errors.ErrInternalInstance.WithError(err)
+				}
+			}
+		}
+
+		return nil
+	})
 }
 
 // Delete soft-deletes an appointment
@@ -220,6 +416,143 @@ func (r *appointmentRepository) Delete(ctx context.Context, id, clinicID uuid.UU
 		return errors.ErrAppointmentNotFoundInstance
 	}
 	return nil
+}
+
+// DeleteCascade removes the appointment together with its linked
+// appointment_procedures (hard delete, since the join table has no soft-delete
+// column) and, when deletePayments is true, its appointment_payments (soft
+// delete). When deletePayments is false, payment rows stay linked to the now
+// soft-deleted appointment so the financial history is preserved.
+func (r *appointmentRepository) DeleteCascade(ctx context.Context, id, clinicID uuid.UUID, deletePayments bool) error {
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// Ensure the appointment exists within the clinic before touching anything.
+		var apt model.Appointment
+		if err := tx.Where("id = ? AND clinic_id = ?", id, clinicID).First(&apt).Error; err != nil {
+			if err == gorm.ErrRecordNotFound {
+				return errors.ErrAppointmentNotFoundInstance
+			}
+			return errors.ErrInternalInstance.WithError(err)
+		}
+
+		if err := tx.Where("appointment_id = ?", id).Delete(&model.AppointmentProcedure{}).Error; err != nil {
+			return errors.ErrInternalInstance.WithError(err)
+		}
+
+		if deletePayments {
+			if err := tx.Where("appointment_id = ? AND clinic_id = ?", id, clinicID).
+				Delete(&model.AppointmentPayment{}).Error; err != nil {
+				return errors.ErrInternalInstance.WithError(err)
+			}
+		}
+
+		if err := tx.Where("id = ? AND clinic_id = ?", id, clinicID).
+			Delete(&model.Appointment{}).Error; err != nil {
+			return errors.ErrInternalInstance.WithError(err)
+		}
+		return nil
+	})
+}
+
+// SoftDeleteAsCanceledException marks the appointment as a tombstone (cancelled
+// exception + deleted_at set) so the CalendarFacade suppresses the virtual
+// occurrence at the original date. This is used for session-plan appointments,
+// where a hard delete would erase the record and the RRULE would re-render the
+// same slot on the next calendar fetch. Payments are hard-deleted only when
+// the caller opts in via deletePayments.
+func (r *appointmentRepository) SoftDeleteAsCanceledException(ctx context.Context, id, clinicID uuid.UUID, deletePayments bool) error {
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var apt model.Appointment
+		if err := tx.Where("id = ? AND clinic_id = ? AND deleted_at IS NULL", id, clinicID).First(&apt).Error; err != nil {
+			if err == gorm.ErrRecordNotFound {
+				return errors.ErrAppointmentNotFoundInstance
+			}
+			return errors.ErrInternalInstance.WithError(err)
+		}
+
+		now := time.Now()
+		updates := map[string]interface{}{
+			"status":       model.AppointmentStatusCanceled,
+			"is_exception": true,
+			"canceled_at":  now,
+			"deleted_at":   now,
+		}
+		// Preserve the original RRULE date if this appointment was already
+		// rescheduled once; otherwise the current StartTime is the original.
+		if apt.OriginalDate == nil {
+			originalStart := apt.StartTime
+			updates["original_date"] = originalStart
+		}
+
+		if err := tx.Model(&model.Appointment{}).
+			Where("id = ? AND clinic_id = ?", id, clinicID).
+			Updates(updates).Error; err != nil {
+			return errors.ErrInternalInstance.WithError(err)
+		}
+
+		// appointment_procedures are join rows tied to this specific
+		// appointment; drop them so the same procedure slot can be re-used
+		// if the plan rebuilds a fresh occurrence for that date later.
+		if err := tx.Where("appointment_id = ?", id).Delete(&model.AppointmentProcedure{}).Error; err != nil {
+			return errors.ErrInternalInstance.WithError(err)
+		}
+
+		if deletePayments {
+			if err := tx.Where("appointment_id = ? AND clinic_id = ?", id, clinicID).
+				Delete(&model.AppointmentPayment{}).Error; err != nil {
+				return errors.ErrInternalInstance.WithError(err)
+			}
+		}
+		return nil
+	})
+}
+
+// GetDeletePreview returns counts the UI needs to warn the user about
+// procedures and payments that will be affected by the deletion.
+func (r *appointmentRepository) GetDeletePreview(ctx context.Context, id, clinicID uuid.UUID) (*model.AppointmentDeletePreview, error) {
+	// Confirm appointment exists within the clinic.
+	var apt model.Appointment
+	if err := r.db.WithContext(ctx).
+		Where("id = ? AND clinic_id = ?", id, clinicID).
+		First(&apt).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil, errors.ErrAppointmentNotFoundInstance
+		}
+		return nil, errors.ErrInternalInstance.WithError(err)
+	}
+
+	preview := &model.AppointmentDeletePreview{}
+
+	var proceduresCount int64
+	if err := r.db.WithContext(ctx).
+		Model(&model.AppointmentProcedure{}).
+		Where("appointment_id = ?", id).
+		Count(&proceduresCount).Error; err != nil {
+		return nil, errors.ErrInternalInstance.WithError(err)
+	}
+	preview.ProceduresCount = int(proceduresCount)
+
+	var paymentsCount int64
+	if err := r.db.WithContext(ctx).
+		Model(&model.AppointmentPayment{}).
+		Where("appointment_id = ? AND clinic_id = ?", id, clinicID).
+		Count(&paymentsCount).Error; err != nil {
+		return nil, errors.ErrInternalInstance.WithError(err)
+	}
+	preview.PaymentsCount = int(paymentsCount)
+
+	if paymentsCount > 0 {
+		var total float64
+		if err := r.db.WithContext(ctx).
+			Model(&model.AppointmentPayment{}).
+			Where("appointment_id = ? AND clinic_id = ?", id, clinicID).
+			Select("COALESCE(SUM(amount - discount), 0)").
+			Scan(&total).Error; err != nil {
+			return nil, errors.ErrInternalInstance.WithError(err)
+		}
+		preview.PaymentsTotal = total
+	}
+
+	return preview, nil
 }
 
 // CheckConflict checks if there's a conflicting appointment for a professional
@@ -248,6 +581,7 @@ func (r *appointmentRepository) GetByPatient(ctx context.Context, patientID, cli
 
 	result := r.db.WithContext(ctx).
 		Preload("Professional").
+		Preload("Procedures.Procedure", func(db *gorm.DB) *gorm.DB { return db.Unscoped() }).
 		Where("patient_id = ? AND clinic_id = ? AND deleted_at IS NULL", patientID, clinicID).
 		Order("start_time DESC").
 		Limit(limit).
@@ -294,15 +628,22 @@ func (r *appointmentRepository) UpdateStatus(ctx context.Context, id, clinicID u
 func (r *appointmentRepository) GetPendingReminders(ctx context.Context, reminderType string, windowStart, windowEnd time.Time) ([]*model.AppointmentWithClinic, error) {
 	var results []*model.AppointmentWithClinic
 
-	// Determine which reminder field to check
-	var reminderField string
+	// Determine which reminder field to check (column on appointments) and the
+	// per-window opt-out flag (jsonb key on clinics.settings). The opt-out
+	// defaults to true so clinics that existed before the toggles were
+	// introduced keep receiving all three windows; a clinic disables a single
+	// window by setting its flag explicitly to false on the settings jsonb.
+	var reminderField, windowFlagKey string
 	switch reminderType {
 	case "48h":
 		reminderField = "reminder48h_sent_at"
+		windowFlagKey = "whatsapp_reminder_48h_enabled"
 	case "24h":
 		reminderField = "reminder24h_sent_at"
+		windowFlagKey = "whatsapp_reminder_24h_enabled"
 	case "2h":
 		reminderField = "reminder2h_sent_at"
+		windowFlagKey = "whatsapp_reminder_2h_enabled"
 	default:
 		return nil, errors.ErrValidationInstance.WithMessage("invalid reminder type")
 	}
@@ -312,19 +653,21 @@ func (r *appointmentRepository) GetPendingReminders(ctx context.Context, reminde
 		SELECT
 			a.*,
 			c.name as clinic_name,
-			c.whats_app_instance as whatsapp_instance,
-			c.whats_app_connected as whatsapp_connected
+			wc.instance as whatsapp_instance,
+			wc.connected as whatsapp_connected
 		FROM appointments a
 		INNER JOIN clinics c ON a.clinic_id = c.id
+		LEFT JOIN whatsapp_connections wc ON wc.clinic_id = c.id AND wc.is_active = true AND wc.deleted_at IS NULL
 		WHERE a.deleted_at IS NULL
 			AND a.status IN ('pending', 'no_response')
 			AND a.start_time >= ?
 			AND a.start_time < ?
 			AND a.` + reminderField + ` IS NULL
-			AND c.whats_app_connected = true
-			AND c.whats_app_instance IS NOT NULL
-			AND c.whats_app_instance != ''
+			AND wc.connected = true
+			AND wc.instance IS NOT NULL
+			AND wc.instance != ''
 			AND COALESCE((c.settings->>'whatsapp_reminders_enabled')::boolean, false) = true
+			AND COALESCE((c.settings->>'` + windowFlagKey + `')::boolean, true) = true
 		ORDER BY a.start_time ASC
 		LIMIT 100
 	`
@@ -350,7 +693,7 @@ func (r *appointmentRepository) GetPendingReminders(ctx context.Context, reminde
 }
 
 // MarkReminderSent marks a specific reminder type as sent for an appointment
-func (r *appointmentRepository) MarkReminderSent(ctx context.Context, id uuid.UUID, reminderType string) error {
+func (r *appointmentRepository) MarkReminderSent(ctx context.Context, clinicID, id uuid.UUID, reminderType string) error {
 	var fieldName string
 	switch reminderType {
 	case "48h":
@@ -366,7 +709,7 @@ func (r *appointmentRepository) MarkReminderSent(ctx context.Context, id uuid.UU
 	now := time.Now()
 	result := r.db.WithContext(ctx).
 		Model(&model.Appointment{}).
-		Where("id = ?", id).
+		Where("clinic_id = ? AND id = ?", clinicID, id).
 		Update(fieldName, now)
 
 	if result.Error != nil {
@@ -438,10 +781,11 @@ func (r *appointmentRepository) GetExpiredConfirmations(ctx context.Context, lim
 		SELECT
 			a.*,
 			c.name as clinic_name,
-			c.whats_app_instance as whatsapp_instance,
-			c.whats_app_connected as whatsapp_connected
+			wc.instance as whatsapp_instance,
+			wc.connected as whatsapp_connected
 		FROM appointments a
 		INNER JOIN clinics c ON a.clinic_id = c.id
+		LEFT JOIN whatsapp_connections wc ON wc.clinic_id = c.id AND wc.is_active = true AND wc.deleted_at IS NULL
 		WHERE a.deleted_at IS NULL
 			AND a.status = 'pending'
 			AND a.confirmation_expires_at IS NOT NULL
@@ -472,10 +816,10 @@ func (r *appointmentRepository) GetExpiredConfirmations(ctx context.Context, lim
 }
 
 // MarkConfirmationExpired marks an appointment as no_response due to confirmation timeout
-func (r *appointmentRepository) MarkConfirmationExpired(ctx context.Context, id uuid.UUID) error {
+func (r *appointmentRepository) MarkConfirmationExpired(ctx context.Context, clinicID, id uuid.UUID) error {
 	result := r.db.WithContext(ctx).
 		Model(&model.Appointment{}).
-		Where("id = ?", id).
+		Where("clinic_id = ? AND id = ?", clinicID, id).
 		Update("status", model.AppointmentStatusNoResponse)
 
 	if result.Error != nil {
@@ -485,14 +829,35 @@ func (r *appointmentRepository) MarkConfirmationExpired(ctx context.Context, id 
 }
 
 // SetConfirmationExpiresAt sets the confirmation timeout for an appointment
-func (r *appointmentRepository) SetConfirmationExpiresAt(ctx context.Context, id uuid.UUID, expiresAt time.Time) error {
+func (r *appointmentRepository) SetConfirmationExpiresAt(ctx context.Context, clinicID, id uuid.UUID, expiresAt time.Time) error {
 	result := r.db.WithContext(ctx).
 		Model(&model.Appointment{}).
-		Where("id = ?", id).
+		Where("clinic_id = ? AND id = ?", clinicID, id).
 		Update("confirmation_expires_at", expiresAt)
 
 	if result.Error != nil {
 		return errors.ErrInternalInstance.WithError(result.Error)
 	}
 	return nil
+}
+
+// CountByProfessionalID returns the count of non-deleted appointments for a professional
+func (r *appointmentRepository) CountByProfessionalID(ctx context.Context, professionalID, clinicID uuid.UUID) (int64, error) {
+	var count int64
+	result := r.db.WithContext(ctx).
+		Model(&model.Appointment{}).
+		Where("professional_id = ? AND clinic_id = ? AND deleted_at IS NULL", professionalID, clinicID).
+		Count(&count)
+	if result.Error != nil {
+		return 0, errors.ErrInternalInstance.WithError(result.Error)
+	}
+	return count, nil
+}
+
+// UpdatePaymentStatus updates only the payment_status field of an appointment
+func (r *appointmentRepository) UpdatePaymentStatus(ctx context.Context, id uuid.UUID, status model.PaymentStatus) error {
+	return r.db.WithContext(ctx).
+		Model(&model.Appointment{}).
+		Where("id = ?", id).
+		Update("payment_status", status).Error
 }

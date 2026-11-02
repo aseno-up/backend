@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
+	clinic_model "github.com/aseno/backend/pkg/clinic/model"
 	"github.com/aseno/backend/pkg/whatsapp/agent"
 	"github.com/aseno/backend/pkg/whatsapp/model"
 )
@@ -37,9 +38,12 @@ func (s *stubAIAgentService) ProcessMessage(_ context.Context, req *agent.Messag
 	}, nil
 }
 
-func (s *stubAIAgentService) ShouldUseAIAgent(_ model.MessageIntent) bool {
+func (s *stubAIAgentService) ShouldUseAIAgent(_ model.MessageIntent, _ *clinic_model.Clinic) bool {
 	return true
 }
+
+func (s *stubAIAgentService) SetPromptHistoryTurns(_ int)          {}
+func (s *stubAIAgentService) SetTemperatures(_ float32, _ float32) {}
 
 func (s *stubAIAgentService) callCount() int {
 	s.mu.Lock()
@@ -75,6 +79,9 @@ func (s *stubWhatsAppClient) GetConnectionStatus(_ context.Context, _ string) (*
 func (s *stubWhatsAppClient) GetQRCode(_ context.Context, _ string) (*model.QRCodeData, error) {
 	return nil, nil
 }
+func (s *stubWhatsAppClient) DownloadMedia(_ context.Context, _, _ string) ([]byte, string, error) {
+	return []byte("stub"), "audio/ogg", nil
+}
 func (s *stubWhatsAppClient) Logout(_ context.Context, _ string) error         { return nil }
 func (s *stubWhatsAppClient) DeleteInstance(_ context.Context, _ string) error { return nil }
 
@@ -83,6 +90,9 @@ type stubMessageRepo struct{}
 
 func (r *stubMessageRepo) Create(_ context.Context, _ *model.Message) error { return nil }
 func (r *stubMessageRepo) GetByID(_ context.Context, _ uuid.UUID) (*model.Message, error) {
+	return nil, nil
+}
+func (r *stubMessageRepo) GetByExternalID(_ context.Context, _ string) (*model.Message, error) {
 	return nil, nil
 }
 func (r *stubMessageRepo) UpdateStatus(_ context.Context, _ uuid.UUID, _ model.MessageStatus) error {
@@ -238,6 +248,55 @@ func TestDebouncer_IndependentPerClinic(t *testing.T) {
 	}
 	if got := atomic.LoadInt32(&calledB); got != 1 {
 		t.Errorf("clínica B: esperava 1 disparo, recebeu %d", got)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Teste: clínica com AI desabilitado não entra no debouncer
+// ---------------------------------------------------------------------------
+
+// aiDisabledClinic retorna uma clínica com AIAgentEnabled=false.
+func aiDisabledClinic() *clinic_model.Clinic {
+	return &clinic_model.Clinic{
+		Settings: clinic_model.ClinicSettings{
+			AIAgentEnabled: false,
+		},
+	}
+}
+
+// TestHandleIncomingMessage_AIDisabled_SkipsDebouncer verifica que quando a
+// clínica tem AIAgentEnabled=false, a mensagem NÃO entra no debouncer e o AI
+// NÃO é chamado — mesmo que o aiAgentService esteja injetado.
+// O bug: toda mensagem entrava no debouncer (porque o check era s.aiAgentService != nil),
+// e como retornava nil na linha 809, o fluxo tradicional era completamente pulado.
+func TestHandleIncomingMessage_AIDisabled_SkipsDebouncer(t *testing.T) {
+	ai := &stubAIAgentService{}
+	debounce := 50 * time.Millisecond
+	svc := newTestService(ai, debounce).(*whatsAppService)
+	svc.clinicRepo = &stubClinicRepo{clinic: aiDisabledClinic()}
+
+	clinicID := uuid.New()
+	phone := "+5511999994444"
+	if err := svc.HandleIncomingMessage(context.Background(), clinicID, newMsg(phone, "Oi")); err != nil {
+		t.Fatalf("HandleIncomingMessage retornou erro: %v", err)
+	}
+
+	// Verifica que o debouncer NÃO tem nenhum timer pendente para este telefone.
+	// Se o bug ainda existir, a mensagem entrará no debouncer e terá um timer.
+	key := debounceKey(clinicID, phone)
+	svc.debouncer.mu.Lock()
+	_, hasPending := svc.debouncer.timers[key]
+	svc.debouncer.mu.Unlock()
+
+	if hasPending {
+		t.Errorf("Debouncer NÃO deveria ter timer pendente quando AIAgentEnabled=false, mas tem — mensagem entrou no debouncer indevidamente")
+	}
+
+	// Espera para confirmar que AI nunca é chamado.
+	time.Sleep(debounce + 80*time.Millisecond)
+
+	if got := ai.callCount(); got != 0 {
+		t.Errorf("AI agent NÃO deveria ter sido chamado quando AIAgentEnabled=false, mas foi chamado %d vez(es)", got)
 	}
 }
 

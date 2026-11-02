@@ -6,27 +6,17 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	account_model "github.com/aseno/backend/pkg/account/model"
 )
 
-// SubscriptionStatus represents the subscription state
-type SubscriptionStatus string
-
-const (
-	SubscriptionStatusTrial    SubscriptionStatus = "trial"
-	SubscriptionStatusActive   SubscriptionStatus = "active"
-	SubscriptionStatusPastDue  SubscriptionStatus = "past_due"
-	SubscriptionStatusCanceled SubscriptionStatus = "canceled"
-	SubscriptionStatusExpired  SubscriptionStatus = "expired"
-)
-
-// PlanType represents the subscription plan
-type PlanType string
-
-const (
-	PlanTypeBasic        PlanType = "basic"
-	PlanTypeProfessional PlanType = "professional"
-	PlanTypeAdvanced     PlanType = "advanced"
-)
+// ClinicLookup is the minimal {id, name} projection used by admin tooling
+// (e.g. the Usage Metrics page) to translate clinic UUIDs into human names.
+// It must NEVER include settings, document, contact info, or any other field.
+type ClinicLookup struct {
+	ID   uuid.UUID `json:"id"`
+	Name string    `json:"name"`
+}
 
 // ClinicType represents the type of clinic account
 type ClinicType string
@@ -38,31 +28,31 @@ const (
 
 // Clinic represents a clinic/tenant in the system
 type Clinic struct {
-	ID                 uuid.UUID          `json:"id" gorm:"type:uuid;primary_key;default:gen_random_uuid()"`
-	Name               string             `json:"name" gorm:"not null"`
-	Slug               string             `json:"slug" gorm:"uniqueIndex;not null"`
-	Type               ClinicType         `json:"type" gorm:"default:'standard'"`
-	Email              string             `json:"email" gorm:"uniqueIndex;not null"`
-	Phone              string             `json:"phone"`
-	Document           string             `json:"document"` // CNPJ or CPF
-	Address            string             `json:"address"`
-	City               string             `json:"city"`
-	State              string             `json:"state"`
-	ZipCode            string             `json:"zip_code"`
-	LogoURL            string             `json:"logo_url"`
-	PrimaryColor       string             `json:"primary_color" gorm:"default:'#7C3AED'"`
-	Plan               PlanType           `json:"plan" gorm:"default:'basic'"`
-	SubscriptionStatus SubscriptionStatus `json:"subscription_status" gorm:"default:'trial'"`
-	TrialEndsAt        *time.Time         `json:"trial_ends_at"`
-	SubscriptionEndsAt *time.Time         `json:"subscription_ends_at"`
-	AsaasCustomerID    string             `json:"-"` // Asaas customer ID (hidden from JSON)
-	WhatsAppInstance   string             `json:"-"` // Evolution API instance name (hidden from JSON)
-	WhatsAppConnected  bool               `json:"whatsapp_connected" gorm:"default:false"`
-	GoogleConnected    bool               `json:"google_connected" gorm:"default:false"`
-	Settings           ClinicSettings     `json:"settings" gorm:"type:jsonb;serializer:json"`
-	CreatedAt          time.Time          `json:"created_at"`
-	UpdatedAt          time.Time          `json:"updated_at"`
-	DeletedAt          *time.Time         `json:"deleted_at,omitempty" gorm:"index"`
+	ID           uuid.UUID  `json:"id" gorm:"type:uuid;primary_key;default:gen_random_uuid()"`
+	Name         string     `json:"name" gorm:"not null"`
+	Slug         string     `json:"slug" gorm:"uniqueIndex;not null"`
+	Type         ClinicType `json:"type" gorm:"default:'standard'"`
+	Email        string     `json:"email" gorm:"uniqueIndex;not null"`
+	Phone        string     `json:"phone"`
+	Document     string     `json:"document"` // CNPJ or CPF
+	Address      string     `json:"address"`
+	City         string     `json:"city"`
+	State        string     `json:"state"`
+	ZipCode      string     `json:"zip_code"`
+	Instagram    string     `json:"instagram"`
+	BusinessInfo string     `json:"business_info" gorm:"type:text"`
+	FAQ          string     `json:"faq" gorm:"type:text"`
+	LogoURL      string     `json:"logo_url"`
+	PrimaryColor string     `json:"primary_color" gorm:"default:'#7C3AED'"`
+	AccountID    uuid.UUID  `json:"account_id" gorm:"type:uuid;index"`
+	// Computed fields — populated by the repository via JOIN; NOT persisted to clinics table
+	Account           *account_model.Account `json:"account,omitempty" gorm:"foreignKey:AccountID"`
+	WhatsAppConnected bool                   `json:"whatsapp_connected" gorm:"-"`
+	GoogleConnected   bool                   `json:"google_connected" gorm:"-"`
+	Settings          ClinicSettings         `json:"settings" gorm:"type:jsonb;serializer:json"`
+	CreatedAt         time.Time              `json:"created_at"`
+	UpdatedAt         time.Time              `json:"updated_at"`
+	DeletedAt         *time.Time             `json:"deleted_at,omitempty" gorm:"index"`
 }
 
 // DaySchedule define o horário de um dia específico
@@ -94,11 +84,228 @@ type ClinicSettings struct {
 	WhatsAppRemindersEnabled bool `json:"whatsapp_reminders_enabled"`
 	EmailRemindersEnabled    bool `json:"email_reminders_enabled"`
 
+	// Per-window appointment reminder toggles. Nil means "use default (enabled)"
+	// so clinics that existed before this field keep receiving all three
+	// windows. The master WhatsAppRemindersEnabled still gates the whole
+	// feature; these only let a clinic opt out of a specific window without
+	// turning everything off.
+	WhatsAppReminder2hEnabled  *bool `json:"whatsapp_reminder_2h_enabled,omitempty"`
+	WhatsAppReminder24hEnabled *bool `json:"whatsapp_reminder_24h_enabled,omitempty"`
+	WhatsAppReminder48hEnabled *bool `json:"whatsapp_reminder_48h_enabled,omitempty"`
+
+	// Per-window group class reminder toggles. Group classes (Pilates etc.)
+	// never materialize as appointments, so the appointment reminder worker
+	// can't fire for them — these flags gate a separate worker that walks
+	// session_plan_slots × active enrollments. Nil defaults to true. 48h is
+	// not offered: classes are weekly-recurring, so a 48h heads-up on top of
+	// 24h would mostly be noise.
+	GroupClassReminder24hEnabled *bool `json:"group_class_reminder_24h_enabled,omitempty"`
+	GroupClassReminder2hEnabled  *bool `json:"group_class_reminder_2h_enabled,omitempty"`
+
+	// Payment settings
+	RequirePaymentBeforeBooking bool `json:"require_payment_before_booking"`
+
+	// Public booking page settings
+	AboutUs string `json:"about_us,omitempty"`
+
 	// AI/WhatsApp settings
 	AIAgentEnabled            bool                 `json:"ai_agent_enabled"`
 	AIMinDelayBetweenMessages *int                 `json:"ai_min_delay_between_messages,omitempty"`
 	AIMinDelayBetweenPatients *int                 `json:"ai_min_delay_between_patients,omitempty"`
 	AIBusinessHours           *BusinessHoursConfig `json:"ai_business_hours,omitempty"`
+
+	// Per-clinic AI tool toggles. nil means "use default (enabled)" so that
+	// existing clinics keep the original behavior after the field was introduced.
+	AIToolSchedule     *bool `json:"ai_tool_schedule,omitempty"`
+	AIToolConfirm      *bool `json:"ai_tool_confirm,omitempty"`
+	AIToolCancel       *bool `json:"ai_tool_cancel,omitempty"`
+	AIToolReschedule   *bool `json:"ai_tool_reschedule,omitempty"`
+	AIToolEnrollClass  *bool `json:"ai_tool_enroll_class,omitempty"`
+	AIToolConfirmClass *bool `json:"ai_tool_confirm_class,omitempty"`
+
+	// Canned reply sent when the AI detects an intent the clinic disabled.
+	// Empty falls back to a built-in default at the agent layer.
+	AIBlockedIntentReply string `json:"ai_blocked_intent_reply,omitempty"`
+
+	// Hours to pause the AI after a human from the clinic replies directly
+	// via the WhatsApp app. Nil uses the default (4h). <=0 disables the
+	// auto-pause and keeps the AI always on.
+	AIHumanTakeoverPauseHours *int `json:"ai_human_takeover_pause_hours,omitempty"`
+
+	// Payment reminder settings (gated by WhatsAppRemindersEnabled as master).
+	// Each channel can be independently disabled even when the master is on.
+	PaymentReminderWhatsAppEnabled *bool `json:"payment_reminder_whatsapp_enabled,omitempty"`
+	PaymentReminderEmailEnabled    *bool `json:"payment_reminder_email_enabled,omitempty"`
+	// PaymentReminderDaysBefore is how many days before the monthly due date
+	// the reminder should fire. Allowed: 1..7. Nil falls back to DefaultPaymentReminderDaysBefore.
+	PaymentReminderDaysBefore *int `json:"payment_reminder_days_before,omitempty"`
+}
+
+// DefaultPaymentReminderDaysBefore is used when the clinic has no explicit value.
+const DefaultPaymentReminderDaysBefore = 3
+
+// GetPaymentReminderDaysBefore returns the configured days-before value for
+// this clinic, clamped into the 1..7 range. Nil or out-of-range falls back
+// to the default.
+func (s *ClinicSettings) GetPaymentReminderDaysBefore() int {
+	if s == nil || s.PaymentReminderDaysBefore == nil {
+		return DefaultPaymentReminderDaysBefore
+	}
+	v := *s.PaymentReminderDaysBefore
+	if v < 1 || v > 7 {
+		return DefaultPaymentReminderDaysBefore
+	}
+	return v
+}
+
+// IsPaymentReminderWhatsAppEnabled returns whether the clinic wants WhatsApp
+// monthly payment reminders. Defaults to true (nil = unset) so clinics that
+// never touched this setting still benefit from the reminder; callers can
+// explicitly store `false` to opt out.
+func (s *ClinicSettings) IsPaymentReminderWhatsAppEnabled() bool {
+	if s == nil || s.PaymentReminderWhatsAppEnabled == nil {
+		return true
+	}
+	return *s.PaymentReminderWhatsAppEnabled
+}
+
+// IsPaymentReminderEmailEnabled returns whether the clinic wants email
+// monthly payment reminders. Defaults to false so clinics opt in explicitly.
+func (s *ClinicSettings) IsPaymentReminderEmailEnabled() bool {
+	if s == nil || s.PaymentReminderEmailEnabled == nil {
+		return false
+	}
+	return *s.PaymentReminderEmailEnabled
+}
+
+// DefaultHumanTakeoverPauseHours is used when the clinic has no explicit value.
+const DefaultHumanTakeoverPauseHours = 4
+
+// GetHumanTakeoverPauseDuration returns how long the AI stays paused after a
+// human from the clinic replies directly. Returns 0 when the feature is
+// explicitly disabled (value <= 0).
+func (s *ClinicSettings) GetHumanTakeoverPauseDuration() time.Duration {
+	if s == nil || s.AIHumanTakeoverPauseHours == nil {
+		return time.Duration(DefaultHumanTakeoverPauseHours) * time.Hour
+	}
+	if *s.AIHumanTakeoverPauseHours <= 0 {
+		return 0
+	}
+	return time.Duration(*s.AIHumanTakeoverPauseHours) * time.Hour
+}
+
+// IsAIToolScheduleEnabled returns whether AI is allowed to schedule new
+// appointments for this clinic. Nil pointer defaults to true to keep existing
+// clinics behaving as before the flag was introduced.
+func (s *ClinicSettings) IsAIToolScheduleEnabled() bool {
+	if s == nil || s.AIToolSchedule == nil {
+		return true
+	}
+	return *s.AIToolSchedule
+}
+
+// IsAIToolConfirmEnabled returns whether AI is allowed to handle confirmations.
+func (s *ClinicSettings) IsAIToolConfirmEnabled() bool {
+	if s == nil || s.AIToolConfirm == nil {
+		return true
+	}
+	return *s.AIToolConfirm
+}
+
+// IsAIToolCancelEnabled returns whether AI is allowed to cancel appointments.
+func (s *ClinicSettings) IsAIToolCancelEnabled() bool {
+	if s == nil || s.AIToolCancel == nil {
+		return true
+	}
+	return *s.AIToolCancel
+}
+
+// IsAIToolRescheduleEnabled returns whether AI is allowed to reschedule
+// appointments. Independent from Cancel (older code coupled them).
+func (s *ClinicSettings) IsAIToolRescheduleEnabled() bool {
+	if s == nil || s.AIToolReschedule == nil {
+		return true
+	}
+	return *s.AIToolReschedule
+}
+
+// IsAIToolEnrollClassEnabled returns whether AI is allowed to enroll patients
+// in group session plans (Pilates etc.). When false, enroll_patient_in_class
+// is removed from the toolset and the AI falls back to complete_handoff_to_human
+// after gathering matrícula context.
+func (s *ClinicSettings) IsAIToolEnrollClassEnabled() bool {
+	if s == nil || s.AIToolEnrollClass == nil {
+		return true
+	}
+	return *s.AIToolEnrollClass
+}
+
+// IsAIToolConfirmClassEnabled returns whether AI is allowed to confirm a
+// patient's participation in their next group class. Independent from
+// AIToolConfirm (which gates 1-on-1 confirm_appointment) so a clinic can
+// keep confirmations of group classes flowing while still requiring human
+// confirmation for individual appointments, or vice-versa.
+func (s *ClinicSettings) IsAIToolConfirmClassEnabled() bool {
+	if s == nil || s.AIToolConfirmClass == nil {
+		return true
+	}
+	return *s.AIToolConfirmClass
+}
+
+// IsGroupClassReminderEnabled returns whether the given group-class reminder
+// window ("reminder_24h" or "reminder_2h") should fire for this clinic. The
+// master WhatsAppRemindersEnabled is still checked elsewhere; this answers
+// only the per-window opt-out. Unknown reminder types return false to fail
+// closed — a typo'd threshold must not silently bypass the gate.
+func (s *ClinicSettings) IsGroupClassReminderEnabled(reminderType string) bool {
+	var flag *bool
+	switch reminderType {
+	case "reminder_24h":
+		if s != nil {
+			flag = s.GroupClassReminder24hEnabled
+		}
+	case "reminder_2h":
+		if s != nil {
+			flag = s.GroupClassReminder2hEnabled
+		}
+	default:
+		return false
+	}
+	if flag == nil {
+		return true
+	}
+	return *flag
+}
+
+// IsAppointmentReminderEnabled returns whether the given appointment-reminder
+// window (reminderType "2h", "24h" or "48h") should fire for this clinic. The
+// master WhatsAppRemindersEnabled is checked elsewhere; this call only answers
+// the per-window opt-out. Nil pointer defaults to true so clinics that existed
+// before the toggles were introduced keep receiving all three windows.
+// Unknown reminder types return false to prevent a typo from silently
+// bypassing the per-clinic gate.
+func (s *ClinicSettings) IsAppointmentReminderEnabled(reminderType string) bool {
+	var flag *bool
+	switch reminderType {
+	case "2h":
+		if s != nil {
+			flag = s.WhatsAppReminder2hEnabled
+		}
+	case "24h":
+		if s != nil {
+			flag = s.WhatsAppReminder24hEnabled
+		}
+	case "48h":
+		if s != nil {
+			flag = s.WhatsAppReminder48hEnabled
+		}
+	default:
+		return false
+	}
+	if flag == nil {
+		return true
+	}
+	return *flag
 }
 
 // TableName returns the table name for GORM
@@ -108,64 +315,72 @@ func (Clinic) TableName() string {
 
 // ClinicResponse represents the API response for a clinic
 type ClinicResponse struct {
-	ID                 uuid.UUID          `json:"id"`
-	Name               string             `json:"name"`
-	Slug               string             `json:"slug"`
-	Type               ClinicType         `json:"type"`
-	Email              string             `json:"email"`
-	Phone              string             `json:"phone"`
-	Address            string             `json:"address"`
-	City               string             `json:"city"`
-	State              string             `json:"state"`
-	LogoURL            string             `json:"logo_url"`
-	PrimaryColor       string             `json:"primary_color"`
-	Plan               PlanType           `json:"plan"`
-	SubscriptionStatus SubscriptionStatus `json:"subscription_status"`
-	TrialEndsAt        *time.Time         `json:"trial_ends_at,omitempty"`
-	WhatsAppConnected  bool               `json:"whatsapp_connected"`
-	GoogleConnected    bool               `json:"google_connected"`
-	Settings           ClinicSettings     `json:"settings"`
-	BookingURL         string             `json:"booking_url,omitempty"`
-	CreatedAt          time.Time          `json:"created_at"`
+	ID                uuid.UUID                      `json:"id"`
+	Name              string                         `json:"name"`
+	Slug              string                         `json:"slug"`
+	Type              ClinicType                     `json:"type"`
+	Email             string                         `json:"email"`
+	Phone             string                         `json:"phone"`
+	Document          string                         `json:"document"`
+	Address           string                         `json:"address"`
+	City              string                         `json:"city"`
+	State             string                         `json:"state"`
+	ZipCode           string                         `json:"zip_code"`
+	Instagram         string                         `json:"instagram"`
+	BusinessInfo      string                         `json:"business_info"`
+	FAQ               string                         `json:"faq"`
+	LogoURL           string                         `json:"logo_url"`
+	PrimaryColor      string                         `json:"primary_color"`
+	AccountID         uuid.UUID                      `json:"account_id"`
+	Account           *account_model.AccountResponse `json:"account,omitempty"`
+	WhatsAppConnected bool                           `json:"whatsapp_connected"`
+	GoogleConnected   bool                           `json:"google_connected"`
+	Settings          ClinicSettings                 `json:"settings"`
+	BookingURL        string                         `json:"booking_url,omitempty"`
+	// Subscription fields (flattened from Account for frontend convenience)
+	Plan               account_model.PlanType           `json:"plan"`
+	SubscriptionStatus account_model.SubscriptionStatus `json:"subscription_status"`
+	TrialEndsAt        *time.Time                       `json:"trial_ends_at,omitempty"`
+	CreatedAt          time.Time                        `json:"created_at"`
 }
 
 // ToResponse converts Clinic to ClinicResponse
 func (c *Clinic) ToResponse() *ClinicResponse {
-	return &ClinicResponse{
-		ID:                 c.ID,
-		Name:               c.Name,
-		Slug:               c.Slug,
-		Type:               c.Type,
-		Email:              c.Email,
-		Phone:              c.Phone,
-		Address:            c.Address,
-		City:               c.City,
-		State:              c.State,
-		LogoURL:            c.LogoURL,
-		PrimaryColor:       c.PrimaryColor,
-		Plan:               c.Plan,
-		SubscriptionStatus: c.SubscriptionStatus,
-		TrialEndsAt:        c.TrialEndsAt,
-		WhatsAppConnected:  c.WhatsAppConnected,
-		GoogleConnected:    c.GoogleConnected,
-		Settings:           c.Settings,
-		CreatedAt:          c.CreatedAt,
+	resp := &ClinicResponse{
+		ID:                c.ID,
+		Name:              c.Name,
+		Slug:              c.Slug,
+		Type:              c.Type,
+		Email:             c.Email,
+		Phone:             c.Phone,
+		Document:          c.Document,
+		Address:           c.Address,
+		City:              c.City,
+		State:             c.State,
+		ZipCode:           c.ZipCode,
+		Instagram:         c.Instagram,
+		BusinessInfo:      c.BusinessInfo,
+		FAQ:               c.FAQ,
+		LogoURL:           c.LogoURL,
+		PrimaryColor:      c.PrimaryColor,
+		AccountID:         c.AccountID,
+		WhatsAppConnected: c.WhatsAppConnected,
+		GoogleConnected:   c.GoogleConnected,
+		Settings:          c.Settings,
+		CreatedAt:         c.CreatedAt,
 	}
+	if c.Account != nil {
+		resp.Account = c.Account.ToResponse()
+	}
+	return resp
 }
 
-// IsSubscriptionActive checks if the clinic has an active subscription
+// IsSubscriptionActive checks if the clinic has an active subscription via Account
 func (c *Clinic) IsSubscriptionActive() bool {
-	switch c.SubscriptionStatus {
-	case SubscriptionStatusActive:
-		return true
-	case SubscriptionStatusTrial:
-		if c.TrialEndsAt != nil {
-			return time.Now().Before(*c.TrialEndsAt)
-		}
-		return false
-	default:
-		return false
+	if c.Account != nil {
+		return c.Account.IsSubscriptionActive()
 	}
+	return false
 }
 
 // CreateClinicRequest represents the request to create a clinic
@@ -186,21 +401,58 @@ type UpdateClinicSettingsRequest struct {
 	WhatsAppRemindersEnabled  *bool  `json:"whatsapp_reminders_enabled,omitempty"`
 	EmailRemindersEnabled     *bool  `json:"email_reminders_enabled,omitempty"`
 
+	// Per-window appointment reminder toggles. Nil keeps the current value on
+	// merge; false explicitly opts out of that window without touching the
+	// master switch.
+	WhatsAppReminder2hEnabled  *bool `json:"whatsapp_reminder_2h_enabled,omitempty"`
+	WhatsAppReminder24hEnabled *bool `json:"whatsapp_reminder_24h_enabled,omitempty"`
+	WhatsAppReminder48hEnabled *bool `json:"whatsapp_reminder_48h_enabled,omitempty"`
+
+	// Payment settings
+	RequirePaymentBeforeBooking *bool `json:"require_payment_before_booking,omitempty"`
+
+	// Public booking page settings
+	AboutUs *string `json:"about_us,omitempty"`
+
 	// AI/WhatsApp settings
 	AIAgentEnabled            *bool                `json:"ai_agent_enabled,omitempty"`
 	AIMinDelayBetweenMessages *int                 `json:"ai_min_delay_between_messages,omitempty"`
 	AIMinDelayBetweenPatients *int                 `json:"ai_min_delay_between_patients,omitempty"`
 	AIBusinessHours           *BusinessHoursConfig `json:"ai_business_hours,omitempty"`
+
+	AIToolSchedule            *bool   `json:"ai_tool_schedule,omitempty"`
+	AIToolConfirm             *bool   `json:"ai_tool_confirm,omitempty"`
+	AIToolCancel              *bool   `json:"ai_tool_cancel,omitempty"`
+	AIToolReschedule          *bool   `json:"ai_tool_reschedule,omitempty"`
+	AIToolEnrollClass         *bool   `json:"ai_tool_enroll_class,omitempty"`
+	AIToolConfirmClass        *bool   `json:"ai_tool_confirm_class,omitempty"`
+	AIBlockedIntentReply      *string `json:"ai_blocked_intent_reply,omitempty"`
+	AIHumanTakeoverPauseHours *int    `json:"ai_human_takeover_pause_hours,omitempty"`
+
+	// Payment reminder settings
+	PaymentReminderWhatsAppEnabled *bool `json:"payment_reminder_whatsapp_enabled,omitempty"`
+	PaymentReminderEmailEnabled    *bool `json:"payment_reminder_email_enabled,omitempty"`
+	PaymentReminderDaysBefore      *int  `json:"payment_reminder_days_before,omitempty"`
+
+	// Group class reminder windows (Pilates etc). Independent from
+	// the appointment reminder windows above — group plans never
+	// materialize as appointments, so they get a separate worker.
+	GroupClassReminder24hEnabled *bool `json:"group_class_reminder_24h_enabled,omitempty"`
+	GroupClassReminder2hEnabled  *bool `json:"group_class_reminder_2h_enabled,omitempty"`
 }
 
 // UpdateClinicRequest represents the request to update a clinic
 type UpdateClinicRequest struct {
 	Name         string                       `json:"name" binding:"omitempty,min=2,max=100"`
 	Phone        string                       `json:"phone"`
+	Document     *string                      `json:"document,omitempty"`
 	Address      string                       `json:"address"`
 	City         string                       `json:"city"`
 	State        string                       `json:"state"`
 	ZipCode      string                       `json:"zip_code"`
+	Instagram    *string                      `json:"instagram,omitempty"`
+	BusinessInfo *string                      `json:"business_info,omitempty"`
+	FAQ          *string                      `json:"faq,omitempty"`
 	LogoURL      string                       `json:"logo_url"`
 	PrimaryColor string                       `json:"primary_color"`
 	Settings     *UpdateClinicSettingsRequest `json:"settings"`

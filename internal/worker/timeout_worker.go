@@ -15,9 +15,10 @@ import (
 // TimeoutWorker scans for appointments with expired confirmation timeouts
 // and marks them as no_response, notifying the clinic
 type TimeoutWorker struct {
-	config          *config.WorkerConfig
-	appointmentRepo appointment_repository.AppointmentRepository
-	stopCh          chan struct{}
+	config              *config.WorkerConfig
+	appointmentRepo     appointment_repository.AppointmentRepository
+	subscriptionChecker ClinicSubscriptionChecker
+	stopCh              chan struct{}
 }
 
 // NewTimeoutWorker creates a new timeout worker
@@ -30,6 +31,12 @@ func NewTimeoutWorker(
 		appointmentRepo: appointmentRepo,
 		stopCh:          make(chan struct{}),
 	}
+}
+
+// SetSubscriptionChecker wires a checker so timeout processing is skipped for
+// clinics without an active subscription.
+func (w *TimeoutWorker) SetSubscriptionChecker(checker ClinicSubscriptionChecker) {
+	w.subscriptionChecker = checker
 }
 
 // Start starts the timeout worker
@@ -83,8 +90,12 @@ func (w *TimeoutWorker) processTimeouts() {
 
 	logger.Printf("Processing %d expired confirmation timeouts...", len(appointments))
 
+	subCache := map[uuid.UUID]bool{}
 	processed := 0
 	for _, apt := range appointments {
+		if !w.isClinicSubscriptionActive(ctx, apt.ClinicID, subCache) {
+			continue
+		}
 		if err := w.processExpiredAppointment(ctx, apt); err != nil {
 			logger.Printf("Error processing expired appointment %s: %v", apt.ID, err)
 			continue
@@ -100,7 +111,7 @@ func (w *TimeoutWorker) processTimeouts() {
 // processExpiredAppointment marks a single appointment as no_response
 func (w *TimeoutWorker) processExpiredAppointment(ctx context.Context, apt *appointment_model.AppointmentWithClinic) error {
 	// Mark as no_response
-	if err := w.appointmentRepo.MarkConfirmationExpired(ctx, apt.ID); err != nil {
+	if err := w.appointmentRepo.MarkConfirmationExpired(ctx, apt.ClinicID, apt.ID); err != nil {
 		return err
 	}
 
@@ -120,8 +131,32 @@ func (w *TimeoutWorker) processExpiredAppointment(ctx context.Context, apt *appo
 	return nil
 }
 
+// isClinicSubscriptionActive memoizes subscription-active lookups per run. On
+// error or inactive result, returns false so timeout processing is skipped —
+// the rows remain in the expired state and will be re-evaluated once the
+// clinic reactivates.
+func (w *TimeoutWorker) isClinicSubscriptionActive(ctx context.Context, clinicID uuid.UUID, subCache map[uuid.UUID]bool) bool {
+	if w.subscriptionChecker == nil {
+		return true
+	}
+	if cached, ok := subCache[clinicID]; ok {
+		return cached
+	}
+	active, err := w.subscriptionChecker.IsSubscriptionActive(ctx, clinicID)
+	if err != nil {
+		logger.Printf("[Timeout] Subscription check failed for clinic %s: %v — skipping", clinicID, err)
+		subCache[clinicID] = false
+		return false
+	}
+	if !active {
+		logger.Printf("[Timeout] Clinic %s has no active subscription, skipping timeout processing", clinicID)
+	}
+	subCache[clinicID] = active
+	return active
+}
+
 // Compile-time check that the repository has the required methods
 var _ interface {
 	GetExpiredConfirmations(ctx context.Context, limit int) ([]*appointment_model.AppointmentWithClinic, error)
-	MarkConfirmationExpired(ctx context.Context, id uuid.UUID) error
+	MarkConfirmationExpired(ctx context.Context, clinicID, id uuid.UUID) error
 } = (appointment_repository.AppointmentRepository)(nil)

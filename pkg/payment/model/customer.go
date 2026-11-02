@@ -10,7 +10,7 @@ import (
 // Customer represents an Asaas customer linked to a clinic
 type Customer struct {
 	ID               uuid.UUID      `json:"id" gorm:"type:uuid;primary_key;default:gen_random_uuid()"`
-	ClinicID         uuid.UUID      `json:"clinic_id" gorm:"type:uuid;not null;uniqueIndex"`
+	AccountID        uuid.UUID      `json:"account_id" gorm:"type:uuid;index"`
 	AsaasCustomerID  string         `json:"asaas_customer_id" gorm:"uniqueIndex;not null"`
 	Name             string         `json:"name" gorm:"not null"`
 	Email            string         `json:"email" gorm:"not null"`
@@ -58,20 +58,20 @@ type CreateCustomerRequest struct {
 
 // AsaasCustomerResponse represents the response from Asaas API when creating/getting a customer
 type AsaasCustomerResponse struct {
-	ID               string `json:"id"`
-	Name             string `json:"name"`
-	Email            string `json:"email"`
-	Phone            string `json:"phone"`
-	MobilePhone      string `json:"mobilePhone"`
-	Document         string `json:"cpfCnpj"`
-	PostalCode       string `json:"postalCode"`
-	Address          string `json:"address"`
-	AddressNumber    string `json:"addressNumber"`
-	Complement       string `json:"complement"`
-	Province         string `json:"province"`
-	City             string `json:"city"`
-	State            string `json:"state"`
-	ExternalRef      string `json:"externalReference"`
-	AdditionalEmails string `json:"additionalEmails"`
-	DateCreated      string `json:"dateCreated"`
+	ID               string      `json:"id"`
+	Name             string      `json:"name"`
+	Email            string      `json:"email"`
+	Phone            string      `json:"phone"`
+	MobilePhone      string      `json:"mobilePhone"`
+	Document         string      `json:"cpfCnpj"`
+	PostalCode       string      `json:"postalCode"`
+	Address          string      `json:"address"`
+	AddressNumber    string      `json:"addressNumber"`
+	Complement       string      `json:"complement"`
+	Province         string      `json:"province"`
+	City             interface{} `json:"city"`
+	State            interface{} `json:"state"`
+	ExternalRef      string      `json:"externalReference"`
+	AdditionalEmails string      `json:"additionalEmails"`
+	DateCreated      string      `json:"dateCreated"`
 }

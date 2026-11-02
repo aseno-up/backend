@@ -17,6 +17,7 @@ type ScheduledMessageRepository interface {
 	GetLastScheduledForClinic(ctx context.Context, clinicID uuid.UUID) (*model.ScheduledMessage, error)
 	MarkAsSent(ctx context.Context, id uuid.UUID) error
 	MarkAsFailed(ctx context.Context, id uuid.UUID, errorMsg string) error
+	DeletePendingByPhoneAndType(ctx context.Context, clinicID uuid.UUID, phone string, messageType string) error
 }
 
 type scheduledMessageRepository struct {
@@ -92,4 +93,11 @@ func (r *scheduledMessageRepository) MarkAsFailed(ctx context.Context, id uuid.U
 		Model(&model.ScheduledMessage{}).
 		Where("id = ?", id).
 		Update("error", errorMsg).Error
+}
+
+// DeletePendingByPhoneAndType deletes all pending scheduled messages for a patient matching the specific type
+func (r *scheduledMessageRepository) DeletePendingByPhoneAndType(ctx context.Context, clinicID uuid.UUID, phone string, messageType string) error {
+	return r.db.WithContext(ctx).
+		Where("clinic_id = ? AND phone = ? AND message_type = ? AND sent = false", clinicID, phone, messageType).
+		Delete(&model.ScheduledMessage{}).Error
 }
